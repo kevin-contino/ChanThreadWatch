@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -136,6 +137,23 @@ namespace JDP.Tests {
 
             CollectionAssert.AreEqual(new[] { "https://8ch.net/tech/res/200.html" }, crossLinks.ToArray());
             CollectionAssert.AreEqual(new[] { "8ch/tech/200" }, replaces.Select(r => r.Tag).ToArray());
+        }
+
+        // B12: with no QuoteLinkHref replace, General.AddOtherReplaces turns a same-thread link into
+        // its fragment. This mirrors ThreadWatcher.Process for the root thread, whose own page is
+        // not in DescendantThreads, so ApplyThreadLinkReplace leaves the replace value unchanged.
+        [TestMethod]
+        public void InfinitechanSavedPageTurnsSameThreadLinksIntoInPageAnchors() {
+            string html = "<div class=\"body\"><a href=\"/tech/res/100.html#101\">same</a><a href=\"/tech/res/200.html#201\">other</a></div>";
+            SiteHelper helper = CreateHelper(InfinitechanURL, html);
+            var replaces = new List<ReplaceInfo>();
+
+            helper.GetCrossLinks(replaces, false);
+            General.AddOtherReplaces(helper.GetHTMLParser(), InfinitechanURL, replaces);
+            var savedPage = new StringWriter();
+            General.WriteReplacedString(helper.GetHTMLParser().PreprocessedHTML, replaces, savedPage);
+
+            StringAssert.Contains(savedPage.ToString(), "<a href=\"#101\">same</a>");
         }
 
         // B13
