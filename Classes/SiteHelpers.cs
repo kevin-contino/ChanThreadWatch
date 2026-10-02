@@ -13,26 +13,22 @@ namespace JDP {
             { "4chan.org", typeof(FourChanSiteHelper) },
             { "4channel.org", typeof(FourChanSiteHelper) },
             { "8ch.net", typeof(InfinitechanSiteHelper) },
-            { "krautchan.net", typeof(KrautchanSiteHelper) },
-            
+
             { "warosu.org", typeof(FuukaSiteHelper) },
 
             { "4plebs.org", typeof(FoolFuukaSiteHelper) },
-            { "archive.nyafuu.org", typeof(FoolFuukaSiteHelper) },
+            { "archive.alice.al", typeof(FoolFuukaSiteHelper) },
             { "desuarchive.org", typeof(FoolFuukaSiteHelper) },
-            { "boards.fireden.net", typeof(FoolFuukaSiteHelper) },
+            { "arch.b4k.dev", typeof(FoolFuukaSiteHelper) },
             { "arch.b4k.co", typeof(FoolFuukaSiteHelper) },
-            { "archive.loveisover.me", typeof(FoolFuukaSiteHelper) },
             { "archived.moe", typeof(FoolFuukaSiteHelper) },
             { "thebarchive.com", typeof(FoolFuukaSiteHelper) },
             { "archiveofsins.com", typeof(FoolFuukaSiteHelper) },
             { "archive.rebeccablacktech.com", typeof(FoolFuukaSiteHelper) },
             { "rbt.asia", typeof(FoolFuukaSiteHelper) },
 
-            { "endchan.xyz", typeof(LynxChanSiteHelper) },
-
-            { "archive.b-stats.org", typeof(FourChanLookAlikeSiteHelper) },
-            { "4chanarchives.cu.cc", typeof(FourChanLookAlikeSiteHelper) }
+            { "endchan.net", typeof(LynxChanSiteHelper) },
+            { "endchan.org", typeof(LynxChanSiteHelper) }
         };
 
         public static SiteHelper GetInstance(string host) {
@@ -868,20 +864,6 @@ namespace JDP {
             return String.Equals(GetBoardName(), "v", StringComparison.OrdinalIgnoreCase) ||
                 String.Equals(GetBoardName(), "b", StringComparison.OrdinalIgnoreCase) ||
                 String.Equals(GetBoardName(), "pol", StringComparison.OrdinalIgnoreCase);
-        }
-    }
-
-    public class KrautchanSiteHelper : SiteHelper {
-        public override string GetThreadName() {
-            string threadName = base.GetThreadName();
-            if (threadName.StartsWith("thread-", StringComparison.OrdinalIgnoreCase)) {
-                threadName = threadName.Substring(7);
-            }
-            return threadName;
-        }
-
-        protected override string ImageURLKeyword {
-            get { return "/files/"; }
         }
     }
 
