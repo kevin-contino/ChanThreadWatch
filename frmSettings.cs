@@ -10,23 +10,47 @@ namespace JDP {
         }
 
         private void frmSettings_Load(object sender, EventArgs e) {
+            LoadFolderSettings();
+            LoadUserAgentAndThumbnailSettings();
+            LoadFolderRenameSettings();
+            LoadSortAndAutoFollowSettings();
+            LoadFileNameSettings();
+            LoadMiscSettings();
+            LoadBackupSettings();
+            LoadSpeedAndWindowTitleSettings();
+            LoadSettingsLocation();
+        }
+
+        private void LoadFolderSettings() {
             txtDownloadFolder.Text = Settings.DownloadFolder;
             chkDownloadFolderRelative.Checked = Settings.DownloadFolderIsRelative ?? false;
             chkCompletedFolder.Checked = Settings.MoveToCompletedFolder ?? false;
             txtCompletedFolder.Enabled = btnCompletedFolder.Enabled = chkCompletedFolderRelative.Enabled = chkCompletedFolder.Checked;
             txtCompletedFolder.Text = Settings.CompletedFolder;
             chkCompletedFolderRelative.Checked = Settings.CompletedFolderIsRelative ?? false;
+        }
+
+        private void LoadUserAgentAndThumbnailSettings() {
             chkCustomUserAgent.Checked = Settings.UseCustomUserAgent ?? false;
             txtCustomUserAgent.Text = Settings.CustomUserAgent ?? String.Empty;
             chkSaveThumbnails.Checked = Settings.SaveThumbnails ?? true;
+        }
+
+        private void LoadFolderRenameSettings() {
             chkRenameDownloadFolderWithDescription.Checked = Settings.RenameDownloadFolderWithDescription ?? false;
             chkRenameDownloadFolderWithCategory.Checked = Settings.RenameDownloadFolderWithCategory ?? false;
             chkRenameDownloadFolderWithParentThreadDescription.Checked = Settings.RenameDownloadFolderWithParentThreadDescription ?? false;
             pnlParentThreadDescriptionFormat.Enabled = chkRenameDownloadFolderWithParentThreadDescription.Checked;
             txtParentThreadDescriptionFormat.Text = Settings.ParentThreadDescriptionFormat ?? " ({Parent})";
+        }
+
+        private void LoadSortAndAutoFollowSettings() {
             chkSortImagesByPoster.Checked = Settings.SortImagesByPoster ?? false;
             chkRecursiveAutoFollow.Checked = Settings.RecursiveAutoFollow ?? true;
             chkInterBoardAutoFollow.Checked = Settings.InterBoardAutoFollow ?? true;
+        }
+
+        private void LoadFileNameSettings() {
             chkUseOriginalFileNames.Checked = Settings.UseOriginalFileNames ?? false;
             chkVerifyImageHashes.Checked = Settings.VerifyImageHashes ?? true;
             chkUseSlug.Checked = Settings.UseSlug ?? false;
@@ -34,18 +58,30 @@ namespace JDP {
             rbSlugFirst.Checked = Settings.SlugType == SlugType.First;
             rbSlugLast.Checked = Settings.SlugType == SlugType.Last;
             rbSlugOnly.Checked = Settings.SlugType == SlugType.Only;
+        }
+
+        private void LoadMiscSettings() {
             chkCheckForUpdates.Checked = Settings.CheckForUpdates ?? false;
             chkBlacklistWildcards.Checked = Settings.BlacklistWildcards ?? false;
             chkMinimizeToTray.Checked = Settings.MinimizeToTray ?? false;
+        }
+
+        private void LoadBackupSettings() {
             chkBackupThreadList.Checked = Settings.BackupThreadList ?? false;
             pnlBackupEvery.Enabled = chkBackupThreadList.Checked;
             txtBackupEvery.Text = (Settings.BackupEvery ?? 1).ToString();
             chkBackupCheckSize.Enabled = chkBackupThreadList.Checked;
             chkBackupCheckSize.Checked = Settings.BackupCheckSize ?? false;
+        }
+
+        private void LoadSpeedAndWindowTitleSettings() {
             txtMaximumKilobytesPerSecond.Text = ((Settings.MaximumBytesPerSecond ?? 0) / 1024).ToString();
             txtWindowTitle.Text = Settings.WindowTitle ?? String.Format("{{{0}}}", WindowTitleMacro.ApplicationName);
             txtWindowTitle.SelectionStart = txtWindowTitle.Text.Length;
             cboWindowTitle.DataSource = Enum.GetValues(typeof(WindowTitleMacro));
+        }
+
+        private void LoadSettingsLocation() {
             if (Settings.UseExeDirectoryForSettings == true) {
                 rbSettingsInExeFolder.Checked = true;
             }
@@ -58,98 +94,21 @@ namespace JDP {
             try {
                 string downloadFolder = txtDownloadFolder.Text.Trim();
 
-                if (downloadFolder.Length == 0) {
-                    throw new Exception("You must enter a download folder.");
-                }
-                if (!Directory.Exists(downloadFolder)) {
-                    try {
-                        Directory.CreateDirectory(downloadFolder);
-                    }
-                    catch {
-                        throw new Exception("Unable to create the download folder.");
-                    }
-                }
+                EnsureFolderExists(downloadFolder, "download");
 
                 string completedFolder = txtCompletedFolder.Text.Trim();
 
                 if (chkCompletedFolder.Checked) {
-                    if (completedFolder.Length == 0) {
-                        throw new Exception("You must enter a completed folder.");
-                    }
-                    if (!Directory.Exists(completedFolder)) {
-                        try {
-                            Directory.CreateDirectory(completedFolder);
-                        }
-                        catch {
-                            throw new Exception("Unable to create the completed folder.");
-                        }
-                    }
+                    EnsureFolderExists(completedFolder, "completed");
                 }
 
-                string oldSettingsFolder = Settings.GetSettingsDirectory();
-                string newSettingsFolder = Settings.GetSettingsDirectory(rbSettingsInExeFolder.Checked);
-                if (!String.Equals(newSettingsFolder, oldSettingsFolder, StringComparison.OrdinalIgnoreCase)) {
-                    if (!Program.ObtainMutex(newSettingsFolder)) {
-                        MessageBox.Show(this, "Another instance of this program is using the same settings folder.",
-                            "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
-                    try {
-                        foreach (string fileName in new[] { Settings.SettingsFileName, Settings.ThreadsFileName }) {
-                            string oldPath = Path.Combine(oldSettingsFolder, fileName);
-                            string newPath = Path.Combine(newSettingsFolder, fileName);
-                            if (!File.Exists(oldPath)) continue;
-                            byte[] contents = File.ReadAllBytes(oldPath);
-                            File.WriteAllBytes(newPath, contents);
-                            try { File.Delete(oldPath); }
-                            catch { }
-                        }
-                    }
-                    catch {
-                        MessageBox.Show(this, "Unable to move the settings files.",
-                            "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
+                if (!TryChangeSettingsFolder()) {
+                    return;
                 }
 
                 string oldAbsoluteDownloadFolder = Settings.AbsoluteDownloadDirectory;
 
-                Settings.DownloadFolder = downloadFolder;
-                Settings.DownloadFolderIsRelative = chkDownloadFolderRelative.Checked;
-                Settings.MoveToCompletedFolder = chkCompletedFolder.Checked;
-                Settings.CompletedFolder = completedFolder;
-                Settings.CompletedFolderIsRelative = chkCompletedFolderRelative.Checked;
-                Settings.UseCustomUserAgent = chkCustomUserAgent.Checked;
-                Settings.CustomUserAgent = txtCustomUserAgent.Text;
-                Settings.SaveThumbnails = chkSaveThumbnails.Checked;
-                Settings.RenameDownloadFolderWithDescription = chkRenameDownloadFolderWithDescription.Checked;
-                Settings.RenameDownloadFolderWithCategory = chkRenameDownloadFolderWithCategory.Checked;
-                Settings.RenameDownloadFolderWithParentThreadDescription = chkRenameDownloadFolderWithParentThreadDescription.Checked;
-                Settings.ParentThreadDescriptionFormat = txtParentThreadDescriptionFormat.Text;
-                Settings.SortImagesByPoster = chkSortImagesByPoster.Checked;
-                Settings.RecursiveAutoFollow = chkRecursiveAutoFollow.Checked;
-                Settings.InterBoardAutoFollow = chkInterBoardAutoFollow.Checked;
-                Settings.UseOriginalFileNames = chkUseOriginalFileNames.Checked;
-                Settings.VerifyImageHashes = chkVerifyImageHashes.Checked;
-                Settings.UseSlug = chkUseSlug.Checked;
-                if (rbSlugFirst.Checked) {
-                    Settings.SlugType = SlugType.First;
-                }
-                else if (rbSlugOnly.Checked) {
-                    Settings.SlugType = SlugType.Only;
-                }
-                else {
-                    Settings.SlugType = SlugType.Last;
-                }
-                Settings.CheckForUpdates = chkCheckForUpdates.Checked;
-                Settings.BlacklistWildcards = chkBlacklistWildcards.Checked;
-                Settings.MinimizeToTray = chkMinimizeToTray.Checked;
-                Settings.BackupThreadList = chkBackupThreadList.Checked;
-                Settings.BackupEvery = Int32.Parse(txtBackupEvery.Text);
-                Settings.BackupCheckSize = chkBackupCheckSize.Checked;
-                Settings.MaximumBytesPerSecond = Int64.Parse(txtMaximumKilobytesPerSecond.Text) * 1024;
-                Settings.WindowTitle = txtWindowTitle.Text;
-                Settings.UseExeDirectoryForSettings = rbSettingsInExeFolder.Checked;
+                SaveSettingsFromControls(downloadFolder, completedFolder);
 
                 Settings.Save();
 
@@ -164,6 +123,99 @@ namespace JDP {
             catch (Exception ex) {
                 MessageBox.Show(this, ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        // Throws an exception with a user-facing message if the folder is empty or cannot be created.
+        private static void EnsureFolderExists(string folder, string folderKind) {
+            if (folder.Length == 0) {
+                throw new Exception("You must enter a " + folderKind + " folder.");
+            }
+            if (Directory.Exists(folder)) {
+                return;
+            }
+            try {
+                Directory.CreateDirectory(folder);
+            }
+            catch {
+                throw new Exception("Unable to create the " + folderKind + " folder.");
+            }
+        }
+
+        // Moves the settings files if the settings location changed. Returns false
+        // (after showing an error) if the move cannot be done.
+        private bool TryChangeSettingsFolder() {
+            string oldSettingsFolder = Settings.GetSettingsDirectory();
+            string newSettingsFolder = Settings.GetSettingsDirectory(rbSettingsInExeFolder.Checked);
+            if (String.Equals(newSettingsFolder, oldSettingsFolder, StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            if (!Program.ObtainMutex(newSettingsFolder)) {
+                MessageBox.Show(this, "Another instance of this program is using the same settings folder.",
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+            try {
+                MoveSettingsFiles(oldSettingsFolder, newSettingsFolder);
+            }
+            catch {
+                MessageBox.Show(this, "Unable to move the settings files.",
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+            return true;
+        }
+
+        private static void MoveSettingsFiles(string oldSettingsFolder, string newSettingsFolder) {
+            foreach (string fileName in new[] { Settings.SettingsFileName, Settings.ThreadsFileName }) {
+                string oldPath = Path.Combine(oldSettingsFolder, fileName);
+                string newPath = Path.Combine(newSettingsFolder, fileName);
+                if (!File.Exists(oldPath)) continue;
+                byte[] contents = File.ReadAllBytes(oldPath);
+                File.WriteAllBytes(newPath, contents);
+                try { File.Delete(oldPath); }
+                catch { }
+            }
+        }
+
+        private void SaveSettingsFromControls(string downloadFolder, string completedFolder) {
+            Settings.DownloadFolder = downloadFolder;
+            Settings.DownloadFolderIsRelative = chkDownloadFolderRelative.Checked;
+            Settings.MoveToCompletedFolder = chkCompletedFolder.Checked;
+            Settings.CompletedFolder = completedFolder;
+            Settings.CompletedFolderIsRelative = chkCompletedFolderRelative.Checked;
+            Settings.UseCustomUserAgent = chkCustomUserAgent.Checked;
+            Settings.CustomUserAgent = txtCustomUserAgent.Text;
+            Settings.SaveThumbnails = chkSaveThumbnails.Checked;
+            Settings.RenameDownloadFolderWithDescription = chkRenameDownloadFolderWithDescription.Checked;
+            Settings.RenameDownloadFolderWithCategory = chkRenameDownloadFolderWithCategory.Checked;
+            Settings.RenameDownloadFolderWithParentThreadDescription = chkRenameDownloadFolderWithParentThreadDescription.Checked;
+            Settings.ParentThreadDescriptionFormat = txtParentThreadDescriptionFormat.Text;
+            Settings.SortImagesByPoster = chkSortImagesByPoster.Checked;
+            Settings.RecursiveAutoFollow = chkRecursiveAutoFollow.Checked;
+            Settings.InterBoardAutoFollow = chkInterBoardAutoFollow.Checked;
+            Settings.UseOriginalFileNames = chkUseOriginalFileNames.Checked;
+            Settings.VerifyImageHashes = chkVerifyImageHashes.Checked;
+            Settings.UseSlug = chkUseSlug.Checked;
+            Settings.SlugType = GetSelectedSlugType();
+            Settings.CheckForUpdates = chkCheckForUpdates.Checked;
+            Settings.BlacklistWildcards = chkBlacklistWildcards.Checked;
+            Settings.MinimizeToTray = chkMinimizeToTray.Checked;
+            Settings.BackupThreadList = chkBackupThreadList.Checked;
+            Settings.BackupEvery = Int32.Parse(txtBackupEvery.Text);
+            Settings.BackupCheckSize = chkBackupCheckSize.Checked;
+            Settings.MaximumBytesPerSecond = Int64.Parse(txtMaximumKilobytesPerSecond.Text) * 1024;
+            Settings.WindowTitle = txtWindowTitle.Text;
+            Settings.UseExeDirectoryForSettings = rbSettingsInExeFolder.Checked;
+        }
+
+        private SlugType GetSelectedSlugType() {
+            if (rbSlugFirst.Checked) {
+                return SlugType.First;
+            }
+            if (rbSlugOnly.Checked) {
+                return SlugType.Only;
+            }
+            return SlugType.Last;
         }
 
         private void btnDownloadFolder_Click(object sender, EventArgs e) {

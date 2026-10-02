@@ -432,21 +432,29 @@ namespace JDP {
                     string line;
 
                     while ((line = sr.ReadLine()) != null) {
-                        int pos = line.IndexOf('=');
-
-                        if (pos != -1) {
-                            string name = line.Substring(0, pos);
-                            string val = line.Substring(pos + 1);
-
-                            if (!_settings.ContainsKey(name)) {
-                                _settings.Add(name, val);
-                            }
-                        }
+                        LoadSettingLine(line);
                     }
                 }
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
+            }
+        }
+
+        // Adds a "name=value" line to the settings. Lines without '=' are ignored,
+        // and the first occurrence of a duplicate name wins.
+        private static void LoadSettingLine(string line) {
+            int pos = line.IndexOf('=');
+
+            if (pos == -1) {
+                return;
+            }
+
+            string name = line.Substring(0, pos);
+            string val = line.Substring(pos + 1);
+
+            if (!_settings.ContainsKey(name)) {
+                _settings.Add(name, val);
             }
         }
 
