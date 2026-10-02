@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: nuget
+    directories:
+      - /
+      - /ChanThreadWatch.Tests
+    schedule:
+      interval: weekly
+    groups:
+      test-packages:
+        patterns:
+          - MSTest.*
+          - Microsoft.NET.Test.Sdk
