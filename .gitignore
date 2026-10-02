@@ -319,3 +319,5 @@ ASALocalRun/
 # MSBuild Binary and Structured Log
 *.binlog
 
+# Local working notes and plans (not tracked)
+/temp/
