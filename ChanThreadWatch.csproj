@@ -10,7 +10,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>JDP</RootNamespace>
     <AssemblyName>ChanThreadWatch</AssemblyName>
-    <TargetFrameworkVersion>v2.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ApplicationIcon>ChanThreadWatch.ico</ApplicationIcon>
     <SccProjectName>SAK</SccProjectName>
@@ -46,6 +46,10 @@
     <Reference Include="System.Drawing" />
     <Reference Include="System.Web" />
     <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Provides .NET 4.8 reference assemblies so the build does not need the Developer Pack installed -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Classes\GUI.cs" />
