@@ -847,8 +847,9 @@ namespace JDP {
                 var backupInfo = new FileInfo(path + ".bak");
                 if (ShouldBackupThreadList(path, backupInfo, checkSize)) {
                     string[] lines = File.ReadAllLines(path);
-                    if (lines.Length < 1) return;
-                    File.WriteAllLines(path + ".bak", lines);
+                    // Never replace the backup with a thread list that wouldn't load
+                    if (!ThreadListFile.IsValid(lines)) return;
+                    TextFile.WriteAllLinesAtomic(path + ".bak", lines);
                 }
             }
             catch (Exception ex) {

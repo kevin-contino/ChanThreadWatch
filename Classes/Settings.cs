@@ -7,7 +7,9 @@ using System.Reflection;
 
 namespace JDP {
     public static class Settings {
-        private static Dictionary<string, string> _settings;
+        private static readonly object _sync = new object();
+        private static Dictionary<string, string> _settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static bool _saveBlocked;
 
         public static string ApplicationName {
             get { return "Chan Thread Watch"; }
@@ -342,7 +344,7 @@ namespace JDP {
         }
 
         private static string Get(string name) {
-            lock (_settings) {
+            lock (_sync) {
                 string value;
                 return _settings.TryGetValue(name, out value) ? value : null;
             }
@@ -387,13 +389,15 @@ namespace JDP {
             return values;
         }
 
+        // The settings file holds one "name=value" per line, so line breaks in a value
+        // are replaced by spaces.
         private static void Set(string name, string value) {
-            lock (_settings) {
+            lock (_sync) {
                 if (value == null) {
                     _settings.Remove(name);
                 }
                 else {
-                    _settings[name] = value;
+                    _settings[name] = TextFile.ToSingleLine(value);
                 }
             }
         }
@@ -419,31 +423,44 @@ namespace JDP {
         }
 
         public static void Load() {
-            string path = Path.Combine(GetSettingsDirectory(), SettingsFileName);
+            Load(Path.Combine(GetSettingsDirectory(), SettingsFileName));
+        }
 
-            _settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            if (!File.Exists(path)) {
-                return;
-            }
-
+        // Replaces the current settings with the file's. If the file exists but can't be
+        // read, it is copied aside before saving is allowed; if that copy fails too,
+        // saving stays disabled so the file isn't overwritten.
+        public static void Load(string path) {
+            Dictionary<string, string> settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            bool saveBlocked = false;
             try {
-                using (StreamReader sr = File.OpenText(path)) {
-                    string line;
-
-                    while ((line = sr.ReadLine()) != null) {
-                        LoadSettingLine(line);
-                    }
-                }
+                ReadSettingsFile(path, settings);
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
+                saveBlocked = !TryPreserveSettingsFile(path);
+            }
+            lock (_sync) {
+                _settings = settings;
+                _saveBlocked = saveBlocked;
+            }
+        }
+
+        private static void ReadSettingsFile(string path, Dictionary<string, string> settings) {
+            if (!File.Exists(path)) {
+                return;
+            }
+            using (StreamReader sr = File.OpenText(path)) {
+                string line;
+
+                while ((line = sr.ReadLine()) != null) {
+                    LoadSettingLine(settings, line);
+                }
             }
         }
 
         // Adds a "name=value" line to the settings. Lines without '=' are ignored,
         // and the first occurrence of a duplicate name wins.
-        private static void LoadSettingLine(string line) {
+        private static void LoadSettingLine(Dictionary<string, string> settings, string line) {
             int pos = line.IndexOf('=');
 
             if (pos == -1) {
@@ -453,25 +470,44 @@ namespace JDP {
             string name = line.Substring(0, pos);
             string val = line.Substring(pos + 1);
 
-            if (!_settings.ContainsKey(name)) {
-                _settings.Add(name, val);
+            if (!settings.ContainsKey(name)) {
+                settings.Add(name, val);
+            }
+        }
+
+        private static bool TryPreserveSettingsFile(string path) {
+            try {
+                Logger.Log("The settings file could not be loaded. The original file was kept as " + TextFile.PreserveCopy(path));
+                return true;
+            }
+            catch (Exception ex) {
+                Logger.Log("The settings file could not be loaded or copied aside, so settings will not be saved this session." + Environment.NewLine + ex);
+                return false;
             }
         }
 
         public static void Save() {
-            string path = Path.Combine(GetSettingsDirectory(), SettingsFileName);
+            Save(Path.Combine(GetSettingsDirectory(), SettingsFileName));
+        }
+
+        public static void Save(string path) {
             try {
-                using (StreamWriter sw = File.CreateText(path)) {
-                    lock (_settings) {
-                        foreach (KeyValuePair<string, string> kvp in _settings) {
-                            sw.WriteLine(kvp.Key + "=" + kvp.Value);
-                        }
-                    }
+                lock (_sync) {
+                    if (_saveBlocked) return;
+                    TextFile.WriteAllLinesAtomic(path, GetSettingLines());
                 }
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
             }
+        }
+
+        private static List<string> GetSettingLines() {
+            List<string> lines = new List<string>();
+            foreach (KeyValuePair<string, string> kvp in _settings) {
+                lines.Add(kvp.Key + "=" + kvp.Value);
+            }
+            return lines;
         }
     }
 }
