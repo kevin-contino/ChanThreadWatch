@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The in-app update check compares Major.Minor.Revision of AssemblyVersion with the release tag
+      - name: Verify tag matches AssemblyVersion
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $match = Select-String -Path Properties/AssemblyInfo.cs -Pattern 'AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)'
+          if (-not $match) { throw 'AssemblyVersion not found in Properties/AssemblyInfo.cs' }
+          $g = $match.Matches[0].Groups
+          $expected = "v$($g[1].Value).$($g[2].Value).$($g[4].Value)"
+          if ($env:TAG -ne $expected) { throw "Tag $env:TAG does not match AssemblyVersion (expected $expected)" }
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - name: Build
+        run: msbuild ChanThreadWatch.sln -restore -p:Configuration=Release -v:minimal -nologo
+
+      - name: Test
+        run: dotnet test ChanThreadWatch.sln -c Release --no-build
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $files = 'bin/Release/ChanThreadWatch.exe', 'bin/Release/ChanThreadWatch.exe.config'
+          Get-FileHash $files -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } | Set-Content SHA256SUMS.txt
+          gh release create $env:TAG @files SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes --title $env:TAG
