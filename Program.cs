@@ -11,6 +11,7 @@ namespace JDP {
 
         [STAThread]
         private static void Main() {
+            InstallExceptionHandlers();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (!ObtainMutex()) {
@@ -18,6 +19,25 @@ namespace JDP {
                 return;
             }
             Application.Run(new frmChanThreadWatch());
+        }
+
+        // UI thread exceptions are logged and shown, and the program keeps running. Exceptions on
+        // other threads still end the process (the CLR always does that), but get logged first.
+        private static void InstallExceptionHandlers() {
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (s, e) => {
+                Logger.Log(FormatUnhandledException("UI thread", e.Exception, false));
+                MessageBox.Show("An unexpected error occurred. Details were written to the log file." + Environment.NewLine + Environment.NewLine +
+                    e.Exception.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            };
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => {
+                Logger.Log(FormatUnhandledException("Background thread", e.ExceptionObject, e.IsTerminating));
+            };
+        }
+
+        internal static string FormatUnhandledException(string source, object exceptionObject, bool isTerminating) {
+            string details = (exceptionObject != null) ? exceptionObject.ToString() : "(no exception object)";
+            return "Unhandled exception (" + source + (isTerminating ? ", terminating" : "") + "):" + Environment.NewLine + details;
         }
 
         public static bool ObtainMutex() {

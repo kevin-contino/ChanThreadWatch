@@ -82,6 +82,11 @@ namespace JDP {
 
     public class HTTP304Exception : Exception { }
 
+    public class PageTooLargeException : Exception {
+        public PageTooLargeException(int maxBytes)
+            : base("The page is larger than the maximum of " + maxBytes + " bytes.") { }
+    }
+
     public static class TickCount {
         private static object _sync = new object();
         private static int _lastTickCount;
