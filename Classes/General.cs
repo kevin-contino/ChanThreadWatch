@@ -18,6 +18,8 @@ namespace JDP {
             }
         }
 
+        public const string DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
         public static string ReleaseDate {
             get { return "2019-Jan-13"; }
         }
@@ -251,7 +253,8 @@ namespace JDP {
             if (connectionGroupName != null) {
                 request.ConnectionGroupName = connectionGroupName;
             }
-            request.UserAgent = (Settings.UseCustomUserAgent == true) ? Settings.CustomUserAgent : ("Chan Thread Watch " + Version);
+            // 4chan blocks (HTTP 403) non-browser user agents, so default to a browser-like one
+            request.UserAgent = (Settings.UseCustomUserAgent == true) ? Settings.CustomUserAgent : DefaultUserAgent;
             if (cacheLastModifiedTime != null) {
                 request.IfModifiedSince = cacheLastModifiedTime.Value;
             }
