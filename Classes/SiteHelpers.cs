@@ -137,77 +137,186 @@ namespace JDP {
             HashSet<string> imageFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             HashSet<string> thumbnailFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<ImageInfo> imageList = new List<ImageInfo>();
-            HTMLAttribute attribute;
-            string url;
-            int pos;
 
             foreach (HTMLTag linkTag in _htmlParser.FindStartTags("a")) {
-                attribute = linkTag.GetAttribute("href");
-                if (attribute == null) continue;
-                url = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(attribute.Value));
-                if (url == null || !IsImage(linkTag)) continue;
-
-                HTMLTag linkEndTag = _htmlParser.FindCorrespondingEndTag(linkTag);
+                HTMLAttribute attribute = linkTag.GetAttribute("href");
+                string url;
+                HTMLTag linkEndTag = FindImageLinkEndTag(linkTag, attribute, out url);
                 if (linkEndTag == null) continue;
 
-                ImageInfo image = new ImageInfo { Poster = String.Empty };
-                ThumbnailInfo thumb = null;
-
-                image.URL = url;
-                if (image.URL == null || image.FileName.Length == 0) continue;
-                pos = Math.Max(
-                    image.URL.LastIndexOf("http://", StringComparison.OrdinalIgnoreCase),
-                    image.URL.LastIndexOf("https://", StringComparison.OrdinalIgnoreCase));
-                if (pos == -1) {
-                    image.Referer = _url;
-                }
-                else {
-                    image.Referer = image.URL;
-                    image.URL = image.URL.Substring(pos);
-                }
+                ImageInfo image = CreateLinkedImage(url);
+                if (image == null) continue;
                 if (replaceList != null) {
-                    replaceList.Add(
-                        new ReplaceInfo {
-                            Offset = attribute.Offset,
-                            Length = attribute.Length,
-                            Type = ReplaceType.ImageLinkHref,
-                            Tag = image.FileName
-                        });
+                    AddAttributeReplace(replaceList, attribute, ReplaceType.ImageLinkHref, image.FileName);
                 }
 
-                HTMLTag imageTag = _htmlParser.FindStartTag(linkTag, linkEndTag, "img");
-                if (imageTag != null) {
-                    attribute = imageTag.GetAttribute("src");
-                    if (attribute != null) {
-                        url = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(attribute.Value));
-                        if (url != null) {
-                            thumb = new ThumbnailInfo();
-                            thumb.URL = url;
-                            thumb.Referer = _url;
-                            if (replaceList != null) {
-                                replaceList.Add(
-                                    new ReplaceInfo {
-                                        Offset = attribute.Offset,
-                                        Length = attribute.Length,
-                                        Type = ReplaceType.ImageSrc,
-                                        Tag = thumb.FileName
-                                    });
-                            }
-                        }
-                    }
-                }
+                ThumbnailInfo thumb = CreateLinkedThumbnail(linkTag, linkEndTag, replaceList);
 
-                if (!imageFileNames.Contains(image.FileName)) {
-                    imageList.Add(image);
-                    imageFileNames.Add(image.FileName);
-                }
-                if (thumb != null && !thumbnailFileNames.Contains(thumb.FileName)) {
-                    thumbnailList.Add(thumb);
-                    thumbnailFileNames.Add(thumb.FileName);
-                }
+                AddNewImage(imageList, imageFileNames, image);
+                AddNewThumbnail(thumbnailList, thumbnailFileNames, thumb);
             }
 
             return imageList;
+        }
+
+        // Returns the end tag of an image link, or null if the tag is not a resolvable image link.
+        private HTMLTag FindImageLinkEndTag(HTMLTag linkTag, HTMLAttribute hrefAttribute, out string url) {
+            url = null;
+            if (hrefAttribute == null) return null;
+            url = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(hrefAttribute.Value));
+            if (url == null || !IsImage(linkTag)) return null;
+            return _htmlParser.FindCorrespondingEndTag(linkTag);
+        }
+
+        private ImageInfo CreateLinkedImage(string url) {
+            ImageInfo image = new ImageInfo { Poster = String.Empty };
+
+            image.URL = url;
+            if (image.URL == null || image.FileName.Length == 0) return null;
+            int pos = Math.Max(
+                image.URL.LastIndexOf("http://", StringComparison.OrdinalIgnoreCase),
+                image.URL.LastIndexOf("https://", StringComparison.OrdinalIgnoreCase));
+            if (pos == -1) {
+                image.Referer = _url;
+            }
+            else {
+                image.Referer = image.URL;
+                image.URL = image.URL.Substring(pos);
+            }
+            return image;
+        }
+
+        private ThumbnailInfo CreateLinkedThumbnail(HTMLTag linkTag, HTMLTag linkEndTag, List<ReplaceInfo> replaceList) {
+            HTMLTag imageTag = _htmlParser.FindStartTag(linkTag, linkEndTag, "img");
+            if (imageTag == null) return null;
+            HTMLAttribute attribute = imageTag.GetAttribute("src");
+            if (attribute == null) return null;
+            ThumbnailInfo thumb = CreateThumbnail(attribute.Value);
+            if (thumb.URL == null) return null;
+            if (replaceList != null) {
+                AddAttributeReplace(replaceList, attribute, ReplaceType.ImageSrc, thumb.FileName);
+            }
+            return thumb;
+        }
+
+        private static void AddNewImage(List<ImageInfo> imageList, HashSet<string> imageFileNames, ImageInfo image) {
+            if (imageFileNames.Contains(image.FileName)) return;
+            imageList.Add(image);
+            imageFileNames.Add(image.FileName);
+        }
+
+        private static void AddNewThumbnail(List<ThumbnailInfo> thumbnailList, HashSet<string> thumbnailFileNames, ThumbnailInfo thumb) {
+            if (thumb == null || thumbnailFileNames.Contains(thumb.FileName)) return;
+            thumbnailList.Add(thumb);
+            thumbnailFileNames.Add(thumb.FileName);
+        }
+
+        // Tags that locate one posted file: the element that describes the file, the link around
+        // the thumbnail, the link whose href is the full image, and the thumbnail image.
+        protected class FileTags {
+            public HTMLTagRange InfoTagRange { get; set; }
+            public HTMLTagRange ThumbLinkTagRange { get; set; }
+            public HTMLTag LinkStartTag { get; set; }
+            public HTMLTag ThumbImageTag { get; set; }
+            public string ImageURL { get; set; }
+            public string ThumbURL { get; set; }
+        }
+
+        // Reads the image and thumbnail URLs. Returns null if the file tags or either URL is missing.
+        protected static FileTags ReadFileURLs(FileTags file) {
+            if (file == null) return null;
+            file.ImageURL = file.LinkStartTag.GetAttributeValue("href");
+            if (file.ImageURL == null) return null;
+            file.ThumbURL = file.ThumbImageTag.GetAttributeValue("src");
+            return file.ThumbURL != null ? file : null;
+        }
+
+        protected ThumbnailInfo CreateThumbnail(string thumbURL) {
+            return new ThumbnailInfo {
+                URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(thumbURL)),
+                Referer = _url
+            };
+        }
+
+        protected static bool IsMissingThumbnailData(ThumbnailInfo thumb) {
+            return thumb.URL == null || thumb.FileName.Length == 0;
+        }
+
+        protected static bool IsMissingFileName(ImageInfo image) {
+            return image.URL.Length == 0 || image.FileName.Length == 0;
+        }
+
+        protected static bool IsMissingFileNameOrHash(ImageInfo image) {
+            return IsMissingFileName(image) || image.Hash == null;
+        }
+
+        protected string GetTitleOrInnerHTML(HTMLTagRange tagRange) {
+            return tagRange.StartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(tagRange);
+        }
+
+        protected string GetPosterFromNameAndTrip(HTMLTagRange nameTagRange, HTMLTagRange tripTagRange) {
+            string name = _htmlParser.GetInnerHTML(nameTagRange);
+            return FormatPoster(name, tripTagRange != null ? _htmlParser.GetInnerHTML(tripTagRange) : null);
+        }
+
+        // Returns the name with its tripcode, or the name alone unless it is the default "Anonymous".
+        protected static string FormatPoster(string name, string trip) {
+            if (trip != null) return name + trip;
+            return name != "Anonymous" ? name : String.Empty;
+        }
+
+        // Adds the thumbnail, except that only the first spoiler placeholder thumbnail is added.
+        protected static void AddThumbnail(List<ThumbnailInfo> thumbnailList, ThumbnailInfo thumb, bool isSpoiler, ref bool seenSpoiler) {
+            if (isSpoiler && seenSpoiler) return;
+            thumbnailList.Add(thumb);
+            if (isSpoiler) seenSpoiler = true;
+        }
+
+        protected static void AddAttributeReplace(List<ReplaceInfo> replaceList, HTMLAttribute attribute, ReplaceType type, string tag) {
+            if (attribute == null) return;
+            replaceList.Add(
+                new ReplaceInfo {
+                    Offset = attribute.Offset,
+                    Length = attribute.Length,
+                    Type = type,
+                    Tag = tag
+                });
+        }
+
+        // Adds replacements for the image link, the thumbnail link and the thumbnail image of a file.
+        protected static void AddFileReplaces(List<ReplaceInfo> replaceList, FileTags file, ImageInfo image, ThumbnailInfo thumb) {
+            if (replaceList == null) return;
+            AddAttributeReplace(replaceList, file.LinkStartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
+            AddAttributeReplace(replaceList, file.ThumbLinkTagRange.StartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
+            AddAttributeReplace(replaceList, file.ThumbImageTag.GetAttribute("src"), ReplaceType.ImageSrc, thumb.FileName);
+        }
+
+        // Adds replacements that rewrite the file attributes of a resurrected post with their original values.
+        protected static void AddResurrectedFileReplaces(List<ReplaceInfo> replaceList, FileTags file) {
+            AddResurrectedAttributeReplace(replaceList, file.LinkStartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, "href");
+            AddResurrectedAttributeReplace(replaceList, file.ThumbLinkTagRange.StartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, "href");
+            AddResurrectedAttributeReplace(replaceList, file.ThumbImageTag.GetAttribute("src"), ReplaceType.ImageSrc, "src");
+        }
+
+        private static void AddResurrectedAttributeReplace(List<ReplaceInfo> replaceList, HTMLAttribute attribute, ReplaceType type, string attributeName) {
+            if (attribute == null) return;
+            replaceList.Add(
+                new ReplaceInfo {
+                    Offset = attribute.Offset,
+                    Length = attribute.Length,
+                    Type = type,
+                    Tag = String.Empty,
+                    Value = attributeName + "=\"" + General.HtmlAttributeEncode(attribute.Value, false) + "\""
+                });
+        }
+
+        // Applies the replacements to the current page and parses the result.
+        protected void ApplyReplaces(List<ReplaceInfo> replaceList) {
+            StringBuilder sb = new StringBuilder();
+            using (StringWriter sw = new StringWriter(sb)) {
+                General.WriteReplacedString(_htmlParser.PreprocessedHTML, replaceList, sw);
+            }
+            _htmlParser = new HTMLParser(sb.ToString());
         }
 
         public virtual HashSet<string> GetCrossLinks(List<ReplaceInfo> replaceList, bool interBoardAutoFollow) {
@@ -241,7 +350,7 @@ namespace JDP {
         }
 
         protected override string GetThreadName(string url, SlugType slugType) {
-            if (Settings.UseSlug != true || !HasSlug(url)) return GetThreadID();
+            if (ShouldIgnoreSlug(url)) return GetThreadID();
             string[] urlSplit = SplitURL(url);
             switch (slugType) {
                 case SlugType.First:
@@ -253,6 +362,10 @@ namespace JDP {
                 default:
                     return urlSplit[urlSplit.Length - 2];
             }
+        }
+
+        private bool ShouldIgnoreSlug(string url) {
+            return Settings.UseSlug != true || !HasSlug(url);
         }
 
         public override string GetThreadID() {
@@ -270,61 +383,87 @@ namespace JDP {
             foreach (HTMLTagRange postMessageTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("blockquote"),
                 t => HTMLParser.ClassAttributeValueHas(t, "postMessage")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
-                foreach (HTMLTag quoteLinkTag in Enumerable.Where(_htmlParser.FindStartTags(postMessageTagRange, "a"),
-                    t => HTMLParser.ClassAttributeValueHas(t, "quotelink")))
-                {
-                    HTMLAttribute attribute = quoteLinkTag.GetAttribute("href");
-                    if (attribute == null) continue;
-                    string href = attribute.Value.Substring(0, attribute.Value.Contains("#") ? attribute.Value.IndexOf('#') : attribute.Value.Length);
-                    if (!href.Contains("/thread/") || (!interBoardAutoFollow && GetBoardName() != href.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries)[0])) continue;
-                    crossLinks.Add(General.GetAbsoluteURL(_url, href));
-                    if (replaceList != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.QuoteLinkHref,
-                                Tag = href.Replace("/thread", "").Insert(0, GetSiteName()),
-                                Value = attribute.Value
-                            });
-                    }
-                }
-
-                foreach (HTMLTagRange deadLinkTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(postMessageTagRange, "span"),
-                    t => HTMLParser.ClassAttributeValueHas(t, "deadlink")), t => _htmlParser.CreateTagRange(t)), r => r != null))
-                {
-                    string boardName;
-                    string pageID;
-                    string deadLinkInnerHTML = HttpUtility.HtmlDecode(_htmlParser.GetInnerHTML(deadLinkTagRange));
-                    if (deadLinkInnerHTML.Contains(">>>")) {
-                        boardName = deadLinkInnerHTML.Split('/')[1];
-                        pageID = deadLinkInnerHTML.Split('/')[2];
-                    }
-                    else {
-                        boardName = GetBoardName();
-                        pageID = deadLinkInnerHTML.Substring(2);
-                    }
-
-                    if (replaceList != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = deadLinkTagRange.Offset,
-                                Length = deadLinkTagRange.Length,
-                                Type = ReplaceType.DeadLink,
-                                Tag = String.Join("/", new[] { GetSiteName(), boardName, pageID }),
-                                Value = _htmlParser.GetHTML(deadLinkTagRange)
-                            });
-                    }
-                }
+                AddQuoteLinks(postMessageTagRange, crossLinks, replaceList, interBoardAutoFollow);
+                AddDeadLinkReplaces(postMessageTagRange, replaceList);
             }
             return crossLinks;
         }
 
+        private void AddQuoteLinks(HTMLTagRange postMessageTagRange, HashSet<string> crossLinks, List<ReplaceInfo> replaceList, bool interBoardAutoFollow) {
+            foreach (HTMLTag quoteLinkTag in Enumerable.Where(_htmlParser.FindStartTags(postMessageTagRange, "a"),
+                t => HTMLParser.ClassAttributeValueHas(t, "quotelink")))
+            {
+                HTMLAttribute attribute = quoteLinkTag.GetAttribute("href");
+                if (attribute == null) continue;
+                string href = RemoveFragment(attribute.Value);
+                if (IsSkippedQuoteLink(href, interBoardAutoFollow)) continue;
+                crossLinks.Add(General.GetAbsoluteURL(_url, href));
+                if (replaceList != null) {
+                    replaceList.Add(
+                        new ReplaceInfo {
+                            Offset = attribute.Offset,
+                            Length = attribute.Length,
+                            Type = ReplaceType.QuoteLinkHref,
+                            Tag = href.Replace("/thread", "").Insert(0, GetSiteName()),
+                            Value = attribute.Value
+                        });
+                }
+            }
+        }
+
+        private static string RemoveFragment(string url) {
+            return url.Substring(0, url.Contains("#") ? url.IndexOf('#') : url.Length);
+        }
+
+        private bool IsSkippedQuoteLink(string href, bool interBoardAutoFollow) {
+            return !href.Contains("/thread/") || (!interBoardAutoFollow && GetBoardName() != href.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries)[0]);
+        }
+
+        private void AddDeadLinkReplaces(HTMLTagRange postMessageTagRange, List<ReplaceInfo> replaceList) {
+            foreach (HTMLTagRange deadLinkTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(postMessageTagRange, "span"),
+                t => HTMLParser.ClassAttributeValueHas(t, "deadlink")), t => _htmlParser.CreateTagRange(t)), r => r != null))
+            {
+                string boardName;
+                string pageID;
+                string deadLinkInnerHTML = HttpUtility.HtmlDecode(_htmlParser.GetInnerHTML(deadLinkTagRange));
+                if (deadLinkInnerHTML.Contains(">>>")) {
+                    boardName = deadLinkInnerHTML.Split('/')[1];
+                    pageID = deadLinkInnerHTML.Split('/')[2];
+                }
+                else {
+                    boardName = GetBoardName();
+                    pageID = deadLinkInnerHTML.Substring(2);
+                }
+
+                if (replaceList != null) {
+                    replaceList.Add(
+                        new ReplaceInfo {
+                            Offset = deadLinkTagRange.Offset,
+                            Length = deadLinkTagRange.Length,
+                            Type = ReplaceType.DeadLink,
+                            Tag = String.Join("/", new[] { GetSiteName(), boardName, pageID }),
+                            Value = _htmlParser.GetHTML(deadLinkTagRange)
+                        });
+                }
+            }
+        }
+
         public override void ResurrectDeadPosts(HTMLParser previousParser, List<ReplaceInfo> replaceList) {
             if (previousParser == null) return;
-            List<ReplaceInfo> tempReplaceList = new List<ReplaceInfo>();
-            Dictionary<string, HTMLTagRange> newPostContainers = new Dictionary<string, HTMLTagRange>();
             Dictionary<string, HTMLTagRange> resurrectedPostContainers = new Dictionary<string, HTMLTagRange>();
+
+            ApplyReplaces(GetDeadPostReplaces(previousParser, resurrectedPostContainers));
+            ApplyReplaces(GetDeadLinkReplaces(resurrectedPostContainers));
+
+            if (replaceList == null) return;
+            AddResurrectedImageReplaces(replaceList, resurrectedPostContainers);
+        }
+
+        // Returns replacements that insert the post containers missing from the current page, and
+        // records each inserted container in resurrectedPostContainers.
+        private List<ReplaceInfo> GetDeadPostReplaces(HTMLParser previousParser, Dictionary<string, HTMLTagRange> resurrectedPostContainers) {
+            List<ReplaceInfo> deadPostReplaceList = new List<ReplaceInfo>();
+            Dictionary<string, HTMLTagRange> newPostContainers = new Dictionary<string, HTMLTagRange>();
             foreach (HTMLTagRange postContainerTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
@@ -336,36 +475,36 @@ namespace JDP {
                 t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => previousParser.CreateTagRange(t)), r => r != null))
             {
                 HTMLTagRange tempTagRange;
-                if (!newPostContainers.TryGetValue(previousPostContainerTagRange.StartTag.GetAttributeValue("id"), out tempTagRange)) {
-                    int offset = lastExistingPostContainerTagRange != null ? lastExistingPostContainerTagRange.EndOffset :
-                        Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))).EndOffset;
-                    HTMLTag inputTag = previousParser.FindTag(false, previousPostContainerTagRange, "input");
-                    string value = previousParser.GetHTML(previousPostContainerTagRange);
-                    if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong>")) {
-                        value = value.Insert(inputTag.EndOffset - previousPostContainerTagRange.Offset, "<strong style=\"color: #FF0000\">[Deleted]</strong>");
-                    }
-                    tempReplaceList.Add(
-                            new ReplaceInfo {
-                                Offset = offset,
-                                Length = 0,
-                                Type = ReplaceType.DeadPost,
-                                Tag = previousPostContainerTagRange.StartTag.GetAttributeValue("id"),
-                                Value = value
-                            });
-                    resurrectedPostContainers.Add(previousPostContainerTagRange.StartTag.GetAttributeValue("id"), previousPostContainerTagRange);
-                }
-                else {
+                if (newPostContainers.TryGetValue(previousPostContainerTagRange.StartTag.GetAttributeValue("id"), out tempTagRange)) {
                     lastExistingPostContainerTagRange = tempTagRange;
+                    continue;
                 }
+                deadPostReplaceList.Add(CreateDeadPostReplace(previousParser, previousPostContainerTagRange, lastExistingPostContainerTagRange));
+                resurrectedPostContainers.Add(previousPostContainerTagRange.StartTag.GetAttributeValue("id"), previousPostContainerTagRange);
             }
+            return deadPostReplaceList;
+        }
 
-            StringBuilder sb = new StringBuilder();
-            using (StringWriter sw = new StringWriter(sb)) {
-                General.WriteReplacedString(_htmlParser.PreprocessedHTML, tempReplaceList, sw);
+        private ReplaceInfo CreateDeadPostReplace(HTMLParser previousParser, HTMLTagRange previousPostContainerTagRange, HTMLTagRange lastExistingPostContainerTagRange) {
+            int offset = lastExistingPostContainerTagRange != null ? lastExistingPostContainerTagRange.EndOffset :
+                Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))).EndOffset;
+            HTMLTag inputTag = previousParser.FindTag(false, previousPostContainerTagRange, "input");
+            string value = previousParser.GetHTML(previousPostContainerTagRange);
+            if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong>")) {
+                value = value.Insert(inputTag.EndOffset - previousPostContainerTagRange.Offset, "<strong style=\"color: #FF0000\">[Deleted]</strong>");
             }
-            _htmlParser = new HTMLParser(sb.ToString());
+            return new ReplaceInfo {
+                Offset = offset,
+                Length = 0,
+                Type = ReplaceType.DeadPost,
+                Tag = previousPostContainerTagRange.StartTag.GetAttributeValue("id"),
+                Value = value
+            };
+        }
 
-            tempReplaceList.Clear();
+        // Returns replacements that turn dead links to resurrected posts back into quote links.
+        private List<ReplaceInfo> GetDeadLinkReplaces(Dictionary<string, HTMLTagRange> resurrectedPostContainers) {
+            List<ReplaceInfo> deadLinkReplaceList = new List<ReplaceInfo>();
             foreach (HTMLTagRange deadLinkTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("span"),
                     t => HTMLParser.ClassAttributeValueHas(t, "deadlink")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
@@ -373,7 +512,7 @@ namespace JDP {
                 if (String.IsNullOrEmpty(deadLinkInnerHTML) || deadLinkInnerHTML.Contains(">>>")) continue;
                 string deadLinkID = deadLinkInnerHTML.Substring(2);
                 if (resurrectedPostContainers.ContainsKey("pc" + deadLinkID)) {
-                    tempReplaceList.Add(
+                    deadLinkReplaceList.Add(
                         new ReplaceInfo {
                             Offset = deadLinkTagRange.Offset,
                             Length = deadLinkTagRange.Length,
@@ -383,68 +522,19 @@ namespace JDP {
                         });
                 }
             }
+            return deadLinkReplaceList;
+        }
 
-            sb = new StringBuilder();
-            using (StringWriter sw = new StringWriter(sb)) {
-                General.WriteReplacedString(_htmlParser.PreprocessedHTML, tempReplaceList, sw);
-            }
-            _htmlParser = new HTMLParser(sb.ToString());
-
-            if (replaceList == null) return;
+        private void AddResurrectedImageReplaces(List<ReplaceInfo> replaceList, Dictionary<string, HTMLTagRange> resurrectedPostContainers) {
             foreach (HTMLTagRange postContainerTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
                 if (!resurrectedPostContainers.ContainsKey(postContainerTagRange.StartTag.GetAttributeValue("id"))) continue;
 
-                HTMLTagRange fileTextDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postContainerTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "fileText"))));
-                if (fileTextDivTagRange == null) continue;
+                FileTags file = FindFileTags(postContainerTagRange, "div");
+                if (file == null) continue;
 
-                HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postContainerTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "fileThumb"))));
-                if (fileThumbLinkTagRange == null) continue;
-
-                HTMLTag fileTextLinkStartTag = _htmlParser.FindStartTag(fileTextDivTagRange, "a");
-                if (fileTextLinkStartTag == null) continue;
-
-                HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
-                if (fileThumbImageTag == null) continue;
-
-                HTMLAttribute attribute = fileTextLinkStartTag.GetAttribute("href");
-                if (attribute != null) {
-                    replaceList.Add(
-                        new ReplaceInfo {
-                            Offset = attribute.Offset,
-                            Length = attribute.Length,
-                            Type = ReplaceType.ImageLinkHref,
-                            Tag = String.Empty,
-                            Value = "href=\"" + General.HtmlAttributeEncode(attribute.Value, false) + "\""
-                        });
-                }
-
-                attribute = fileThumbLinkTagRange.StartTag.GetAttribute("href");
-                if (attribute != null) {
-                    replaceList.Add(
-                        new ReplaceInfo {
-                            Offset = attribute.Offset,
-                            Length = attribute.Length,
-                            Type = ReplaceType.ImageLinkHref,
-                            Tag = String.Empty,
-                            Value = "href=\"" + General.HtmlAttributeEncode(attribute.Value, false) + "\""
-                        });
-                }
-
-                attribute = fileThumbImageTag.GetAttribute("src");
-                if (attribute != null) {
-                    replaceList.Add(
-                        new ReplaceInfo {
-                            Offset = attribute.Offset,
-                            Length = attribute.Length,
-                            Type = ReplaceType.ImageSrc,
-                            Tag = String.Empty,
-                            Value = "src=\"" + General.HtmlAttributeEncode(attribute.Value, false) + "\""
-                        });
-                }
+                AddResurrectedFileReplaces(replaceList, file);
             }
         }
 
@@ -461,128 +551,94 @@ namespace JDP {
             foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "post")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
-                HTMLTagRange fileTextDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "div", "span"), t => HTMLParser.ClassAttributeValueHas(t, "fileText"))));
-                if (fileTextDivTagRange == null) continue;
+                FileTags file = ReadFileURLs(FindFileTags(postTagRange, "div", "span"));
+                if (file == null) continue;
 
-                HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "fileThumb"))));
-                if (fileThumbLinkTagRange == null) continue;
+                bool isSpoiler = HTMLParser.ClassAttributeValueHas(file.ThumbLinkTagRange.StartTag, "imgspoiler");
 
-                HTMLTag fileTextLinkStartTag = _htmlParser.FindStartTag(fileTextDivTagRange, "a");
-                if (fileTextLinkStartTag == null) continue;
+                ImageInfo image = CreateImage(postTagRange, file, isSpoiler);
+                if (IsMissingImageData(image)) continue;
 
-                HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
-                if (fileThumbImageTag == null) continue;
+                ThumbnailInfo thumb = CreateThumbnail(file.ThumbURL);
+                if (IsMissingThumbnailData(thumb)) continue;
 
-                string imageURL = fileTextLinkStartTag.GetAttributeValue("href");
-                if (imageURL == null) continue;
-
-                string thumbURL = fileThumbImageTag.GetAttributeValue("src");
-                if (thumbURL == null) continue;
-
-                bool isSpoiler = HTMLParser.ClassAttributeValueHas(fileThumbLinkTagRange.StartTag, "imgspoiler");
-
-                string originalFileName;
-                if (isSpoiler) {
-                    originalFileName = fileTextDivTagRange.StartTag.GetAttributeValue("title");
-                }
-                else {
-                    originalFileName = fileTextLinkStartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(_htmlParser.CreateTagRange(fileTextLinkStartTag));
-                }
-
-                string imageMD5 = fileThumbImageTag.GetAttributeValue("data-md5");
-
-                string poster = String.Empty;
-                HTMLTagRange nameBlockSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "nameBlock"))));
-
-                if (nameBlockSpanTagRange != null) {
-                    HTMLTagRange nameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(nameBlockSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "name"))));
-
-                    HTMLTagRange posterTripSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(nameBlockSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postertrip"))));
-
-                    HTMLTagRange idSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(nameBlockSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "hand"))));
-
-                    if (idSpanTagRange != null) {
-                        poster = _htmlParser.GetInnerHTML(idSpanTagRange);
-                    }
-                    else if (nameSpanTagRange != null) {
-                        string name = _htmlParser.GetInnerHTML(nameSpanTagRange);
-                        if (posterTripSpanTagRange != null) {
-                            poster = name + _htmlParser.GetInnerHTML(posterTripSpanTagRange);
-                        }
-                        else if (name != "Anonymous") {
-                            poster = name;
-                        }
-                    }
-                }
-
-                ImageInfo image = new ImageInfo {
-                    URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(imageURL)),
-                    Referer = _url,
-                    HashType = imageMD5 != null ? HashType.MD5 : HashType.None,
-                    Hash = imageMD5 != null ? General.TryBase64Decode(imageMD5) : null,
-                    OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName) ?? ""),
-                    Poster = General.CleanFileName(poster)
-                };
-                if (image.URL.Length == 0 || image.FileName.Length == 0 || (image.HashType != HashType.None && image.Hash == null)) continue;
-
-                ThumbnailInfo thumb = new ThumbnailInfo {
-                    URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(thumbURL)),
-                    Referer = _url
-                };
-                if (thumb.URL == null || thumb.FileName.Length == 0) continue;
-
-                if (replaceList != null) {
-                    HTMLAttribute attribute;
-
-                    attribute = fileTextLinkStartTag.GetAttribute("href");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageLinkHref,
-                                Tag = image.FileName
-                            });
-                    }
-
-                    attribute = fileThumbLinkTagRange.StartTag.GetAttribute("href");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageLinkHref,
-                                Tag = image.FileName
-                            });
-                    }
-
-                    attribute = fileThumbImageTag.GetAttribute("src");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageSrc,
-                                Tag = thumb.FileName
-                            });
-                    }
-                }
+                AddFileReplaces(replaceList, file, image, thumb);
 
                 imageList.Add(image);
-
-                if (!isSpoiler || !seenSpoiler) {
-                    thumbnailList.Add(thumb);
-                    if (isSpoiler) seenSpoiler = true;
-                }
+                AddThumbnail(thumbnailList, thumb, isSpoiler, ref seenSpoiler);
             }
 
             return imageList;
+        }
+
+        // Finds the file text, its link, the thumbnail link and the thumbnail image in a post.
+        // Returns null if any of them is missing.
+        protected FileTags FindFileTags(HTMLTagRange postTagRange, params string[] fileTextTagNames) {
+            HTMLTagRange fileTextTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, fileTextTagNames), t => HTMLParser.ClassAttributeValueHas(t, "fileText"))));
+            if (fileTextTagRange == null) return null;
+
+            HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "fileThumb"))));
+            if (fileThumbLinkTagRange == null) return null;
+
+            HTMLTag fileTextLinkStartTag = _htmlParser.FindStartTag(fileTextTagRange, "a");
+            if (fileTextLinkStartTag == null) return null;
+
+            HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
+            if (fileThumbImageTag == null) return null;
+
+            return new FileTags {
+                InfoTagRange = fileTextTagRange,
+                ThumbLinkTagRange = fileThumbLinkTagRange,
+                LinkStartTag = fileTextLinkStartTag,
+                ThumbImageTag = fileThumbImageTag
+            };
+        }
+
+        private ImageInfo CreateImage(HTMLTagRange postTagRange, FileTags file, bool isSpoiler) {
+            string originalFileName = GetOriginalFileName(file, isSpoiler);
+            string imageMD5 = file.ThumbImageTag.GetAttributeValue("data-md5");
+            string poster = GetPoster(postTagRange);
+
+            return new ImageInfo {
+                URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(file.ImageURL)),
+                Referer = _url,
+                HashType = imageMD5 != null ? HashType.MD5 : HashType.None,
+                Hash = imageMD5 != null ? General.TryBase64Decode(imageMD5) : null,
+                OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName) ?? ""),
+                Poster = General.CleanFileName(poster)
+            };
+        }
+
+        private static bool IsMissingImageData(ImageInfo image) {
+            return IsMissingFileName(image) || (image.HashType != HashType.None && image.Hash == null);
+        }
+
+        private string GetOriginalFileName(FileTags file, bool isSpoiler) {
+            if (isSpoiler) {
+                return file.InfoTagRange.StartTag.GetAttributeValue("title");
+            }
+            return file.LinkStartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(_htmlParser.CreateTagRange(file.LinkStartTag));
+        }
+
+        private string GetPoster(HTMLTagRange postTagRange) {
+            HTMLTagRange nameBlockSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "nameBlock"))));
+            if (nameBlockSpanTagRange == null) return String.Empty;
+
+            HTMLTagRange nameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(nameBlockSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "name"))));
+
+            HTMLTagRange posterTripSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(nameBlockSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postertrip"))));
+
+            HTMLTagRange idSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(nameBlockSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "hand"))));
+
+            if (idSpanTagRange != null) return _htmlParser.GetInnerHTML(idSpanTagRange);
+            if (nameSpanTagRange == null) return String.Empty;
+            return GetPosterFromNameAndTrip(nameSpanTagRange, posterTripSpanTagRange);
         }
     }
 
@@ -594,126 +650,99 @@ namespace JDP {
             foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "has-file")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
-                bool isOP = HTMLParser.ClassAttributeValueHas(postTagRange.StartTag, "op");
-
-                HTMLTagRange threadDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))));
-
-                HTMLTagRange nameTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "name"))));
-
-                HTMLTagRange tripSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "trip"))));
-                
-                string poster = String.Empty;
-                string name = _htmlParser.GetInnerHTML(nameTagRange);
-                if (tripSpanTagRange != null) {
-                    poster = name + _htmlParser.GetInnerHTML(tripSpanTagRange);
-                }
-                else if (name != "Anonymous") {
-                    poster = name;
-                }
-
-                HTMLTagRange filesDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(isOP ? threadDivTagRange : postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "files"))));
+                string poster = GetPoster(postTagRange);
+                HTMLTagRange filesDivTagRange = FindFilesDivTagRange(postTagRange);
 
                 foreach (HTMLTagRange fileDivTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(filesDivTagRange, "div"),
                     t => HTMLParser.ClassAttributeValueHas(t, "file")), t => _htmlParser.CreateTagRange(t)), r => r != null))
                 {
-                    HTMLTagRange fileInfoParagraphTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileDivTagRange, "p"), t => HTMLParser.ClassAttributeValueHas(t, "fileinfo"))));
-                    if (fileInfoParagraphTagRange == null) continue;
+                    FileTags file = ReadFileURLs(FindFileTags(fileDivTagRange));
+                    if (file == null) continue;
 
-                    HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileDivTagRange, "a"), t => t.GetAttributeValueOrEmpty("target") == "_blank")));
-                    if (fileThumbLinkTagRange == null) continue;
+                    bool isSpoiler = file.ThumbURL == "/static/spoiler.png";
 
-                    HTMLTag fileInfoLinkStartTag = _htmlParser.FindStartTag(fileInfoParagraphTagRange, "a");
-                    if (fileInfoLinkStartTag == null) continue;
+                    ImageInfo image = CreateImage(file, poster);
+                    if (image == null) continue;
 
-                    HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
-                    if (fileThumbImageTag == null) continue;
+                    ThumbnailInfo thumb = CreateThumbnail(file.ThumbURL);
+                    if (IsMissingThumbnailData(thumb)) continue;
 
-                    string imageURL = fileInfoLinkStartTag.GetAttributeValue("href");
-                    if (imageURL == null) continue;
-
-                    string thumbURL = fileThumbImageTag.GetAttributeValue("src");
-                    if (thumbURL == null) continue;
-
-                    bool isSpoiler = thumbURL == "/static/spoiler.png";
-
-                    HTMLTagRange postFileNameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileInfoParagraphTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postfilename"))));
-                    if (postFileNameSpanTagRange == null) continue;
-
-                    string originalFileName = postFileNameSpanTagRange.StartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(postFileNameSpanTagRange);
-
-                    string imageMD5 = fileThumbImageTag.GetAttributeValue("data-md5");
-                    if (imageMD5 == null) continue;
-                
-                    ImageInfo image = new ImageInfo {
-                        URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(imageURL)),
-                        Referer = _url,
-                        OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
-                        HashType = HashType.MD5,
-                        Hash = General.TryBase64Decode(imageMD5),
-                        Poster = General.CleanFileName(poster)
-                    };
-                    if (image.URL.Length == 0 || image.FileName.Length == 0 || image.Hash == null) continue;
-
-                    ThumbnailInfo thumb = new ThumbnailInfo {
-                        URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(thumbURL)),
-                        Referer = _url
-                    };
-                    if (thumb.URL == null || thumb.FileName.Length == 0) continue;
-
-                    if (replaceList != null) {
-                        HTMLAttribute attribute;
-
-                        attribute = fileInfoLinkStartTag.GetAttribute("href");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageLinkHref,
-                                    Tag = image.FileName
-                                });
-                        }
-
-                        attribute = fileThumbLinkTagRange.StartTag.GetAttribute("href");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageLinkHref,
-                                    Tag = image.FileName
-                                });
-                        }
-
-                        attribute = fileThumbImageTag.GetAttribute("src");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageSrc,
-                                    Tag = thumb.FileName
-                                });
-                        }
-                    }
+                    AddFileReplaces(replaceList, file, image, thumb);
 
                     imageList.Add(image);
-
-                    if (!isSpoiler || !seenSpoiler) {
-                        thumbnailList.Add(thumb);
-                        if (isSpoiler) seenSpoiler = true;
-                    }
+                    AddThumbnail(thumbnailList, thumb, isSpoiler, ref seenSpoiler);
                 }
             }
 
             return imageList;
+        }
+
+        private string GetPoster(HTMLTagRange postTagRange) {
+            HTMLTagRange nameTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "name"))));
+
+            HTMLTagRange tripSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "trip"))));
+
+            return GetPosterFromNameAndTrip(nameTagRange, tripSpanTagRange);
+        }
+
+        // The OP's files sit in the thread div; a reply's files sit in the reply.
+        private HTMLTagRange FindFilesDivTagRange(HTMLTagRange postTagRange) {
+            bool isOP = HTMLParser.ClassAttributeValueHas(postTagRange.StartTag, "op");
+
+            HTMLTagRange threadDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))));
+
+            return _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(isOP ? threadDivTagRange : postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "files"))));
+        }
+
+        // Finds the file info paragraph, its link, the thumbnail link and the thumbnail image in a
+        // file div. Returns null if any of them is missing.
+        private FileTags FindFileTags(HTMLTagRange fileDivTagRange) {
+            HTMLTagRange fileInfoParagraphTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(fileDivTagRange, "p"), t => HTMLParser.ClassAttributeValueHas(t, "fileinfo"))));
+            if (fileInfoParagraphTagRange == null) return null;
+
+            HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(fileDivTagRange, "a"), t => t.GetAttributeValueOrEmpty("target") == "_blank")));
+            if (fileThumbLinkTagRange == null) return null;
+
+            HTMLTag fileInfoLinkStartTag = _htmlParser.FindStartTag(fileInfoParagraphTagRange, "a");
+            if (fileInfoLinkStartTag == null) return null;
+
+            HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
+            if (fileThumbImageTag == null) return null;
+
+            return new FileTags {
+                InfoTagRange = fileInfoParagraphTagRange,
+                ThumbLinkTagRange = fileThumbLinkTagRange,
+                LinkStartTag = fileInfoLinkStartTag,
+                ThumbImageTag = fileThumbImageTag
+            };
+        }
+
+        // Returns null if the original file name, the MD5 or a usable file name is missing.
+        private ImageInfo CreateImage(FileTags file, string poster) {
+            HTMLTagRange postFileNameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(file.InfoTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postfilename"))));
+            if (postFileNameSpanTagRange == null) return null;
+
+            string originalFileName = GetTitleOrInnerHTML(postFileNameSpanTagRange);
+
+            string imageMD5 = file.ThumbImageTag.GetAttributeValue("data-md5");
+            if (imageMD5 == null) return null;
+
+            ImageInfo image = new ImageInfo {
+                URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(file.ImageURL)),
+                Referer = _url,
+                OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
+                HashType = HashType.MD5,
+                Hash = General.TryBase64Decode(imageMD5),
+                Poster = General.CleanFileName(poster)
+            };
+            return IsMissingFileNameOrHash(image) ? null : image;
         }
 
         public override HashSet<string> GetCrossLinks(List<ReplaceInfo> replaceList, bool interBoardAutoFollow) {
@@ -728,7 +757,7 @@ namespace JDP {
                     HTMLAttribute attribute = quoteLinkTag.GetAttribute("href");
                     string href = attribute.Value.Remove(attribute.Value.IndexOf('#'));
                     string[] urlSplit = href.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-                    if ((urlSplit[0] == GetBoardName() && urlSplit[2] == GetThreadID()) || (!interBoardAutoFollow && GetBoardName() != urlSplit[0])) continue;
+                    if (IsSkippedQuoteLink(urlSplit, interBoardAutoFollow)) continue;
                     crossLinks.Add(General.GetAbsoluteURL(_url, href));
                     if (replaceList != null) {
                         replaceList.Add(
@@ -745,11 +774,26 @@ namespace JDP {
             return crossLinks;
         }
 
+        // Skips links to this thread, and links to other boards unless inter-board links are followed.
+        private bool IsSkippedQuoteLink(string[] urlSplit, bool interBoardAutoFollow) {
+            return (urlSplit[0] == GetBoardName() && urlSplit[2] == GetThreadID()) || (!interBoardAutoFollow && GetBoardName() != urlSplit[0]);
+        }
+
         public override void ResurrectDeadPosts(HTMLParser previousParser, List<ReplaceInfo> replaceList) {
             if (previousParser == null) return;
-            List<ReplaceInfo> tempReplaceList = new List<ReplaceInfo>();
-            Dictionary<string, HTMLTagRange> newPosts = new Dictionary<string, HTMLTagRange>();
             Dictionary<string, HTMLTagRange> resurrectedPosts = new Dictionary<string, HTMLTagRange>();
+
+            ApplyReplaces(GetDeadPostReplaces(previousParser, resurrectedPosts));
+
+            if (replaceList == null) return;
+            AddResurrectedImageReplaces(replaceList, resurrectedPosts);
+        }
+
+        // Returns replacements that insert the posts missing from the current page, and records each
+        // inserted post in resurrectedPosts.
+        private List<ReplaceInfo> GetDeadPostReplaces(HTMLParser previousParser, Dictionary<string, HTMLTagRange> resurrectedPosts) {
+            List<ReplaceInfo> deadPostReplaceList = new List<ReplaceInfo>();
+            Dictionary<string, HTMLTagRange> newPosts = new Dictionary<string, HTMLTagRange>();
             foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "post")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
@@ -761,101 +805,48 @@ namespace JDP {
                 t => HTMLParser.ClassAttributeValueHas(t, "post")), t => previousParser.CreateTagRange(t)), r => r != null))
             {
                 HTMLTagRange tempTagRange;
-                if (!newPosts.TryGetValue(previousPostTagRange.StartTag.GetAttributeValue("id"), out tempTagRange)) {
-                    int offset = lastExistingPostTagRange != null ? lastExistingPostTagRange.EndOffset :
-                        Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))).EndOffset;
-                    HTMLTag inputTag = previousParser.FindStartTag(previousPostTagRange, "input");
-                    string value = previousParser.GetHTML(previousPostTagRange);
-                    if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong> ")) {
-                        value = value.Insert(inputTag.EndOffset - previousPostTagRange.Offset, "<strong style=\"color: #FF0000\">[Deleted]</strong> ");
-                    }
-                    tempReplaceList.Add(
-                            new ReplaceInfo {
-                                Offset = offset,
-                                Length = 0,
-                                Type = ReplaceType.DeadPost,
-                                Tag = previousPostTagRange.StartTag.GetAttributeValue("id"),
-                                Value = value.Insert(0, "<br/>")
-                            });
-                    resurrectedPosts.Add(previousPostTagRange.StartTag.GetAttributeValue("id"), previousPostTagRange);
-                }
-                else {
+                if (newPosts.TryGetValue(previousPostTagRange.StartTag.GetAttributeValue("id"), out tempTagRange)) {
                     lastExistingPostTagRange = tempTagRange;
+                    continue;
                 }
+                deadPostReplaceList.Add(CreateDeadPostReplace(previousParser, previousPostTagRange, lastExistingPostTagRange));
+                resurrectedPosts.Add(previousPostTagRange.StartTag.GetAttributeValue("id"), previousPostTagRange);
             }
+            return deadPostReplaceList;
+        }
 
-            StringBuilder sb = new StringBuilder();
-            using (StringWriter sw = new StringWriter(sb)) {
-                General.WriteReplacedString(_htmlParser.PreprocessedHTML, tempReplaceList, sw);
+        private ReplaceInfo CreateDeadPostReplace(HTMLParser previousParser, HTMLTagRange previousPostTagRange, HTMLTagRange lastExistingPostTagRange) {
+            int offset = lastExistingPostTagRange != null ? lastExistingPostTagRange.EndOffset :
+                Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))).EndOffset;
+            HTMLTag inputTag = previousParser.FindStartTag(previousPostTagRange, "input");
+            string value = previousParser.GetHTML(previousPostTagRange);
+            if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong> ")) {
+                value = value.Insert(inputTag.EndOffset - previousPostTagRange.Offset, "<strong style=\"color: #FF0000\">[Deleted]</strong> ");
             }
-            _htmlParser = new HTMLParser(sb.ToString());
+            return new ReplaceInfo {
+                Offset = offset,
+                Length = 0,
+                Type = ReplaceType.DeadPost,
+                Tag = previousPostTagRange.StartTag.GetAttributeValue("id"),
+                Value = value.Insert(0, "<br/>")
+            };
+        }
 
-            if (replaceList == null) return;
+        private void AddResurrectedImageReplaces(List<ReplaceInfo> replaceList, Dictionary<string, HTMLTagRange> resurrectedPosts) {
             foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "has-file")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
                 if (!resurrectedPosts.ContainsKey(postTagRange.StartTag.GetAttributeValue("id"))) continue;
 
-                bool isOP = HTMLParser.ClassAttributeValueHas(postTagRange.StartTag, "op");
-
-                HTMLTagRange threadDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))));
-
-                HTMLTagRange filesDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(isOP ? threadDivTagRange : postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "files"))));
+                HTMLTagRange filesDivTagRange = FindFilesDivTagRange(postTagRange);
 
                 foreach (HTMLTagRange fileDivTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(filesDivTagRange, "div"),
                     t => HTMLParser.ClassAttributeValueHas(t, "file")), t => _htmlParser.CreateTagRange(t)), r => r != null))
                 {
-                    HTMLTagRange fileInfoParagraphTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileDivTagRange, "p"), t => HTMLParser.ClassAttributeValueHas(t, "fileinfo"))));
-                    if (fileInfoParagraphTagRange == null) continue;
+                    FileTags file = FindFileTags(fileDivTagRange);
+                    if (file == null) continue;
 
-                    HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileDivTagRange, "a"), t => t.GetAttributeValueOrEmpty("target") == "_blank")));
-                    if (fileThumbLinkTagRange == null) continue;
-
-                    HTMLTag fileInfoLinkStartTag = _htmlParser.FindStartTag(fileInfoParagraphTagRange, "a");
-                    if (fileInfoLinkStartTag == null) continue;
-
-                    HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
-                    if (fileThumbImageTag == null) continue;
-
-                    HTMLAttribute attribute = fileInfoLinkStartTag.GetAttribute("href");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageLinkHref,
-                                Tag = String.Empty,
-                                Value = "href=\"" + General.HtmlAttributeEncode(attribute.Value, false) + "\""
-                            });
-                    }
-
-                    attribute = fileThumbLinkTagRange.StartTag.GetAttribute("href");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageLinkHref,
-                                Tag = String.Empty,
-                                Value = "href=\"" + General.HtmlAttributeEncode(attribute.Value, false) + "\""
-                            });
-                    }
-
-                    attribute = fileThumbImageTag.GetAttribute("src");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageSrc,
-                                Tag = String.Empty,
-                                Value = "src=\"" + General.HtmlAttributeEncode(attribute.Value, false) + "\""
-                            });
-                    }
+                    AddResurrectedFileReplaces(replaceList, file);
                 }
             }
         }
@@ -881,101 +872,16 @@ namespace JDP {
                 HTMLTagRange labelTagRange = _htmlParser.CreateTagRange(_htmlParser.FindStartTag(postTagRange, "label"));
                 if (labelTagRange == null) continue;
 
-                HTMLTagRange postHeaderRange = _htmlParser.CreateTagRange(_htmlParser.FindStartTag(postTagRange, "span"));
-                if (postHeaderRange == null) continue;
+                FileTags file = ReadFileURLs(FindFileTags(postTagRange));
+                if (file == null) continue;
 
-                HTMLTagRange imageLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags(postTagRange, "a"), IsImage)));
-                if (imageLinkTagRange == null) continue;
+                ImageInfo image = CreateImage(labelTagRange, file);
+                if (image == null) continue;
 
-                HTMLTag thumbImageTag = _htmlParser.FindStartTag(imageLinkTagRange, "img");
-                if (thumbImageTag == null) continue;
+                ThumbnailInfo thumb = CreateThumbnail(file.ThumbURL);
+                if (IsMissingThumbnailData(thumb)) continue;
 
-                string imageURL = imageLinkTagRange.StartTag.GetAttributeValue("href");
-                if (imageURL == null) continue;
-
-                string thumbURL = thumbImageTag.GetAttributeValue("src");
-                if (thumbURL == null) continue;
-
-                string[] fileInfoSplit = _htmlParser.GetInnerHTML(postHeaderRange).Split(new[] { ',' }, 3);
-                if (fileInfoSplit.Length < 3) continue;
-                
-                string originalFileName;
-                string imageMD5 = null;
-                string fileInfo = fileInfoSplit[2].Trim();
-                if (fileInfo.EndsWith("-->")) {
-                    int hashIndex = fileInfo.LastIndexOf("<!--", StringComparison.Ordinal);
-                    originalFileName = fileInfo.Remove(hashIndex).Trim();
-                    imageMD5 = fileInfo.Substring(hashIndex).Replace("<!--", "").Replace("-->", "").Trim();
-                }
-                else {
-                    originalFileName = fileInfo;
-                    HTMLTag similarImageLinkStartTag = Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(postHeaderRange.EndTag, imageLinkTagRange.StartTag, "a"), t => t.GetAttributeValueOrEmpty("href").Contains("/image/")));
-                    if (similarImageLinkStartTag != null) {
-                        string[] hrefSplit = similarImageLinkStartTag.GetAttributeValueOrEmpty("href").Split('/');
-                        imageMD5 = hrefSplit[hrefSplit.Length - 1].Replace('-', '+').Replace('_', '/');
-                        imageMD5 = imageMD5.PadRight(imageMD5.Length + (4 - imageMD5.Length % 4) % 4, '=');
-                    }
-                }
-
-                HTMLTagRange posterNameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(labelTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postername"))));
-
-                HTMLTagRange posterTripSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(labelTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postertrip"))));
-                    
-                string poster = String.Empty;
-                if (posterNameSpanTagRange != null) {
-                    string name = _htmlParser.GetInnerHTML(_htmlParser.CreateTagRange(_htmlParser.FindStartTag(posterNameSpanTagRange, "span")) ?? posterNameSpanTagRange).Replace("\r", "").Replace("\n", "").Replace("&nbsp;", "").Trim();
-                    if (posterTripSpanTagRange != null) {
-                        poster = name + _htmlParser.GetInnerHTML(posterTripSpanTagRange).Replace("&nbsp;", "").Trim();
-                    }
-                    else if (name != "Anonymous") {
-                        poster = name;
-                    }
-                }
-
-                ImageInfo image = new ImageInfo {
-                    URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(imageURL)),
-                    Referer = _url,
-                    OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
-                    HashType = imageMD5 != null ? HashType.MD5 : HashType.None,
-                    Hash = General.TryBase64Decode(imageMD5),
-                    Poster = General.CleanFileName(HttpUtility.HtmlDecode(poster))
-                };
-                if (image.URL.Length == 0 || image.FileName.Length == 0) continue;
-
-                ThumbnailInfo thumb = new ThumbnailInfo {
-                    URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(thumbURL)),
-                    Referer = _url
-                };
-                if (thumb.URL == null || thumb.FileName.Length == 0) continue;
-
-                if (replaceList != null) {
-                    HTMLAttribute attribute;
-
-                    attribute = imageLinkTagRange.StartTag.GetAttribute("href");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageLinkHref,
-                                Tag = image.FileName
-                            });
-                    }
-
-                    attribute = thumbImageTag.GetAttribute("src");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageSrc,
-                                Tag = thumb.FileName
-                            });
-                    }
-                }
+                AddImageReplaces(replaceList, file, image, thumb);
 
                 imageList.Add(image);
                 thumbnailList.Add(thumb);
@@ -983,145 +889,112 @@ namespace JDP {
 
             return imageList;
         }
+
+        // Finds the post header span (the first span in the post), the image link and its thumbnail
+        // image. Returns null if any of them is missing.
+        private FileTags FindFileTags(HTMLTagRange postTagRange) {
+            HTMLTagRange postHeaderRange = _htmlParser.CreateTagRange(_htmlParser.FindStartTag(postTagRange, "span"));
+            if (postHeaderRange == null) return null;
+
+            HTMLTagRange imageLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags(postTagRange, "a"), IsImage)));
+            if (imageLinkTagRange == null) return null;
+
+            HTMLTag thumbImageTag = _htmlParser.FindStartTag(imageLinkTagRange, "img");
+            if (thumbImageTag == null) return null;
+
+            return new FileTags {
+                InfoTagRange = postHeaderRange,
+                ThumbLinkTagRange = imageLinkTagRange,
+                LinkStartTag = imageLinkTagRange.StartTag,
+                ThumbImageTag = thumbImageTag
+            };
+        }
+
+        // Returns null if the file info is incomplete or the image has no usable file name.
+        private ImageInfo CreateImage(HTMLTagRange labelTagRange, FileTags file) {
+            string[] fileInfoSplit = _htmlParser.GetInnerHTML(file.InfoTagRange).Split(new[] { ',' }, 3);
+            if (fileInfoSplit.Length < 3) return null;
+
+            string fileInfo = fileInfoSplit[2].Trim();
+            string originalFileName = GetOriginalFileName(fileInfo);
+            string imageMD5 = GetImageMD5(fileInfo, file);
+            string poster = GetPoster(labelTagRange);
+
+            ImageInfo image = new ImageInfo {
+                URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(file.ImageURL)),
+                Referer = _url,
+                OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
+                HashType = imageMD5 != null ? HashType.MD5 : HashType.None,
+                Hash = General.TryBase64Decode(imageMD5),
+                Poster = General.CleanFileName(HttpUtility.HtmlDecode(poster))
+            };
+            return IsMissingFileName(image) ? null : image;
+        }
+
+        // The file info ends with the file name, optionally followed by the MD5 in an HTML comment.
+        private static string GetOriginalFileName(string fileInfo) {
+            if (!fileInfo.EndsWith("-->")) return fileInfo;
+            int hashIndex = fileInfo.LastIndexOf("<!--", StringComparison.Ordinal);
+            return fileInfo.Remove(hashIndex).Trim();
+        }
+
+        private string GetImageMD5(string fileInfo, FileTags file) {
+            if (!fileInfo.EndsWith("-->")) return GetSimilarImageMD5(file);
+            int hashIndex = fileInfo.LastIndexOf("<!--", StringComparison.Ordinal);
+            return fileInfo.Substring(hashIndex).Replace("<!--", "").Replace("-->", "").Trim();
+        }
+
+        // Reads the MD5 from the "same image" search link between the post header and the image link.
+        private string GetSimilarImageMD5(FileTags file) {
+            HTMLTag similarImageLinkStartTag = Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(file.InfoTagRange.EndTag, file.LinkStartTag, "a"), t => t.GetAttributeValueOrEmpty("href").Contains("/image/")));
+            if (similarImageLinkStartTag == null) return null;
+
+            string[] hrefSplit = similarImageLinkStartTag.GetAttributeValueOrEmpty("href").Split('/');
+            string imageMD5 = hrefSplit[hrefSplit.Length - 1].Replace('-', '+').Replace('_', '/');
+            return imageMD5.PadRight(imageMD5.Length + (4 - imageMD5.Length % 4) % 4, '=');
+        }
+
+        private string GetPoster(HTMLTagRange labelTagRange) {
+            HTMLTagRange posterNameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(labelTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postername"))));
+
+            HTMLTagRange posterTripSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(labelTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "postertrip"))));
+
+            if (posterNameSpanTagRange == null) return String.Empty;
+            string name = _htmlParser.GetInnerHTML(_htmlParser.CreateTagRange(_htmlParser.FindStartTag(posterNameSpanTagRange, "span")) ?? posterNameSpanTagRange).Replace("\r", "").Replace("\n", "").Replace("&nbsp;", "").Trim();
+            string trip = posterTripSpanTagRange != null ? _htmlParser.GetInnerHTML(posterTripSpanTagRange).Replace("&nbsp;", "").Trim() : null;
+            return FormatPoster(name, trip);
+        }
+
+        private static void AddImageReplaces(List<ReplaceInfo> replaceList, FileTags file, ImageInfo image, ThumbnailInfo thumb) {
+            if (replaceList == null) return;
+            AddAttributeReplace(replaceList, file.LinkStartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
+            AddAttributeReplace(replaceList, file.ThumbImageTag.GetAttribute("src"), ReplaceType.ImageSrc, thumb.FileName);
+        }
     }
-    
+
     public class FoolFuukaSiteHelper : SiteHelper {
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
 
             foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("article"),
-                t => HTMLParser.ClassAttributeValueHas(t, "has_image") || (HTMLParser.ClassAttributeValueHas(t, "thread") && t.GetAttribute("id") != null)), t => _htmlParser.CreateTagRange(t)), r => r != null))
+                IsPostWithImage), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
-                HTMLTagRange imageLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "thread_image_link"))));
-                if (imageLinkTagRange == null) continue;
-                
-                HTMLTag thumbImageTag = _htmlParser.FindStartTag(imageLinkTagRange, "img");
-                if (thumbImageTag == null) continue;
+                FileTags file = FindFile(postTagRange);
+                if (file == null) continue;
 
-                string imageURL = imageLinkTagRange.StartTag.GetAttributeValue("href");
-                if (imageURL == null) continue;
-
-                string thumbURL = thumbImageTag.GetAttributeValue("src");
-                if (thumbURL == null) continue;
-                
-                HTMLTagRange postFileTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "post_file"))));
-                if (postFileTagRange == null) continue;
-
-                string originalFileName = String.Empty;
                 HTMLTagRange fileNameLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postFileTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_filename"))));
-                if (fileNameLinkTagRange == null) {
-                    HTMLTagRange fileNameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(postFileTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_filename"))));
-                    if (fileNameSpanTagRange == null) {
-                        HTMLTag postFileControlsEndTag = _htmlParser.FindCorrespondingEndTag(Enumerable.FirstOrDefault(Enumerable.Where(
-                            _htmlParser.FindStartTags(postFileTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_controls"))));
-                        HTMLTag postFileMetadataStartTag = Enumerable.FirstOrDefault(Enumerable.Where(
-                            _htmlParser.FindStartTags(postFileTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_metadata")));
-                        if (postFileControlsEndTag != null && postFileMetadataStartTag != null) {
-                            originalFileName = _htmlParser.GetInnerHTML(postFileControlsEndTag, postFileMetadataStartTag).Trim().TrimEnd(',');
-                        }
-                        else if (postFileControlsEndTag == null && postFileMetadataStartTag == null) {
-                            string[] postFileSplit = _htmlParser.GetInnerHTML(postFileTagRange).Split(new[] { ',' }, 3);
-                            if (postFileSplit.Length == 3) {
-                                originalFileName = postFileSplit[2].Trim();
-                            }
-                        }
-                    }
-                    else {
-                        originalFileName = fileNameSpanTagRange.StartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(fileNameSpanTagRange);
-                    }
-                }
-                else {
-                    originalFileName = fileNameLinkTagRange.StartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(fileNameLinkTagRange);
-                }
+                    _htmlParser.FindStartTags(file.InfoTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_filename"))));
 
-                string imageMD5 = thumbImageTag.GetAttributeValue("data-md5");
-                if (imageMD5 == null) continue;
+                ImageInfo image = CreateImage(postTagRange, file, fileNameLinkTagRange);
+                if (image == null) continue;
 
-                HTMLTagRange posterDataSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_poster_data"))));
-                if (posterDataSpanTagRange == null) continue;
-                
-                HTMLTagRange authorSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(posterDataSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_author"))));
+                ThumbnailInfo thumb = CreateThumbnail(file.ThumbURL);
+                if (IsMissingThumbnailData(thumb)) continue;
 
-                HTMLTagRange tripcodeSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(posterDataSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_tripcode"))));
-                    
-                HTMLTagRange idSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(posterDataSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "poster_hash"))));
-                    
-                string poster = String.Empty;
-                if (idSpanTagRange != null) {
-                    poster = _htmlParser.GetInnerHTML(idSpanTagRange).Replace("ID:", "");
-                }
-                else if (authorSpanTagRange != null) {
-                    string name = _htmlParser.GetInnerHTML(authorSpanTagRange);
-                    if (tripcodeSpanTagRange != null && !String.IsNullOrEmpty(_htmlParser.GetInnerHTML(tripcodeSpanTagRange))) {
-                        poster = name + _htmlParser.GetInnerHTML(tripcodeSpanTagRange);
-                    }
-                    else if (name != "Anonymous") {
-                        poster = name;
-                    }
-                }
-                
-                ImageInfo image = new ImageInfo {
-                    URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(imageURL)),
-                    Referer = _url,
-                    OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
-                    HashType = HashType.MD5,
-                    Hash = General.TryBase64Decode(imageMD5),
-                    Poster = General.CleanFileName(HttpUtility.HtmlDecode(poster))
-                };
-                if (image.URL.Length == 0 || image.FileName.Length == 0 || image.Hash == null) continue;
-
-                ThumbnailInfo thumb = new ThumbnailInfo {
-                    URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(thumbURL)),
-                    Referer = _url
-                };
-                if (thumb.URL == null || thumb.FileName.Length == 0) continue;
-
-                if (replaceList != null) {
-                    HTMLAttribute attribute;
-
-                    attribute = imageLinkTagRange.StartTag.GetAttribute("href");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageLinkHref,
-                                Tag = image.FileName
-                            });
-                    }
-
-                    if (fileNameLinkTagRange != null) {
-                        attribute = fileNameLinkTagRange.StartTag.GetAttribute("href");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageLinkHref,
-                                    Tag = image.FileName
-                                });
-                        }
-                    }
-
-                    attribute = thumbImageTag.GetAttribute("src");
-                    if (attribute != null) {
-                        replaceList.Add(
-                            new ReplaceInfo {
-                                Offset = attribute.Offset,
-                                Length = attribute.Length,
-                                Type = ReplaceType.ImageSrc,
-                                Tag = thumb.FileName
-                            });
-                    }
-                }
+                AddImageReplaces(replaceList, file, fileNameLinkTagRange, image, thumb);
 
                 imageList.Add(image);
                 thumbnailList.Add(thumb);
@@ -1129,30 +1002,136 @@ namespace JDP {
 
             return imageList;
         }
+
+        private static bool IsPostWithImage(HTMLTag tag) {
+            return HTMLParser.ClassAttributeValueHas(tag, "has_image") || (HTMLParser.ClassAttributeValueHas(tag, "thread") && tag.GetAttribute("id") != null);
+        }
+
+        // Finds the image link, its thumbnail image and the post_file div. Returns null if any of
+        // them or either URL is missing.
+        private FileTags FindFile(HTMLTagRange postTagRange) {
+            FileTags file = ReadFileURLs(FindFileTags(postTagRange));
+            if (file == null) return null;
+
+            file.InfoTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "post_file"))));
+            return file.InfoTagRange != null ? file : null;
+        }
+
+        private FileTags FindFileTags(HTMLTagRange postTagRange) {
+            HTMLTagRange imageLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "thread_image_link"))));
+            if (imageLinkTagRange == null) return null;
+
+            HTMLTag thumbImageTag = _htmlParser.FindStartTag(imageLinkTagRange, "img");
+            if (thumbImageTag == null) return null;
+
+            return new FileTags {
+                ThumbLinkTagRange = imageLinkTagRange,
+                LinkStartTag = imageLinkTagRange.StartTag,
+                ThumbImageTag = thumbImageTag
+            };
+        }
+
+        // Returns null if the MD5, the poster data or a usable file name or hash is missing.
+        private ImageInfo CreateImage(HTMLTagRange postTagRange, FileTags file, HTMLTagRange fileNameLinkTagRange) {
+            string originalFileName = GetOriginalFileName(file.InfoTagRange, fileNameLinkTagRange);
+
+            string imageMD5 = file.ThumbImageTag.GetAttributeValue("data-md5");
+            if (imageMD5 == null) return null;
+
+            HTMLTagRange posterDataSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_poster_data"))));
+            if (posterDataSpanTagRange == null) return null;
+
+            string poster = GetPoster(posterDataSpanTagRange);
+
+            ImageInfo image = new ImageInfo {
+                URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(file.ImageURL)),
+                Referer = _url,
+                OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
+                HashType = HashType.MD5,
+                Hash = General.TryBase64Decode(imageMD5),
+                Poster = General.CleanFileName(HttpUtility.HtmlDecode(poster))
+            };
+            return IsMissingFileNameOrHash(image) ? null : image;
+        }
+
+        private string GetOriginalFileName(HTMLTagRange postFileTagRange, HTMLTagRange fileNameLinkTagRange) {
+            if (fileNameLinkTagRange != null) return GetTitleOrInnerHTML(fileNameLinkTagRange);
+
+            HTMLTagRange fileNameSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postFileTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_filename"))));
+            if (fileNameSpanTagRange != null) return GetTitleOrInnerHTML(fileNameSpanTagRange);
+
+            return GetUnlabeledFileName(postFileTagRange);
+        }
+
+        // Reads the file name from post_file markup that has no post_file_filename element.
+        private string GetUnlabeledFileName(HTMLTagRange postFileTagRange) {
+            HTMLTag postFileControlsEndTag = _htmlParser.FindCorrespondingEndTag(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postFileTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_controls"))));
+            HTMLTag postFileMetadataStartTag = Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(postFileTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_file_metadata")));
+            if (postFileControlsEndTag != null && postFileMetadataStartTag != null) {
+                return _htmlParser.GetInnerHTML(postFileControlsEndTag, postFileMetadataStartTag).Trim().TrimEnd(',');
+            }
+            if (postFileControlsEndTag == null && postFileMetadataStartTag == null) {
+                return GetFileNameAfterSecondComma(postFileTagRange);
+            }
+            return String.Empty;
+        }
+
+        private string GetFileNameAfterSecondComma(HTMLTagRange postFileTagRange) {
+            string[] postFileSplit = _htmlParser.GetInnerHTML(postFileTagRange).Split(new[] { ',' }, 3);
+            return postFileSplit.Length == 3 ? postFileSplit[2].Trim() : String.Empty;
+        }
+
+        private string GetPoster(HTMLTagRange posterDataSpanTagRange) {
+            HTMLTagRange authorSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(posterDataSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_author"))));
+
+            HTMLTagRange tripcodeSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(posterDataSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "post_tripcode"))));
+
+            HTMLTagRange idSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(posterDataSpanTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "poster_hash"))));
+
+            if (idSpanTagRange != null) return _htmlParser.GetInnerHTML(idSpanTagRange).Replace("ID:", "");
+            if (authorSpanTagRange == null) return String.Empty;
+            string name = _htmlParser.GetInnerHTML(authorSpanTagRange);
+            return FormatPoster(name, GetNonEmptyInnerHTML(tripcodeSpanTagRange));
+        }
+
+        private string GetNonEmptyInnerHTML(HTMLTagRange tagRange) {
+            if (tagRange == null) return null;
+            string innerHTML = _htmlParser.GetInnerHTML(tagRange);
+            return String.IsNullOrEmpty(innerHTML) ? null : innerHTML;
+        }
+
+        private static void AddImageReplaces(List<ReplaceInfo> replaceList, FileTags file, HTMLTagRange fileNameLinkTagRange, ImageInfo image, ThumbnailInfo thumb) {
+            if (replaceList == null) return;
+            AddAttributeReplace(replaceList, file.LinkStartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
+            if (fileNameLinkTagRange != null) {
+                AddAttributeReplace(replaceList, fileNameLinkTagRange.StartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
+            }
+            AddAttributeReplace(replaceList, file.ThumbImageTag.GetAttribute("src"), ReplaceType.ImageSrc, thumb.FileName);
+        }
     }
-    
+
     public class LynxChanSiteHelper : SiteHelper {
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
             bool seenSpoiler = false;
 
             foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
-                t => HTMLParser.ClassAttributeValueHas(t, "postCell") || HTMLParser.ClassAttributeValueHas(t, "opCell")), t => _htmlParser.CreateTagRange(t)), r => r != null))
+                IsPostCell), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
                 HTMLTagRange posterDataSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "opHead") || HTMLParser.ClassAttributeValueHas(t, "innerPost"))));
+                    _htmlParser.FindStartTags(postTagRange, "div"), IsPostHeader)));
                 if (posterDataSpanTagRange == null) continue;
 
-                HTMLTagRange nameTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                    _htmlParser.FindStartTags(posterDataSpanTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "linkName"))));
-                
-                string poster = String.Empty;
-                if (nameTagRange != null) {
-                    string name = _htmlParser.GetInnerHTML(nameTagRange);
-                    if (name != "Anonymous") {
-                        poster = name;
-                    }
-                }
+                string poster = GetPoster(posterDataSpanTagRange);
 
                 HTMLTagRange filesDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
                     _htmlParser.FindStartTags(postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "panelUploads"))));
@@ -1160,103 +1139,87 @@ namespace JDP {
                 foreach (HTMLTagRange fileDivTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(filesDivTagRange, "figure"),
                     t => HTMLParser.ClassAttributeValueHas(t, "uploadCell")), t => _htmlParser.CreateTagRange(t)), r => r != null))
                 {
-                    HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileDivTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "imgLink"))));
-                    if (fileThumbLinkTagRange == null) continue;
+                    FileTags file = FindFile(fileDivTagRange);
+                    if (file == null) continue;
 
-                    HTMLTagRange fileInfoLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileDivTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "nameLink"))));
-                    if (fileInfoLinkTagRange == null) continue;
+                    bool isSpoiler = file.ThumbURL.EndsWith(".spoiler");
 
-                    HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
-                    if (fileThumbImageTag == null) continue;
+                    ImageInfo image = CreateImage(file, poster);
+                    if (IsMissingFileName(image)) continue;
 
-                    string imageURL = fileInfoLinkTagRange.StartTag.GetAttributeValue("href");
-                    if (imageURL == null) continue;
+                    ThumbnailInfo thumb = CreateThumbnail(file.ThumbURL);
+                    if (IsMissingThumbnailData(thumb)) continue;
 
-                    string thumbURL = fileThumbImageTag.GetAttributeValue("src");
-                    if (thumbURL == null) continue;
-
-                    bool isSpoiler = thumbURL.EndsWith(".spoiler");
-
-                    HTMLTagRange postFileNameLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                        _htmlParser.FindStartTags(fileDivTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "originalNameLink"))));
-                    if (postFileNameLinkTagRange == null) continue;
-
-                    string originalFileName = postFileNameLinkTagRange.StartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(postFileNameLinkTagRange);
-                
-                    ImageInfo image = new ImageInfo {
-                        URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(imageURL)),
-                        Referer = _url,
-                        OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
-                        Poster = General.CleanFileName(poster)
-                    };
-                    if (image.URL.Length == 0 || image.FileName.Length == 0) continue;
-
-                    ThumbnailInfo thumb = new ThumbnailInfo {
-                        URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(thumbURL)),
-                        Referer = _url
-                    };
-                    if (thumb.URL == null || thumb.FileName.Length == 0) continue;
-
-                    if (replaceList != null) {
-                        HTMLAttribute attribute;
-
-                        attribute = fileInfoLinkTagRange.StartTag.GetAttribute("href");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageLinkHref,
-                                    Tag = image.FileName
-                                });
-                        }
-
-                        attribute = fileThumbLinkTagRange.StartTag.GetAttribute("href");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageLinkHref,
-                                    Tag = image.FileName
-                                });
-                        }
-
-                        attribute = fileThumbImageTag.GetAttribute("src");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageSrc,
-                                    Tag = thumb.FileName
-                                });
-                        }
-
-                        attribute = postFileNameLinkTagRange.StartTag.GetAttribute("href");
-                        if (attribute != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.ImageLinkHref,
-                                    Tag = image.FileName
-                                });
-                        }
-                    }
+                    AddImageReplaces(replaceList, file, image, thumb);
 
                     imageList.Add(image);
-
-                    if (!isSpoiler || !seenSpoiler) {
-                        thumbnailList.Add(thumb);
-                        if (isSpoiler) seenSpoiler = true;
-                    }
+                    AddThumbnail(thumbnailList, thumb, isSpoiler, ref seenSpoiler);
                 }
             }
 
             return imageList;
+        }
+
+        private static bool IsPostCell(HTMLTag tag) {
+            return HTMLParser.ClassAttributeValueHas(tag, "postCell") || HTMLParser.ClassAttributeValueHas(tag, "opCell");
+        }
+
+        private static bool IsPostHeader(HTMLTag tag) {
+            return HTMLParser.ClassAttributeValueHas(tag, "opHead") || HTMLParser.ClassAttributeValueHas(tag, "innerPost");
+        }
+
+        private string GetPoster(HTMLTagRange posterDataSpanTagRange) {
+            HTMLTagRange nameTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(posterDataSpanTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "linkName"))));
+            if (nameTagRange == null) return String.Empty;
+            return FormatPoster(_htmlParser.GetInnerHTML(nameTagRange), null);
+        }
+
+        // Finds the upload's links, thumbnail image and original name link. Returns null if any of
+        // them or either URL is missing.
+        private FileTags FindFile(HTMLTagRange fileDivTagRange) {
+            FileTags file = ReadFileURLs(FindFileTags(fileDivTagRange));
+            if (file == null) return null;
+
+            file.InfoTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(fileDivTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "originalNameLink"))));
+            return file.InfoTagRange != null ? file : null;
+        }
+
+        private FileTags FindFileTags(HTMLTagRange fileDivTagRange) {
+            HTMLTagRange fileThumbLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(fileDivTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "imgLink"))));
+            if (fileThumbLinkTagRange == null) return null;
+
+            HTMLTagRange fileInfoLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
+                _htmlParser.FindStartTags(fileDivTagRange, "a"), t => HTMLParser.ClassAttributeValueHas(t, "nameLink"))));
+            if (fileInfoLinkTagRange == null) return null;
+
+            HTMLTag fileThumbImageTag = _htmlParser.FindStartTag(fileThumbLinkTagRange, "img");
+            if (fileThumbImageTag == null) return null;
+
+            return new FileTags {
+                ThumbLinkTagRange = fileThumbLinkTagRange,
+                LinkStartTag = fileInfoLinkTagRange.StartTag,
+                ThumbImageTag = fileThumbImageTag
+            };
+        }
+
+        private ImageInfo CreateImage(FileTags file, string poster) {
+            string originalFileName = GetTitleOrInnerHTML(file.InfoTagRange);
+
+            return new ImageInfo {
+                URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(file.ImageURL)),
+                Referer = _url,
+                OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
+                Poster = General.CleanFileName(poster)
+            };
+        }
+
+        private static void AddImageReplaces(List<ReplaceInfo> replaceList, FileTags file, ImageInfo image, ThumbnailInfo thumb) {
+            if (replaceList == null) return;
+            AddFileReplaces(replaceList, file, image, thumb);
+            AddAttributeReplace(replaceList, file.InfoTagRange.StartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
         }
     }
 }
