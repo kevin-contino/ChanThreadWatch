@@ -700,6 +700,9 @@ namespace JDP {
         private bool _hasStarted;
         private bool _isReleased;
         private readonly object _throttleSync = new object();
+        // Guards _isClosed; Dispose pulses it to end a throttle sleep early
+        private readonly object _sleepSync = new object();
+        private bool _isClosed;
 
         protected long CurrentMilliseconds {
             get { return Environment.TickCount; }
@@ -875,9 +878,26 @@ namespace JDP {
 
             int toSleep = (int)(wakeElapsed - elapsedMilliseconds);
             if (toSleep > 1) {
-                try { Thread.Sleep(toSleep); }
-                catch (ThreadAbortException) { }
+                SleepUnlessClosed(toSleep);
                 Reset();
+            }
+        }
+
+        // Sleeps like Thread.Sleep, but returns as soon as the stream is closed so a reader
+        // blocked in Throttle does not hold up an abort
+        private void SleepUnlessClosed(int milliseconds) {
+            try {
+                lock (_sleepSync) {
+                    if (!_isClosed) Monitor.Wait(_sleepSync, milliseconds);
+                }
+            }
+            catch (ThreadAbortException) { }
+        }
+
+        private void WakeSleepers() {
+            lock (_sleepSync) {
+                _isClosed = true;
+                Monitor.PulseAll(_sleepSync);
             }
         }
 
@@ -898,6 +918,7 @@ namespace JDP {
                 }
             }
             finally {
+                WakeSleepers();
                 ReleaseDownloadSlot();
                 base.Dispose(disposing);
             }

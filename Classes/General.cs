@@ -74,6 +74,14 @@ namespace JDP {
             }
         }
 
+        // For failure paths: Logger's type initializer can itself throw, and these callers must not
+        internal static void LogQuietly(string message) {
+            try {
+                Logger.Log(message);
+            }
+            catch { }
+        }
+
         private static void CloseQuietly(Stream stream) {
             if (stream == null) return;
             try { stream.Close(); }
@@ -887,12 +895,15 @@ namespace JDP {
         }
 
         // Holds the state shared by the asynchronous callbacks of a single DownloadAsync call.
-        // All state changes and all callbacks happen while holding _sync, so exactly one of
-        // onComplete or onException is called and no callback follows it. (If onComplete itself
-        // throws, the download counts as failed and onException follows with that exception.)
-        // Blocking network I/O (BeginGetResponse's DNS lookup, buffering an HTML page, the
-        // synchronous meta refresh request) runs without holding _sync, so AbortInternal can always
-        // take the lock and abort the request or close the response that the I/O is waiting on.
+        // All state changes and all callbacks happen while holding _sync. Callback guarantees:
+        // onComplete is called at most once; onException is called at most once; nothing is
+        // called after onException; onException is never called after an onComplete that
+        // returned normally, but it does follow an onComplete that threw (with that exception),
+        // which ThreadWatcher uses to retry corrupt downloads.
+        // Blocking work (BeginGetResponse's DNS lookup, buffering an HTML page, the synchronous
+        // meta refresh request, and BeginRead, which can sleep in ThrottledStream) runs without
+        // holding _sync, so AbortInternal can always take the lock and abort the request or close
+        // the response or stream that the blocked thread is waiting on.
         private sealed class AsyncDownload {
             private const int ReadBufferSize = 8192;
 
@@ -925,7 +936,7 @@ namespace JDP {
                 try {
                     HttpWebRequest request = CreateRequest(url, referer);
                     // Unfortunately BeginGetResponse blocks until the DNS lookup has finished
-                    IAsyncResult requestResult = request.BeginGetResponse(OnGetResponse, null);
+                    IAsyncResult requestResult = request.BeginGetResponse(OnGetResponse, request);
                     AbortOnTimeout(requestResult, RequestTimeoutMS, "Timed out while waiting for response.");
                 }
                 catch (Exception ex) {
@@ -951,8 +962,18 @@ namespace JDP {
                 lock (_sync) {
                     if (_aborting) return;
                     _aborting = true;
-                    Cleanup();
+                    CleanupQuietly();
                     NotifyException(ex);
+                }
+            }
+
+            // Callers run on thread pool threads, where an escaping exception ends the process
+            private void CleanupQuietly() {
+                try {
+                    Cleanup();
+                }
+                catch (Exception ex) {
+                    LogQuietly(ex.ToString());
                 }
             }
 
@@ -962,7 +983,7 @@ namespace JDP {
                     _onException(ex);
                 }
                 catch (Exception callbackEx) {
-                    Logger.Log(callbackEx.ToString());
+                    LogQuietly(callbackEx.ToString());
                 }
             }
 
@@ -995,20 +1016,38 @@ namespace JDP {
                 try {
                     HttpWebResponse response = EndGetResponse(requestResultParam);
                     if (response == null) return;
-                    StartReading(OpenResponseStream(response));
+                    if (!StartReading(OpenResponseStream(response))) return;
                 }
                 catch (Exception ex) {
                     // Once aborted, this only releases the error response (if any)
                     AbortInternal(TranslateWebException(ex));
+                    return;
                 }
+                OnRead(null);
             }
 
-            // Returns null if the download has already been aborted
+            // Returns null if the download has already been aborted, after releasing any
+            // response that completed just before the abort
             private HttpWebResponse EndGetResponse(IAsyncResult requestResult) {
+                HttpWebRequest request = (HttpWebRequest)requestResult.AsyncState;
                 lock (_sync) {
-                    if (_aborting) return null;
-                    _response = (HttpWebResponse)_request.EndGetResponse(requestResult);
-                    return _response;
+                    if (!_aborting) {
+                        _response = (HttpWebResponse)request.EndGetResponse(requestResult);
+                        return _response;
+                    }
+                }
+                CloseQuietly(EndGetResponseQuietly(request, requestResult));
+                return null;
+            }
+
+            private static WebResponse EndGetResponseQuietly(HttpWebRequest request, IAsyncResult requestResult) {
+                try {
+                    return request.EndGetResponse(requestResult);
+                }
+                catch (Exception ex) {
+                    // Translating closes the error response of a protocol error
+                    TranslateWebException(ex);
+                    return null;
                 }
             }
 
@@ -1061,36 +1100,47 @@ namespace JDP {
                 }
             }
 
-            private void StartReading(Stream responseStream) {
+            // Returns false if the download has already been aborted
+            private bool StartReading(Stream responseStream) {
                 lock (_sync) {
                     if (_aborting) {
                         CloseQuietly(responseStream);
-                        return;
+                        return false;
                     }
                     _responseStream = responseStream;
                     _onResponse(_response);
                     _buff = new byte[ReadBufferSize];
-                    OnRead(null);
+                    return true;
                 }
             }
 
+            // BeginRead runs without holding _sync because ThrottledStream may sleep in it. If an
+            // abort closes the stream meanwhile, the sleep ends and BeginRead (or the later EndRead)
+            // fails; AbortInternal then does nothing. Only one read is ever in flight, so _buff is
+            // not shared between reads.
             private void OnRead(IAsyncResult readResultParam) {
-                lock (_sync) {
-                    try {
-                        if (_aborting) return;
-                        if (!HandleReadResult(readResultParam)) return;
-                        IAsyncResult readResult = _responseStream.BeginRead(_buff, 0, _buff.Length, OnRead, null);
-                        AbortOnTimeout(readResult, ReadTimeoutMS, "Timed out while reading response.");
-                    }
-                    catch (Exception ex) {
-                        AbortInternal(ex);
-                    }
+                try {
+                    Stream responseStream = HandleReadResult(readResultParam);
+                    if (responseStream == null) return;
+                    IAsyncResult readResult = responseStream.BeginRead(_buff, 0, _buff.Length, OnRead, null);
+                    AbortOnTimeout(readResult, ReadTimeoutMS, "Timed out while reading response.");
+                }
+                catch (Exception ex) {
+                    AbortInternal(ex);
                 }
             }
 
-            // Returns false when the download has completed and no further reads should be started
-            private bool HandleReadResult(IAsyncResult readResultParam) {
-                if (readResultParam == null) return true;
+            // Returns the stream to read next, or null when the download has ended (completed or aborted)
+            private Stream HandleReadResult(IAsyncResult readResultParam) {
+                lock (_sync) {
+                    if (_aborting) return null;
+                    if (readResultParam == null || ReadChunk(readResultParam)) return _responseStream;
+                    return null;
+                }
+            }
+
+            // Called while holding _sync. Returns false when the download has completed.
+            private bool ReadChunk(IAsyncResult readResultParam) {
                 int bytesRead = _responseStream.EndRead(readResultParam);
                 if (bytesRead == 0) {
                     _request = null;
