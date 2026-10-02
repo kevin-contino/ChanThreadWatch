@@ -68,7 +68,7 @@ namespace JDP {
         private static void EnsureLogFileExists() {
             string logPath = Path.Combine(Settings.GetSettingsDirectory(), Settings.LogFileName);
             if (!File.Exists(logPath)) {
-                try { File.Create(logPath); }
+                try { File.Create(logPath).Dispose(); }
                 catch { }
             }
         }
@@ -1544,18 +1544,15 @@ namespace JDP {
             catch {
                 return;
             }
-            Settings.LastUpdateCheck = DateTime.Now.Date;
-            string latestStr = ParseLatestVersionString(html);
+            string latestStr = General.NormalizeUpdateVersion(ParseLatestVersionString(html), General.Version);
             if (latestStr == null) return;
-            int latest = General.ParseVersionNumber(latestStr);
-            if (latest == -1) return;
-            int current = GetCurrentVersionNumber();
-            if (latest > current) {
+            Settings.LastUpdateCheck = DateTime.Now.Date;
+            if (General.ParseVersionNumber(latestStr) > GetCurrentVersionNumber()) {
                 PromptForUpdate(latestStr);
             }
         }
 
-        // Returns null if the latest release version can't be found in the page.
+        // Returns the raw version tag text, or null if the latest release version can't be found in the page.
         private static string ParseLatestVersionString(string html) {
             var htmlParser = new HTMLParser(html);
             HTMLTagRange labelLatestDivTagRange = htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
@@ -1564,13 +1561,15 @@ namespace JDP {
             HTMLTagRange versionSpanTagRange = htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
                 htmlParser.FindStartTags(labelLatestDivTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "css-truncate-target"))));
             if (versionSpanTagRange == null) return null;
-            return htmlParser.GetInnerHTML(versionSpanTagRange).Replace("v", "");
+            return htmlParser.GetInnerHTML(versionSpanTagRange);
         }
 
         private static int GetCurrentVersionNumber() {
             int current = General.ParseVersionNumber(General.Version);
-            if (!String.IsNullOrEmpty(Settings.LatestUpdateVersion)) {
-                current = Math.Max(current, General.ParseVersionNumber(Settings.LatestUpdateVersion));
+            // Ignore a stored version that is not plausible (e.g. a forged tag saved by an older build)
+            string latestKnown = General.NormalizeUpdateVersion(Settings.LatestUpdateVersion, General.Version);
+            if (latestKnown != null) {
+                current = Math.Max(current, General.ParseVersionNumber(latestKnown));
             }
             return current;
         }

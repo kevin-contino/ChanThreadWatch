@@ -90,7 +90,7 @@ namespace JDP {
 
             chkPageAuth.Checked = !String.IsNullOrEmpty(watcher.PageAuth);
             txtPageAuth.Text = watcher.PageAuth;
-            chkPageAuth.Checked = !String.IsNullOrEmpty(watcher.ImageAuth);
+            chkImageAuth.Checked = !String.IsNullOrEmpty(watcher.ImageAuth);
             txtImageAuth.Text = watcher.ImageAuth;
 
             chkOneTime.Checked = watcher.OneTimeDownload;

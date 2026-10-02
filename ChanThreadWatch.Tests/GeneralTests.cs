@@ -27,6 +27,46 @@ namespace JDP.Tests {
             Assert.IsGreaterThan(General.ParseVersionNumber("1.255.255"), General.ParseVersionNumber("2.0.0"));
         }
 
+        // B5 / S7
+        [TestMethod]
+        [DataRow("v1.17.2", "1.17.2")]
+        [DataRow("V1.18.0", "1.18.0")]
+        [DataRow("1.17.3", "1.17.3")]
+        [DataRow("  v2.0.0\r\n", "2.0.0")]
+        [DataRow("v1.0", "1.0")]
+        [DataRow("v1.17.2.4", "1.17.2.4")]
+        [DataRow("v01.017.2", "1.17.2")]
+        public void NormalizeUpdateVersionAcceptsPlausibleTags(string tag, string expected) {
+            Assert.AreEqual(expected, General.NormalizeUpdateVersion(tag, "1.17.1"));
+        }
+
+        [TestMethod]
+        [DataRow(null)]
+        [DataRow("")]
+        [DataRow("v")]
+        [DataRow("vv1.17.2")]
+        [DataRow("1.v17.2")]
+        [DataRow("1.17.2v")]
+        [DataRow("1.17.2-beta")]
+        [DataRow("1.17.-2")]
+        [DataRow("1..2")]
+        [DataRow("1.17.2.3.4")]
+        [DataRow("1.256.0")]
+        [DataRow("1.17.300")]
+        [DataRow("128.0.0")]
+        [DataRow("127.255.255")]
+        [DataRow("3.0.0")]
+        [DataRow("99999999999.0.0")]
+        [DataRow("<b>1.18.0</b>")]
+        public void NormalizeUpdateVersionRejectsImplausibleTags(string tag) {
+            Assert.IsNull(General.NormalizeUpdateVersion(tag, "1.17.1"));
+        }
+
+        [TestMethod]
+        public void NormalizeUpdateVersionRejectsAllTagsForUnparseableCurrentVersion() {
+            Assert.IsNull(General.NormalizeUpdateVersion("1.17.2", "garbage"));
+        }
+
         [TestMethod]
         [DataRow("")]
         [DataRow("abc")]
