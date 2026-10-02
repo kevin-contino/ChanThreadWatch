@@ -606,6 +606,21 @@ namespace JDP {
             }
         }
 
+        public static int ParseVersionNumber(string str) {
+            string[] split = str.Split('.');
+            int num = 0;
+            try {
+                if (split.Length >= 1) num |= (Int32.Parse(split[0]) & 0x7F) << 24;
+                if (split.Length >= 2) num |= (Int32.Parse(split[1]) & 0xFF) << 16;
+                if (split.Length >= 3) num |= (Int32.Parse(split[2]) & 0xFF) << 8;
+                if (split.Length >= 4) num |= (Int32.Parse(split[3]) & 0xFF);
+                return num;
+            }
+            catch {
+                return -1;
+            }
+        }
+
         public static byte[] TryBase64Decode(string s) {
             try {
                 return Convert.FromBase64String(s);
