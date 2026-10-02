@@ -64,6 +64,13 @@ namespace JDP.Tests.Integration {
             return new LoopbackResponse { RawBytes = Encoding.ASCII.GetBytes(raw) };
         }
 
+        // Sent verbatim, then the connection stays open (stalled) until release is set or 30 s pass
+        public static LoopbackResponse RawThenStall(string raw, WaitHandle release) {
+            return new LoopbackResponse { RawBytes = Encoding.ASCII.GetBytes(raw), StallUntil = release };
+        }
+
+        public WaitHandle StallUntil { get; set; }
+
         public LoopbackResponse WithHeader(string name, string value) {
             Headers.Add(new KeyValuePair<string, string>(name, value));
             return this;
@@ -191,6 +198,7 @@ namespace JDP.Tests.Integration {
             byte[] bytes = response.Serialize(keepAlive);
             stream.Write(bytes, 0, bytes.Length);
             stream.Flush();
+            if (response.StallUntil != null) response.StallUntil.WaitOne(TimeSpan.FromSeconds(30));
             return keepAlive;
         }
 
