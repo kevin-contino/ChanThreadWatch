@@ -1675,7 +1675,7 @@ namespace JDP {
         // General.DownloadAsync throws PageTooLargeException for an HTML page over its size limit.
         // Matched by name so that this compiles whether or not that type exists yet.
         private static bool IsPageTooLarge(Exception ex) {
-            return ex.GetType().Name == "PageTooLargeException";
+            return ex is PageTooLargeException;
         }
 
         // Moves the copy of the page saved before the download back in place

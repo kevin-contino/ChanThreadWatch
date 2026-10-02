@@ -30,6 +30,29 @@ namespace JDP.Tests.Integration {
             Assert.IsFalse(File.Exists(SavedPagePath(watcher)));
         }
 
+        // S4: a page over the size limit is reported once and not retried
+        [TestMethod]
+        public void PageOverTheSizeLimitIsReportedWithoutRetrying() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            General.MaxPageBytes = 1024;
+            try {
+                string url = server.URL(FourChanThreadFixture.ThreadPath);
+                ThreadWatcher watcher = CreateWatcher(url);
+
+                StopReason reason = RunToStop(watcher);
+
+                Assert.AreEqual(StopReason.Other, reason);
+                Assert.AreEqual("The page is larger than the maximum of 1024 bytes", watcher.StopError);
+                Assert.HasCount(1, server.RequestsTo(FourChanThreadFixture.ThreadPath));
+                Assert.IsFalse(File.Exists(SavedPagePath(watcher)));
+            }
+            finally {
+                General.MaxPageBytes = General.DefaultMaxPageBytes;
+            }
+        }
+
         // R5: while watching, the error of the last check stays visible until a check succeeds
         [TestMethod]
         public void ServerErrorWhileWatchingIsKeptUntilACheckSucceeds() {
