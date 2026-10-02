@@ -156,6 +156,27 @@ namespace JDP.Tests {
             StringAssert.Contains(savedPage.ToString(), "<a href=\"#101\">same</a>");
         }
 
+        // A cross link to a thread that is not followed keeps its QuoteLinkHref replace with the
+        // default value, because ThreadWatcher.ApplyThreadLinkReplace finds no descendant thread.
+        // The saved page must then keep a well-formed link to the live page.
+        [TestMethod]
+        [DataRow(FourChanURL, "<blockquote class=\"postMessage\"><a href=\"/g/thread/123?a=1&amp;b=2#p124\" class=\"quotelink\">x</a></blockquote>",
+            "<a href=\"https://boards.4chan.org/g/thread/123?a=1&amp;b=2#p124\" class=\"quotelink\">x</a>")]
+        [DataRow(InfinitechanURL, "<div class=\"body\"><a href=\"/g/res/300.html#301\">x</a></div>",
+            "<a href=\"https://8ch.net/g/res/300.html#301\">x</a>")]
+        public void SavedPageKeepsUnfollowedCrossLinkAsLiveLink(string url, string html, string expectedLink) {
+            SiteHelper helper = CreateHelper(url, html);
+            var replaces = new List<ReplaceInfo>();
+
+            helper.GetCrossLinks(replaces, true);
+            General.AddOtherReplaces(helper.GetHTMLParser(), url, replaces);
+            var savedPage = new StringWriter();
+            General.WriteReplacedString(helper.GetHTMLParser().PreprocessedHTML, replaces, savedPage);
+
+            Assert.IsTrue(replaces.Exists(r => r.Type == ReplaceType.QuoteLinkHref));
+            StringAssert.Contains(savedPage.ToString(), expectedLink);
+        }
+
         // B13
         [TestMethod]
         public void GenericGetImagesUsesPageAsReferer() {

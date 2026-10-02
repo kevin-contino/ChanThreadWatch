@@ -315,6 +315,12 @@ namespace JDP {
             return id != null && resurrectedTagRanges.ContainsKey(id);
         }
 
+        // Returns an href attribute with the absolute URL of the link, so that a quote link to a
+        // thread that is not followed still points at the live page in the saved copy.
+        protected string GetLiveLinkHrefAttribute(string href) {
+            return "href=\"" + HttpUtility.HtmlAttributeEncode(General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(href))) + "\"";
+        }
+
         protected string GetTitleOrInnerHTML(HTMLTagRange tagRange) {
             return tagRange.StartTag.GetAttributeValue("title") ?? _htmlParser.GetInnerHTML(tagRange);
         }
@@ -471,7 +477,7 @@ namespace JDP {
                             Length = attribute.Length,
                             Type = ReplaceType.QuoteLinkHref,
                             Tag = href.Replace("/thread", "").Insert(0, GetSiteName()),
-                            Value = attribute.Value
+                            Value = GetLiveLinkHrefAttribute(attribute.Value)
                         });
                 }
             }
@@ -825,7 +831,7 @@ namespace JDP {
                                 Length = attribute.Length,
                                 Type = ReplaceType.QuoteLinkHref,
                                 Tag = href.Replace("/res", "").Replace(".html", "").Insert(0, GetSiteName()),
-                                Value = attribute.Value
+                                Value = GetLiveLinkHrefAttribute(attribute.Value)
                             });
                     }
                 }
