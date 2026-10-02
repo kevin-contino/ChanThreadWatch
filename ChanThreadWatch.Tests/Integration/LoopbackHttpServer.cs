@@ -41,6 +41,9 @@ namespace JDP.Tests.Integration {
         public byte[] Body { get; set; } = new byte[0];
         public byte[] RawBytes { get; set; }
 
+        // After RawBytes are sent, wait briefly and then reset the connection (TCP RST)
+        public bool ResetConnection { get; set; }
+
         public static LoopbackResponse Bytes(byte[] body, string contentType = "application/octet-stream") {
             var response = new LoopbackResponse { Body = body };
             response.Headers.Add(new KeyValuePair<string, string>("Content-Type", contentType));
@@ -70,6 +73,17 @@ namespace JDP.Tests.Integration {
         }
 
         public WaitHandle StallUntil { get; set; }
+
+        // Sends the status line, the headers (announcing the full body length) and the first
+        // sentBodyLength bytes of the body, then resets the connection as a network failure would
+        public static LoopbackResponse ResetAfter(byte[] body, int sentBodyLength, string contentType) {
+            string head = "HTTP/1.1 200 OK\r\nContent-Type: " + contentType + "\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n";
+            byte[] headBytes = Encoding.ASCII.GetBytes(head);
+            byte[] raw = new byte[headBytes.Length + sentBodyLength];
+            Buffer.BlockCopy(headBytes, 0, raw, 0, headBytes.Length);
+            Buffer.BlockCopy(body, 0, raw, headBytes.Length, sentBodyLength);
+            return new LoopbackResponse { RawBytes = raw, ResetConnection = true };
+        }
 
         public LoopbackResponse WithHeader(string name, string value) {
             Headers.Add(new KeyValuePair<string, string>(name, value));
@@ -177,7 +191,7 @@ namespace JDP.Tests.Integration {
                         RecordedRequest request = ReadRequest(stream);
                         if (request == null) break;
                         lock (_requests) _requests.Add(request);
-                        keepGoing = Respond(stream, request);
+                        keepGoing = Respond(client, stream, request);
                     }
                 }
             }
@@ -190,7 +204,7 @@ namespace JDP.Tests.Integration {
         }
 
         // Returns whether the connection stays open for another request
-        private bool Respond(NetworkStream stream, RecordedRequest request) {
+        private bool Respond(TcpClient client, NetworkStream stream, RecordedRequest request) {
             Func<RecordedRequest, LoopbackResponse> handler = FindRoute(request.Path);
             LoopbackResponse response = handler != null ? handler(request) : LoopbackResponse.StatusOnly(404, "Not Found");
             bool keepAlive = KeepAlive && response.RawBytes == null &&
@@ -199,6 +213,13 @@ namespace JDP.Tests.Integration {
             stream.Write(bytes, 0, bytes.Length);
             stream.Flush();
             if (response.StallUntil != null) response.StallUntil.WaitOne(TimeSpan.FromSeconds(30));
+            if (response.ResetConnection) {
+                // Give the client time to read what was sent; a reset discards unread data
+                Thread.Sleep(300);
+                client.Client.LingerState = new LingerOption(true, 0);
+                client.Client.Close();
+                return false;
+            }
             return keepAlive;
         }
 
