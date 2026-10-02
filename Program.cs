@@ -27,8 +27,20 @@ namespace JDP {
         public static bool ObtainMutex(string settingsFolder) {
             SecurityIdentifier sid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
             MutexSecurity security = new MutexSecurity();
-            bool useDefaultSecurity = false;
-            bool createdNew;
+            bool useDefaultSecurity = !TryAddAccessRules(security, sid);
+            string name = @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
+                settingsFolder.ToUpperInvariant())).ToString("X16");
+            Mutex mutex = CreateMutex(name, useDefaultSecurity, security);
+            if (!TryAcquireMutex(mutex)) {
+                return false;
+            }
+            ReleaseMutex();
+            _mutex = mutex;
+            return true;
+        }
+
+        // Returns false if the platform does not support the access rules (Mono).
+        private static bool TryAddAccessRules(MutexSecurity security, SecurityIdentifier sid) {
             try {
                 security.AddAccessRule(new MutexAccessRule(sid, MutexRights.FullControl, AccessControlType.Allow));
                 security.AddAccessRule(new MutexAccessRule(sid, MutexRights.ChangePermissions, AccessControlType.Deny));
@@ -37,25 +49,29 @@ namespace JDP {
             catch (Exception ex) {
                 if (ex is ArgumentOutOfRangeException || ex is NotImplementedException) {
                     // Workaround for Mono
-                    useDefaultSecurity = true;
+                    return false;
                 }
-                else {
-                    throw;
-                }
+                throw;
             }
-            string name = @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
-                settingsFolder.ToUpperInvariant())).ToString("X16");
-            Mutex mutex = !useDefaultSecurity ?
-                new Mutex(false, name, out createdNew, security) :
-                new Mutex(false, name);
+            return true;
+        }
+
+        private static Mutex CreateMutex(string name, bool useDefaultSecurity, MutexSecurity security) {
+            bool createdNew;
+            if (useDefaultSecurity) {
+                return new Mutex(false, name);
+            }
+            return new Mutex(false, name, out createdNew, security);
+        }
+
+        // Returns false if another process holds the mutex. An abandoned mutex counts as acquired.
+        private static bool TryAcquireMutex(Mutex mutex) {
             try {
                 if (!mutex.WaitOne(0, false)) {
                     return false;
                 }
             }
             catch (AbandonedMutexException) { }
-            ReleaseMutex();
-            _mutex = mutex;
             return true;
         }
 

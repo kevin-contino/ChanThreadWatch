@@ -290,37 +290,63 @@ namespace JDP {
 
         private void SchedulerThread() {
             while (true) {
-                int? firstWaitTime = null;
-
-                lock (_sync) {
-                    _scheduleChanged.Reset();
-                    if (_workItems.Count != 0) {
-                        firstWaitTime = (int)(_workItems.First.Value.RunAtTicks - TickCount.Now);
-                    }
+                SchedulerWaitResult waitResult = WaitForFirstItem(GetFirstWaitTime());
+                if (waitResult == SchedulerWaitResult.Exit) {
+                    return;
+                }
+                if (waitResult == SchedulerWaitResult.Recheck) {
+                    continue;
                 }
 
-                if (!(firstWaitTime <= 0)) {
-                    if (_scheduleChanged.WaitOne(firstWaitTime ?? _maxThreadIdleTime, false)) {
-                        continue;
-                    }
-                    if (firstWaitTime == null) {
-                        lock (_sync) {
-                            if (_workItems.Count != 0) {
-                                continue;
-                            }
-                            else {
-                                _schedulerThread = null;
-                                return;
-                            }
-                        }
-                    }
-                }
+                StartDueItems();
+            }
+        }
 
-                lock (_sync) {
-                    while (_workItems.Count != 0 && _workItems.First.Value.RunAtTicks <= TickCount.Now) {
-                        _workItems.First.Value.StartRunning();
-                        _workItems.RemoveFirst();
-                    }
+        // Resets the schedule changed signal and returns the time until the first
+        // item is due, or null if there are no items.
+        private int? GetFirstWaitTime() {
+            int? firstWaitTime = null;
+
+            lock (_sync) {
+                _scheduleChanged.Reset();
+                if (_workItems.Count != 0) {
+                    firstWaitTime = (int)(_workItems.First.Value.RunAtTicks - TickCount.Now);
+                }
+            }
+
+            return firstWaitTime;
+        }
+
+        // Waits until the first item is due or the schedule changes. With no items,
+        // waits up to the idle time and then retires the thread if still idle.
+        private SchedulerWaitResult WaitForFirstItem(int? firstWaitTime) {
+            if (firstWaitTime <= 0) {
+                return SchedulerWaitResult.RunDueItems;
+            }
+            if (_scheduleChanged.WaitOne(firstWaitTime ?? _maxThreadIdleTime, false)) {
+                return SchedulerWaitResult.Recheck;
+            }
+            if (firstWaitTime != null) {
+                return SchedulerWaitResult.RunDueItems;
+            }
+            return RetireSchedulerThreadIfIdle();
+        }
+
+        private SchedulerWaitResult RetireSchedulerThreadIfIdle() {
+            lock (_sync) {
+                if (_workItems.Count != 0) {
+                    return SchedulerWaitResult.Recheck;
+                }
+                _schedulerThread = null;
+                return SchedulerWaitResult.Exit;
+            }
+        }
+
+        private void StartDueItems() {
+            lock (_sync) {
+                while (_workItems.Count != 0 && _workItems.First.Value.RunAtTicks <= TickCount.Now) {
+                    _workItems.First.Value.StartRunning();
+                    _workItems.RemoveFirst();
                 }
             }
         }
@@ -331,6 +357,12 @@ namespace JDP {
                 yield return node;
                 node = node.Next;
             }
+        }
+
+        private enum SchedulerWaitResult {
+            RunDueItems,
+            Recheck,
+            Exit
         }
 
         public class WorkItem {
@@ -426,21 +458,29 @@ namespace JDP {
         private void OnThreadPoolThreadExit(ThreadPoolThread exitedThread) {
             lock (_sync) {
                 if (_idleThreads.Count <= _minThreadCount) return;
-                Stack<ThreadPoolThread> threads = new Stack<ThreadPoolThread>();
-                while (_idleThreads.Count != 0) {
-                    ThreadPoolThread thread = _idleThreads.Pop();
-                    if (thread == exitedThread) {
-                        if (!_semaphore.WaitOne(0)) {
-                            throw new Exception("Semaphore count is invalid.");
-                        }
-                        break;
-                    }
-                    threads.Push(thread);
-                }
+                Stack<ThreadPoolThread> threads = RemoveIdleThread(exitedThread);
                 while (threads.Count != 0) {
                     _idleThreads.Push(threads.Pop());
                 }
             }
+        }
+
+        // Pops idle threads until the exited thread is found and removed, taking its
+        // semaphore count. Returns the threads popped before it so the caller can
+        // restore them. Must be called while holding _sync.
+        private Stack<ThreadPoolThread> RemoveIdleThread(ThreadPoolThread exitedThread) {
+            Stack<ThreadPoolThread> threads = new Stack<ThreadPoolThread>();
+            while (_idleThreads.Count != 0) {
+                ThreadPoolThread thread = _idleThreads.Pop();
+                if (thread == exitedThread) {
+                    if (!_semaphore.WaitOne(0)) {
+                        throw new Exception("Semaphore count is invalid.");
+                    }
+                    break;
+                }
+                threads.Push(thread);
+            }
+            return threads;
         }
 
         private class ThreadPoolThread {
@@ -469,15 +509,7 @@ namespace JDP {
 
             private void WorkThread() {
                 while (_newWorkItem.WaitOne(_maxThreadIdleTime, false) || !ReleaseThread()) {
-                    Action workItem = null;
-                    lock (_sync) {
-                        if (_workItems.Count != 0) {
-                            workItem = _workItems.Dequeue();
-                        }
-                        else {
-                            _newWorkItem.Reset();
-                        }
-                    }
+                    Action workItem = DequeueWorkItem();
                     if (workItem != null) {
                         Thread.MemoryBarrier();
                         workItem();
@@ -487,6 +519,21 @@ namespace JDP {
                 if (_manager != null) {
                     _manager.OnThreadPoolThreadExit(this);
                 }
+            }
+
+            // Returns the next work item, or null (and resets the new work item
+            // signal) if the queue is empty.
+            private Action DequeueWorkItem() {
+                Action workItem = null;
+                lock (_sync) {
+                    if (_workItems.Count != 0) {
+                        workItem = _workItems.Dequeue();
+                    }
+                    else {
+                        _newWorkItem.Reset();
+                    }
+                }
+                return workItem;
             }
 
             private bool ReleaseThread() {
@@ -768,22 +815,13 @@ namespace JDP {
                     return;
                 }
 
-                var maximumBytesPerSecond = Settings.MaximumBytesPerSecond ?? Infinite;
-                if (_maximumBytesPerSecond != maximumBytesPerSecond) {
-                    _maximumBytesPerSecond = maximumBytesPerSecond;
-                    Reset();
-                }
+                UpdateMaximumBytesPerSecond();
 
                 if (_maximumBytesPerSecond <= 0) {
                     return;
                 }
 
-                if (!_hasStarted) {
-                    lock (_downloadsSync) {
-                        _concurrentDownloads += 1;
-                    }
-                    _hasStarted = true;
-                }
+                MarkStarted();
 
                 _byteCount += bufferSizeInBytes;
 
@@ -792,20 +830,49 @@ namespace JDP {
                     weightedMaximumBytesPerSecond = _maximumBytesPerSecond / _concurrentDownloads;
                 }
 
-                long elapsedMilliseconds = CurrentMilliseconds - _start;
-                if (elapsedMilliseconds > 0) {
-                    long bps = _byteCount * 1000L / elapsedMilliseconds;
-                    if (bps > weightedMaximumBytesPerSecond) {
-                        long wakeElapsed = _byteCount * 1000L / weightedMaximumBytesPerSecond;
+                SleepIfOverLimit(weightedMaximumBytesPerSecond);
+            }
+        }
 
-                        int toSleep = (int)(wakeElapsed - elapsedMilliseconds);
-                        if (toSleep > 1) {
-                            try { Thread.Sleep(toSleep); }
-                            catch (ThreadAbortException) { }
-                            Reset();
-                        }
-                    }
-                }
+        // Picks up a changed speed limit from the settings. Called while holding _throttleSync.
+        private void UpdateMaximumBytesPerSecond() {
+            var maximumBytesPerSecond = Settings.MaximumBytesPerSecond ?? Infinite;
+            if (_maximumBytesPerSecond != maximumBytesPerSecond) {
+                _maximumBytesPerSecond = maximumBytesPerSecond;
+                Reset();
+            }
+        }
+
+        // Counts this stream as a concurrent download the first time it is throttled.
+        // Called while holding _throttleSync.
+        private void MarkStarted() {
+            if (_hasStarted) {
+                return;
+            }
+            lock (_downloadsSync) {
+                _concurrentDownloads += 1;
+            }
+            _hasStarted = true;
+        }
+
+        // Sleeps long enough to bring the average speed down to the weighted limit.
+        // Called while holding _throttleSync.
+        private void SleepIfOverLimit(long weightedMaximumBytesPerSecond) {
+            long elapsedMilliseconds = CurrentMilliseconds - _start;
+            if (elapsedMilliseconds <= 0) {
+                return;
+            }
+            long bps = _byteCount * 1000L / elapsedMilliseconds;
+            if (bps <= weightedMaximumBytesPerSecond) {
+                return;
+            }
+            long wakeElapsed = _byteCount * 1000L / weightedMaximumBytesPerSecond;
+
+            int toSleep = (int)(wakeElapsed - elapsedMilliseconds);
+            if (toSleep > 1) {
+                try { Thread.Sleep(toSleep); }
+                catch (ThreadAbortException) { }
+                Reset();
             }
         }
 

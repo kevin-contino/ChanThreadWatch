@@ -70,22 +70,30 @@ namespace JDP {
             }
 
             foreach (var control in controls) {
-                switch (control) {
-                    case CheckBox chk:
-                        chk.CheckedChanged += (sender, args) => IsDirty = true;
-                        break;
-                    case ComboBox cbo:
-                        cbo.SelectedValueChanged += (sender, args) => IsDirty = true;
-                        if (cbo.DropDownStyle != ComboBoxStyle.DropDownList) {
-                            cbo.TextChanged += (sender, args) => IsDirty = true;
-                        }
-                        break;
-                    case null:
-                        break;
-                    default:
-                        control.TextChanged += (sender, args) => IsDirty = true;
-                        break;
-                }
+                AttachDirtyHandlers(control);
+            }
+        }
+
+        private void AttachDirtyHandlers(Control control) {
+            switch (control) {
+                case CheckBox chk:
+                    chk.CheckedChanged += (sender, args) => IsDirty = true;
+                    break;
+                case ComboBox cbo:
+                    AttachComboBoxDirtyHandlers(cbo);
+                    break;
+                case null:
+                    break;
+                default:
+                    control.TextChanged += (sender, args) => IsDirty = true;
+                    break;
+            }
+        }
+
+        private void AttachComboBoxDirtyHandlers(ComboBox cbo) {
+            cbo.SelectedValueChanged += (sender, args) => IsDirty = true;
+            if (cbo.DropDownStyle != ComboBoxStyle.DropDownList) {
+                cbo.TextChanged += (sender, args) => IsDirty = true;
             }
         }
 
@@ -109,6 +117,13 @@ namespace JDP {
             Rectangle formRect = new Rectangle(formX, formY, child.Width, child.Height);
             Rectangle maxRect = Screen.GetWorkingArea(new Point(centerX, centerY));
 
+            formRect = ClampToWorkingArea(formRect, maxRect);
+
+            child.Location = formRect.Location;
+        }
+
+        // Moves the rectangle inside the working area, keeping its top-left corner visible.
+        private static Rectangle ClampToWorkingArea(Rectangle formRect, Rectangle maxRect) {
             if (formRect.Right > maxRect.Right) {
                 formRect.X -= formRect.Right - maxRect.Right;
             }
@@ -121,8 +136,7 @@ namespace JDP {
             if (formRect.Y < maxRect.Y) {
                 formRect.Y = maxRect.Y;
             }
-
-            child.Location = formRect.Location;
+            return formRect;
         }
 
         public static void EnableDoubleBuffering<T>(T control) where T : Control {

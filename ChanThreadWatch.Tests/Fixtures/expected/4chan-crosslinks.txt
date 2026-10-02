@@ -1,0 +1,21 @@
+interBoardAutoFollow=False
+crossLinks:
+  https://boards.4chan.org/wg/thread/8140000
+  https://boards.4chan.org/wg/thread/8140002
+replaces:
+  327 | 34 | QuoteLinkHref | [4chan/wg/8140000] | [/wg/thread/8140000#p8140001] | href="/wg/thread/8140000#p8140001"
+  517 | 25 | QuoteLinkHref | [4chan/wg/8140002] | [/wg/thread/8140002] | href="/wg/thread/8140002"
+  733 | 45 | DeadLink | [4chan/wg/8143999] | [<span class="deadlink">&gt;&gt;8143999</span>] | <span class="deadlink">&gt;&gt;8143999</span>
+  779 | 50 | DeadLink | [4chan/g/12345] | [<span class="deadlink">&gt;&gt;&gt;/g/12345</span>] | <span class="deadlink">&gt;&gt;&gt;/g/12345</span>
+interBoardAutoFollow=True
+crossLinks:
+  https://boards.4chan.org/g/thread/90000
+  https://boards.4chan.org/wg/thread/8140000
+  https://boards.4chan.org/wg/thread/8140002
+replaces:
+  327 | 34 | QuoteLinkHref | [4chan/wg/8140000] | [/wg/thread/8140000#p8140001] | href="/wg/thread/8140000#p8140001"
+  406 | 29 | QuoteLinkHref | [4chan/g/90000] | [/g/thread/90000#p90001] | href="/g/thread/90000#p90001"
+  517 | 25 | QuoteLinkHref | [4chan/wg/8140002] | [/wg/thread/8140002] | href="/wg/thread/8140002"
+  733 | 45 | DeadLink | [4chan/wg/8143999] | [<span class="deadlink">&gt;&gt;8143999</span>] | <span class="deadlink">&gt;&gt;8143999</span>
+  779 | 50 | DeadLink | [4chan/g/12345] | [<span class="deadlink">&gt;&gt;&gt;/g/12345</span>] | <span class="deadlink">&gt;&gt;&gt;/g/12345</span>
+  965 | 29 | QuoteLinkHref | [4chan/g/90000] | [/g/thread/90000#p90002] | href="/g/thread/90000#p90002"

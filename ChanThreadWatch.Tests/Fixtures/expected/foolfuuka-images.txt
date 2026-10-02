@@ -1,0 +1,37 @@
+images:
+  https://i.4pcdn.org/tg/123.jpg | https://archive.4plebs.org/tg/thread/123/ | [op full name.jpg] | [] | MD5 | 01-02-03-04-05-06-07-08-09-0A-0B-0C-0D-0E-0F-10
+  https://i.4pcdn.org/tg/124.png | https://archive.4plebs.org/tg/thread/123/ | [inner & name.png] | [Frank!abc] | MD5 | 10-11-12-13-14-15-16-17-18-19-1A-1B-1C-1D-1E-1F
+  https://i.4pcdn.org/tg/125.png | https://archive.4plebs.org/tg/thread/123/ | [span title.png] | [Xy+z] | MD5 | 20-21-22-23-24-25-26-27-28-29-2A-2B-2C-2D-2E-2F
+  https://i.4pcdn.org/tg/126.png | https://archive.4plebs.org/tg/thread/123/ | [span inner.png] | [H&I] | MD5 | 30-31-32-33-34-35-36-37-38-39-3A-3B-3C-3D-3E-3F
+  https://i.4pcdn.org/tg/127.png | https://archive.4plebs.org/tg/thread/123/ | [controls name.png] | [] | MD5 | 40-41-42-43-44-45-46-47-48-49-4A-4B-4C-4D-4E-4F
+  https://i.4pcdn.org/tg/128.gif | https://archive.4plebs.org/tg/thread/123/ | [split name.gif] | [Grace] | MD5 | 01-02-03-04-05-06-07-08-09-0A-0B-0C-0D-0E-0F-10
+  https://i.4pcdn.org/tg/129.gif | https://archive.4plebs.org/tg/thread/123/ | [] | [] | MD5 | 01-02-03-04-05-06-07-08-09-0A-0B-0C-0D-0E-0F-10
+  https://i.4pcdn.org/tg/130.gif | https://archive.4plebs.org/tg/thread/123/ | [two parts] | [] | MD5 | 01-02-03-04-05-06-07-08-09-0A-0B-0C-0D-0E-0F-10
+thumbnails:
+  https://i.4pcdn.org/tg/123s.jpg | https://archive.4plebs.org/tg/thread/123/
+  https://i.4pcdn.org/tg/124s.jpg | https://archive.4plebs.org/tg/thread/123/
+  https://i.4pcdn.org/tg/125s.jpg | https://archive.4plebs.org/tg/thread/123/
+  https://i.4pcdn.org/tg/126s.jpg | https://archive.4plebs.org/tg/thread/123/
+  https://i.4pcdn.org/tg/127s.jpg | https://archive.4plebs.org/tg/thread/123/
+  https://i.4pcdn.org/tg/128s.jpg | https://archive.4plebs.org/tg/thread/123/
+  https://i.4pcdn.org/tg/129s.jpg | https://archive.4plebs.org/tg/thread/123/
+  https://i.4pcdn.org/tg/130s.jpg | https://archive.4plebs.org/tg/thread/123/
+replaces:
+  560 | 37 | ImageLinkHref | [123.jpg] | (null) | href="https://i.4pcdn.org/tg/123.jpg"
+  413 | 37 | ImageLinkHref | [123.jpg] | (null) | href="https://i.4pcdn.org/tg/123.jpg"
+  629 | 37 | ImageSrc | [123s.jpg] | (null) | src="https://i.4pcdn.org/tg/123s.jpg"
+  1259 | 37 | ImageLinkHref | [124.png] | (null) | href="https://i.4pcdn.org/tg/124.png"
+  1130 | 37 | ImageLinkHref | [124.png] | (null) | href="https://i.4pcdn.org/tg/124.png"
+  1328 | 37 | ImageSrc | [124s.jpg] | (null) | src="https://i.4pcdn.org/tg/124s.jpg"
+  1754 | 37 | ImageLinkHref | [125.png] | (null) | href="https://i.4pcdn.org/tg/125.png"
+  1823 | 37 | ImageSrc | [125s.jpg] | (null) | src="https://i.4pcdn.org/tg/125s.jpg"
+  2184 | 37 | ImageLinkHref | [126.png] | (null) | href="https://i.4pcdn.org/tg/126.png"
+  2253 | 37 | ImageSrc | [126s.jpg] | (null) | src="https://i.4pcdn.org/tg/126s.jpg"
+  2723 | 37 | ImageLinkHref | [127.png] | (null) | href="https://i.4pcdn.org/tg/127.png"
+  2792 | 37 | ImageSrc | [127s.jpg] | (null) | src="https://i.4pcdn.org/tg/127s.jpg"
+  3165 | 37 | ImageLinkHref | [128.gif] | (null) | href="https://i.4pcdn.org/tg/128.gif"
+  3234 | 37 | ImageSrc | [128s.jpg] | (null) | src="https://i.4pcdn.org/tg/128s.jpg"
+  3622 | 37 | ImageLinkHref | [129.gif] | (null) | href="https://i.4pcdn.org/tg/129.gif"
+  3691 | 37 | ImageSrc | [129s.jpg] | (null) | src="https://i.4pcdn.org/tg/129s.jpg"
+  3986 | 37 | ImageLinkHref | [130.gif] | (null) | href="https://i.4pcdn.org/tg/130.gif"
+  4055 | 37 | ImageSrc | [130s.jpg] | (null) | src="https://i.4pcdn.org/tg/130s.jpg"

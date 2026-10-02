@@ -41,7 +41,7 @@ namespace JDP {
 
         public IEnumerable<HTMLTag> EnumerateTags(HTMLTag startAfterTag, HTMLTag stopBeforeTag) {
             int startIndex = startAfterTag != null ? (GetTagIndex(startAfterTag) + 1) : 0;
-            int stopIndex = stopBeforeTag != null ? (GetTagIndex(stopBeforeTag) - 1) : (_tags.Count - 1);
+            int stopIndex = GetStopIndex(stopBeforeTag);
             for (int i = startIndex; i <= stopIndex; i++) {
                 yield return _tags[i];
             }
@@ -145,18 +145,25 @@ namespace JDP {
                 return tag;
             }
             int startIndex = GetTagIndex(tag) + 1;
-            int stopIndex = stopBeforeTag != null ? (GetTagIndex(stopBeforeTag) - 1) : (_tags.Count - 1);
+            int stopIndex = GetStopIndex(stopBeforeTag);
+            return FindMatchingEndTag(tag.Name, startIndex, stopIndex);
+        }
+
+        private HTMLTag FindMatchingEndTag(string name, int startIndex, int stopIndex) {
             int depth = 1;
             for (int i = startIndex; i <= stopIndex; i++) {
                 HTMLTag tag2 = _tags[i];
-                if (!tag2.IsSelfClosing && tag2.NameEquals(tag.Name)) {
-                    depth += tag2.IsEnd ? -1 : 1;
-                    if (depth == 0) {
-                        return tag2;
-                    }
+                if (!IsNestableTag(tag2, name)) continue;
+                depth += tag2.IsEnd ? -1 : 1;
+                if (depth == 0) {
+                    return tag2;
                 }
             }
             return null;
+        }
+
+        private static bool IsNestableTag(HTMLTag tag, string name) {
+            return !tag.IsSelfClosing && tag.NameEquals(name);
         }
 
         public HTMLTagRange CreateTagRange(HTMLTag tag) {
@@ -176,6 +183,10 @@ namespace JDP {
             return i;
         }
 
+        private int GetStopIndex(HTMLTag stopBeforeTag) {
+            return stopBeforeTag != null ? (GetTagIndex(stopBeforeTag) - 1) : (_tags.Count - 1);
+        }
+
         private static string Preprocess(string html) {
             if (html.IndexOf('\r') == -1) {
                 // No preprocessing needed
@@ -185,7 +196,7 @@ namespace JDP {
             int iDst = 0;
             for (int iSrc = 0; iSrc < html.Length; iSrc++) {
                 char c = html[iSrc];
-                if (c == '\n' && iSrc >= 1 && html[iSrc - 1] == '\r') {
+                if (IsLineFeedAfterCarriageReturn(html, iSrc)) {
                     // Skip line feed following carriage return
                     continue;
                 }
@@ -198,123 +209,170 @@ namespace JDP {
             return new string(dst, 0, iDst);
         }
 
+        private static bool IsLineFeedAfterCarriageReturn(string html, int index) {
+            return html[index] == '\n' && index >= 1 && html[index - 1] == '\r';
+        }
+
+        // Parsing helpers below return the position to continue from, or -1 (or null)
+        // when the input ends before the construct is complete, which stops parsing.
         private static IEnumerable<HTMLTag> ParseTags(string html, int htmlStart, int htmlEnd) {
-            while (htmlStart < htmlEnd) {
-                int pos = IndexOf(html, htmlStart, htmlEnd, '<');
-                if (pos == -1) yield break;
-
-                HTMLTag tag = new HTMLTag();
-                tag.Offset = pos;
+            int pos;
+            while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
                 htmlStart = pos + 1;
-                tag.IsEnd = StartsWith(html, htmlStart, htmlEnd, '/');
-                if (StartsWithLetter(html, tag.IsEnd ? (htmlStart + 1) : htmlStart, htmlEnd)) {
-                    // Parse tag name
-                    if (tag.IsEnd) htmlStart += 1;
-                    pos = IndexOfAny(html, htmlStart, htmlEnd, true, '/', '>');
-                    if (pos == -1) yield break;
-                    tag.Name = GetSectionLower(html, htmlStart, pos);
-                    htmlStart = pos;
-
-                    // Parse attributes
-                    bool isTagComplete = false;
-                    do {
-                        while (StartsWithWhiteSpace(html, htmlStart, htmlEnd)) htmlStart++;
-                        tag.IsSelfClosing = StartsWith(html, htmlStart, htmlEnd, '/');
-                        if (tag.IsSelfClosing) htmlStart += 1;
-                        if (StartsWith(html, htmlStart, htmlEnd, '>')) {
-                            htmlStart += 1;
-                            isTagComplete = true;
-                        }
-                        else if (tag.IsSelfClosing) { }
-                        else {
-                            HTMLAttribute attribute = new HTMLAttribute();
-                            attribute.Offset = htmlStart;
-
-                            // Parse attribute name
-                            pos = IndexOfAny(html, htmlStart + 1, htmlEnd, true, '=', '/', '>');
-                            if (pos == -1) yield break;
-                            attribute.Name = GetSectionLower(html, htmlStart, pos);
-                            htmlStart = pos;
-
-                            while (StartsWithWhiteSpace(html, htmlStart, htmlEnd)) htmlStart++;
-                            if (StartsWith(html, htmlStart, htmlEnd, '=')) {
-                                // Parse attribute value
-                                htmlStart += 1;
-                                while (StartsWithWhiteSpace(html, htmlStart, htmlEnd)) htmlStart++;
-                                if (StartsWithAny(html, htmlStart, htmlEnd, '"', '\'')) {
-                                    char quoteChar = html[htmlStart];
-                                    htmlStart += 1;
-                                    pos = IndexOf(html, htmlStart, htmlEnd, quoteChar);
-                                    if (pos == -1) yield break;
-                                    attribute.Value = GetSection(html, htmlStart, pos);
-                                    htmlStart = pos + 1;
-                                }
-                                else {
-                                    pos = IndexOfAny(html, htmlStart, htmlEnd, true, '>');
-                                    if (pos == -1) yield break;
-                                    attribute.Value = GetSection(html, htmlStart, pos);
-                                    htmlStart = pos;
-                                }
-                            }
-                            else {
-                                attribute.Value = String.Empty;
-                            }
-
-                            attribute.Length = htmlStart - attribute.Offset;
-                            if (tag.GetAttribute(attribute.Name) == null) {
-                                tag.Attributes.Add(attribute);
-                            }
-                        }
-                    } while (!isTagComplete);
-                    tag.Length = htmlStart - tag.Offset;
+                if (StartsWithTagName(html, htmlStart, htmlEnd)) {
+                    HTMLTag tag = ParseTag(html, pos, htmlEnd);
+                    if (tag == null) yield break;
 
                     // Yield result
                     yield return tag;
 
                     // Skip contents of special tags whose contents are to be treated as raw text
-                    if (!tag.IsEnd && !tag.IsSelfClosing && tag.NameEqualsAny("script", "style", "title", "textarea")) {
-                        bool foundEndTag = false;
-                        do {
-                            pos = IndexOf(html, htmlStart, htmlEnd, '<');
-                            if (pos == -1) yield break;
-                            htmlStart = pos + 1;
-                            string endTagText = "/" + tag.Name;
-                            if (StartsWith(html, htmlStart, htmlEnd, endTagText, true) &&
-                                (StartsWithWhiteSpace(html, htmlStart + endTagText.Length, htmlEnd) ||
-                                 StartsWithAny(html, htmlStart + endTagText.Length, htmlEnd, '/', '>')))
-                            {
-                                htmlStart -= 1;
-                                foundEndTag = true;
-                            }
-                        } while (!foundEndTag);
-                    }
+                    htmlStart = SkipRawTextContents(html, tag, htmlEnd);
                 }
-                else if (StartsWith(html, htmlStart, htmlEnd, "!--", false) && !StartsWith(html, htmlStart + 3, htmlEnd, '>')) {
-                    // Skip comment
-                    htmlStart += 3;
-                    bool foundEnd = false;
-                    do {
-                        pos = IndexOf(html, htmlStart, htmlEnd, '-');
-                        if (pos == -1) yield break;
-                        htmlStart = pos + 1;
-                        if (StartsWith(html, htmlStart, htmlEnd, "->", false)) {
-                            htmlStart += 2;
-                            foundEnd = true;
-                        }
-                        else if (StartsWith(html, htmlStart, htmlEnd, "-!>", false)) {
-                            htmlStart += 3;
-                            foundEnd = true;
-                        }
-                    } while (!foundEnd);
+                else {
+                    htmlStart = SkipNonTagMarkup(html, htmlStart, htmlEnd);
                 }
-                else if (StartsWithAny(html, htmlStart, htmlEnd, '?', '/', '!')) {
-                    // Skip bogus comment or DOCTYPE
-                    htmlStart += 1;
-                    pos = IndexOf(html, htmlStart, htmlEnd, '>');
-                    if (pos == -1) yield break;
-                    htmlStart = pos + 1;
-                }
+                if (htmlStart == -1) yield break;
             }
+        }
+
+        private static bool StartsWithTagName(string html, int htmlStart, int htmlEnd) {
+            if (StartsWith(html, htmlStart, htmlEnd, '/')) htmlStart += 1;
+            return StartsWithLetter(html, htmlStart, htmlEnd);
+        }
+
+        private static HTMLTag ParseTag(string html, int tagOffset, int htmlEnd) {
+            HTMLTag tag = new HTMLTag();
+            tag.Offset = tagOffset;
+            int htmlStart = tagOffset + 1;
+            tag.IsEnd = StartsWith(html, htmlStart, htmlEnd, '/');
+
+            // Parse tag name
+            if (tag.IsEnd) htmlStart += 1;
+            int pos = IndexOfAny(html, htmlStart, htmlEnd, true, '/', '>');
+            if (pos == -1) return null;
+            tag.Name = GetSectionLower(html, htmlStart, pos);
+
+            // Parse attributes
+            htmlStart = ParseAttributes(html, tag, pos, htmlEnd);
+            if (htmlStart == -1) return null;
+            tag.Length = htmlStart - tag.Offset;
+            return tag;
+        }
+
+        private static int ParseAttributes(string html, HTMLTag tag, int htmlStart, int htmlEnd) {
+            htmlStart = SkipToNextAttribute(html, tag, htmlStart, htmlEnd);
+            while (!StartsWith(html, htmlStart, htmlEnd, '>')) {
+                if (!tag.IsSelfClosing) {
+                    htmlStart = ParseAttribute(html, tag, htmlStart, htmlEnd);
+                    if (htmlStart == -1) return -1;
+                }
+                htmlStart = SkipToNextAttribute(html, tag, htmlStart, htmlEnd);
+            }
+            return htmlStart + 1;
+        }
+
+        private static int SkipToNextAttribute(string html, HTMLTag tag, int htmlStart, int htmlEnd) {
+            htmlStart = SkipWhiteSpace(html, htmlStart, htmlEnd);
+            tag.IsSelfClosing = StartsWith(html, htmlStart, htmlEnd, '/');
+            if (tag.IsSelfClosing) htmlStart += 1;
+            return htmlStart;
+        }
+
+        private static int ParseAttribute(string html, HTMLTag tag, int htmlStart, int htmlEnd) {
+            HTMLAttribute attribute = new HTMLAttribute();
+            attribute.Offset = htmlStart;
+
+            // Parse attribute name
+            int pos = IndexOfAny(html, htmlStart + 1, htmlEnd, true, '=', '/', '>');
+            if (pos == -1) return -1;
+            attribute.Name = GetSectionLower(html, htmlStart, pos);
+            htmlStart = SkipWhiteSpace(html, pos, htmlEnd);
+
+            if (StartsWith(html, htmlStart, htmlEnd, '=')) {
+                htmlStart = ParseAttributeValue(html, attribute, htmlStart + 1, htmlEnd);
+                if (htmlStart == -1) return -1;
+            }
+            else {
+                attribute.Value = String.Empty;
+            }
+
+            attribute.Length = htmlStart - attribute.Offset;
+            if (tag.GetAttribute(attribute.Name) == null) {
+                tag.Attributes.Add(attribute);
+            }
+            return htmlStart;
+        }
+
+        private static int ParseAttributeValue(string html, HTMLAttribute attribute, int htmlStart, int htmlEnd) {
+            htmlStart = SkipWhiteSpace(html, htmlStart, htmlEnd);
+            if (StartsWithAny(html, htmlStart, htmlEnd, '"', '\'')) {
+                char quoteChar = html[htmlStart];
+                htmlStart += 1;
+                int quoteEnd = IndexOf(html, htmlStart, htmlEnd, quoteChar);
+                if (quoteEnd == -1) return -1;
+                attribute.Value = GetSection(html, htmlStart, quoteEnd);
+                return quoteEnd + 1;
+            }
+            int valueEnd = IndexOfAny(html, htmlStart, htmlEnd, true, '>');
+            if (valueEnd == -1) return -1;
+            attribute.Value = GetSection(html, htmlStart, valueEnd);
+            return valueEnd;
+        }
+
+        private static int SkipRawTextContents(string html, HTMLTag tag, int htmlEnd) {
+            int htmlStart = tag.EndOffset;
+            if (!IsRawTextStartTag(tag)) return htmlStart;
+            string endTagText = "/" + tag.Name;
+            int pos;
+            while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
+                htmlStart = pos + 1;
+                if (StartsWithRawTextEndTag(html, htmlStart, htmlEnd, endTagText)) return pos;
+            }
+            return -1;
+        }
+
+        private static bool IsRawTextStartTag(HTMLTag tag) {
+            return !tag.IsEnd && !tag.IsSelfClosing && tag.NameEqualsAny("script", "style", "title", "textarea");
+        }
+
+        private static bool StartsWithRawTextEndTag(string html, int htmlStart, int htmlEnd, string endTagText) {
+            return StartsWith(html, htmlStart, htmlEnd, endTagText, true) &&
+                (StartsWithWhiteSpace(html, htmlStart + endTagText.Length, htmlEnd) ||
+                 StartsWithAny(html, htmlStart + endTagText.Length, htmlEnd, '/', '>'));
+        }
+
+        private static int SkipNonTagMarkup(string html, int htmlStart, int htmlEnd) {
+            if (StartsWithCommentStart(html, htmlStart, htmlEnd)) {
+                // Skip comment
+                return SkipComment(html, htmlStart + 3, htmlEnd);
+            }
+            if (StartsWithAny(html, htmlStart, htmlEnd, '?', '/', '!')) {
+                // Skip bogus comment or DOCTYPE
+                int pos = IndexOf(html, htmlStart + 1, htmlEnd, '>');
+                if (pos == -1) return -1;
+                return pos + 1;
+            }
+            return htmlStart;
+        }
+
+        private static bool StartsWithCommentStart(string html, int htmlStart, int htmlEnd) {
+            return StartsWith(html, htmlStart, htmlEnd, "!--", false) && !StartsWith(html, htmlStart + 3, htmlEnd, '>');
+        }
+
+        private static int SkipComment(string html, int htmlStart, int htmlEnd) {
+            int pos;
+            while ((pos = IndexOf(html, htmlStart, htmlEnd, '-')) != -1) {
+                htmlStart = pos + 1;
+                if (StartsWith(html, htmlStart, htmlEnd, "->", false)) return htmlStart + 2;
+                if (StartsWith(html, htmlStart, htmlEnd, "-!>", false)) return htmlStart + 3;
+            }
+            return -1;
+        }
+
+        private static int SkipWhiteSpace(string html, int htmlStart, int htmlEnd) {
+            while (StartsWithWhiteSpace(html, htmlStart, htmlEnd)) htmlStart++;
+            return htmlStart;
         }
 
         private static int IndexOf(string html, int htmlStart, int htmlEnd, char value) {

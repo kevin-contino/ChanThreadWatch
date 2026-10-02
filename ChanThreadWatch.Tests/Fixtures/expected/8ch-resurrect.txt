@@ -1,0 +1,18 @@
+html:
+<!DOCTYPE html>
+<!-- Synthetic current copy of an 8chan thread, paired with 8ch-resurrect-previous.html. -->
+<html>
+<head><title>/tech/ - Resurrect (current)</title></head>
+<body>
+<div class="thread" id="thread_100"><br/><div class="post reply" id="reply_099"><p class="intro"><input type="checkbox" name="delete_099"><strong style="color: #FF0000">[Deleted]</strong> <span class="name">Anonymous</span></p><div class="body">deleted before the OP</div></div>
+<div class="post op" id="op_100"><p class="intro"><input type="checkbox" name="delete_100"><span class="name">Anonymous</span></p><div class="body">OP</div></div><br/><div class="post reply has-file" id="reply_101"><p class="intro"><input type="checkbox" name="delete_101"><strong style="color: #FF0000">[Deleted]</strong> <span class="name">Anonymous</span></p><div class="files"><div class="file"><p class="fileinfo">File: <a href="/file_store/aaa.jpg#x">aaa.jpg</a> <span class="postfilename">a.jpg</span></p><a href="/file_store/aaa.jpg" target="_blank"><img src="/file_store/thumb/aaa.jpg" data-md5="AQIDBAUGBwgJCgsMDQ4PEA=="></a></div><div class="file"><p class="fileinfo">no link</p><a href="/file_store/bbb.jpg" target="_blank"><img src="/file_store/thumb/bbb.jpg"></a></div><div class="file"><p class="fileinfo">File: <a href="/file_store/ccc.jpg">ccc.jpg</a></p><a href="/file_store/ccc.jpg" target="_blank">no image</a></div></div><div class="body">deleted with files</div></div>
+<div class="post reply" id="reply_102"><p class="intro"><input type="checkbox" name="delete_102"><span class="name">Anonymous</span></p><div class="body">kept</div></div><br/><div class="post reply has-file" id="reply_103"><p class="intro"><input type="checkbox" name="delete_103"><strong style="color: #FF0000">[Deleted]</strong> <span class="name">Anonymous</span></p><div class="files"><div class="file"><a href="/file_store/ddd.jpg" target="_blank"><img src="/file_store/thumb/ddd.jpg"></a></div></div><div class="body">already marked</div></div>
+<div class="post reply has-file" id="reply_104"><p class="intro"><input type="checkbox" name="delete_104"><span class="name">Anonymous</span></p><div class="files"><div class="file"><p class="fileinfo">File: <a href="/file_store/eee.jpg">eee.jpg</a></p><a href="/file_store/eee.jpg" target="_blank"><img src="/file_store/thumb/eee.jpg"></a></div></div><div class="body">new post with a file</div></div>
+</div>
+</body>
+</html>
+
+replaces:
+  887 | 28 | ImageLinkHref | [] | [href="/file_store/aaa.jpg%23x"] | href="/file_store/aaa.jpg#x"
+  974 | 26 | ImageLinkHref | [] | [href="/file_store/aaa.jpg"] | href="/file_store/aaa.jpg"
+  1022 | 31 | ImageSrc | [] | [src="/file_store/thumb/aaa.jpg"] | src="/file_store/thumb/aaa.jpg"

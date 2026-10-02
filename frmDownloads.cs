@@ -26,32 +26,12 @@ namespace JDP {
             long minTotalDownloadedStartTicks = Int64.MaxValue;
             downloadProgresses.Sort((a, b) => a.StartTicks.CompareTo(b.StartTicks));
             foreach (DownloadProgressInfo info in downloadProgresses) {
-                List<DownloadedSizeSnapshot> snapshotList;
-                if (!_snapshotLists.TryGetValue(info.DownloadID, out snapshotList)) {
-                    snapshotList = new List<DownloadedSizeSnapshot>();
-                    snapshotList.Add(new DownloadedSizeSnapshot(info.StartTicks, 0));
-                    _snapshotLists[info.DownloadID] = snapshotList;
-                }
-                while (snapshotList.Count != 0 && ticksNow - snapshotList[0].Ticks > 5000) {
-                    snapshotList.RemoveAt(0);
-                }
+                List<DownloadedSizeSnapshot> snapshotList = GetSnapshotList(info);
+                RemoveExpiredSnapshots(snapshotList, ticksNow);
                 snapshotList.Add(new DownloadedSizeSnapshot(ticksNow, info.DownloadedSize));
                 int iLast = snapshotList.Count - 1;
-                long size = snapshotList[iLast].DownloadedSize - snapshotList[0].DownloadedSize;
-                long ticks = snapshotList[iLast].Ticks - snapshotList[0].Ticks;
-                long? bytesPerSec = null;
-                if (size > 0 && ticks > 0) {
-                    bytesPerSec = Convert.ToInt64(size / (ticks / 1000.0));
-                }
-                int iFirstForTotalWindow = iLast;
-                for (int i = 0; i < snapshotList.Count; i++) {
-                    if (ticksNow - snapshotList[i].Ticks <= 2000 &&
-                        snapshotList[i].DownloadedSize < snapshotList[iLast].DownloadedSize)
-                    {
-                        iFirstForTotalWindow = i;
-                        break;
-                    }
-                }
+                long? bytesPerSec = GetBytesPerSecond(snapshotList);
+                int iFirstForTotalWindow = GetFirstIndexForTotalWindow(snapshotList, ticksNow);
                 totalDownloadedSize += snapshotList[iLast].DownloadedSize - snapshotList[iFirstForTotalWindow].DownloadedSize;
                 minTotalDownloadedStartTicks = Math.Min(minTotalDownloadedStartTicks, snapshotList[iFirstForTotalWindow].Ticks);
                 if (info.EndTicks == null) {
@@ -63,6 +43,51 @@ namespace JDP {
                 RemoveDownloadProgress(downloadID);
             }
             long totalDownloadedTicks = ticksNow - minTotalDownloadedStartTicks;
+            UpdateTitle(totalDownloadedSize, totalDownloadedTicks);
+        }
+
+        private List<DownloadedSizeSnapshot> GetSnapshotList(DownloadProgressInfo info) {
+            List<DownloadedSizeSnapshot> snapshotList;
+            if (!_snapshotLists.TryGetValue(info.DownloadID, out snapshotList)) {
+                snapshotList = new List<DownloadedSizeSnapshot>();
+                snapshotList.Add(new DownloadedSizeSnapshot(info.StartTicks, 0));
+                _snapshotLists[info.DownloadID] = snapshotList;
+            }
+            return snapshotList;
+        }
+
+        // Drops snapshots older than the 5 second speed window.
+        private static void RemoveExpiredSnapshots(List<DownloadedSizeSnapshot> snapshotList, long ticksNow) {
+            while (snapshotList.Count != 0 && ticksNow - snapshotList[0].Ticks > 5000) {
+                snapshotList.RemoveAt(0);
+            }
+        }
+
+        private static long? GetBytesPerSecond(List<DownloadedSizeSnapshot> snapshotList) {
+            int iLast = snapshotList.Count - 1;
+            long size = snapshotList[iLast].DownloadedSize - snapshotList[0].DownloadedSize;
+            long ticks = snapshotList[iLast].Ticks - snapshotList[0].Ticks;
+            if (size > 0 && ticks > 0) {
+                return Convert.ToInt64(size / (ticks / 1000.0));
+            }
+            return null;
+        }
+
+        // Finds the first snapshot within the 2 second total speed window that has
+        // less data than the latest snapshot, or the latest snapshot if none does.
+        private static int GetFirstIndexForTotalWindow(List<DownloadedSizeSnapshot> snapshotList, long ticksNow) {
+            int iLast = snapshotList.Count - 1;
+            for (int i = 0; i < snapshotList.Count; i++) {
+                if (ticksNow - snapshotList[i].Ticks <= 2000 &&
+                    snapshotList[i].DownloadedSize < snapshotList[iLast].DownloadedSize)
+                {
+                    return i;
+                }
+            }
+            return iLast;
+        }
+
+        private void UpdateTitle(long totalDownloadedSize, long totalDownloadedTicks) {
             if (totalDownloadedSize > 0 && totalDownloadedTicks > 0) {
                 Text = "Downloads - " + GetKilobytesString(Convert.ToInt64(
                     totalDownloadedSize / (totalDownloadedTicks / 1000.0)), "KB/s");
