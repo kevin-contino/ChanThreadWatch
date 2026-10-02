@@ -179,7 +179,7 @@ namespace JDP {
                 Encoding encoding = Encoding.GetEncoding("iso-8859-1");
                 request.Headers.Add("Authorization", "Basic " + Convert.ToBase64String(encoding.GetBytes(auth)));
             }
-            if (!String.IsNullOrEmpty(auth)) {
+            if (!String.IsNullOrEmpty(referer)) {
                 request.Referer = referer;
             }
             return request;
@@ -415,6 +415,20 @@ namespace JDP {
                 if (a[i].CompareTo(b[i]) != 0) return false;
             }
             return true;
+        }
+
+        // Credentials are only sent to the origin (scheme, host and port) they were entered for, so a
+        // page, redirect or image link pointing elsewhere cannot collect them
+        public static string GetAuthForURL(string auth, string authOriginURL, string targetURL) {
+            return IsSameOrigin(authOriginURL, targetURL) ? auth : null;
+        }
+
+        public static bool IsSameOrigin(string urlA, string urlB) {
+            Uri uriA, uriB;
+            if (!Uri.TryCreate(urlA, UriKind.Absolute, out uriA) || !Uri.TryCreate(urlB, UriKind.Absolute, out uriB)) {
+                return false;
+            }
+            return Uri.Compare(uriA, uriB, UriComponents.SchemeAndServer, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0;
         }
 
         public static string GetAbsoluteURL(string baseURL, string relativeURL) {
@@ -729,7 +743,27 @@ namespace JDP {
             return (pos == -1) ? String.Empty : url.Substring(pos + 1);
         }
 
+        // Returns a single safe path segment: no invalid characters, never "." or "..", and never a
+        // reserved device name, so it cannot escape or break the directory it is combined with
         public static string CleanFileName(string src) {
+            // Windows drops trailing dots and spaces, which would turn "..." or ". ." into ".."
+            string name = RemoveInvalidFileNameChars(src).TrimEnd('.', ' ');
+            return IsReservedDeviceName(name) ? "_" + name : name;
+        }
+
+        private static bool IsReservedDeviceName(string name) {
+            int pos = name.IndexOf('.');
+            string baseName = (pos == -1) ? name : name.Substring(0, pos);
+            return Array.Exists(_reservedDeviceNames, n => n.Equals(baseName.TrimEnd(' '), StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static readonly string[] _reservedDeviceNames = {
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        };
+
+        private static string RemoveInvalidFileNameChars(string src) {
             char[] dst = new char[src.Length];
             char[] inv = Path.GetInvalidFileNameChars();
             int iDst = 0;
@@ -807,6 +841,7 @@ namespace JDP {
             private HttpWebResponse _response;
             private Stream _responseStream;
             private byte[] _buff;
+            private string _url;
 
             public AsyncDownload(string auth, string connectionGroupName, DateTime? cacheLastModifiedTime, Action<HttpWebResponse> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
                 _auth = auth;
@@ -820,6 +855,7 @@ namespace JDP {
 
             public void Start(string url, string referer) {
                 lock (_sync) {
+                    _url = url;
                     try {
                         _request = BuildWebRequest(url: url, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime, referer: referer);
                         // Unfortunately BeginGetResponse blocks until the DNS lookup has finished
@@ -903,7 +939,7 @@ namespace JDP {
                 _responseStream = memoryStream;
                 string redirectUrl = GetRedirectUrl(metaRedirectHtml, _response.ResponseUri.AbsoluteUri);
                 if (!string.IsNullOrEmpty(redirectUrl)) {
-                    HttpWebRequest redirectionRequest = BuildWebRequest(url: redirectUrl, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime);
+                    HttpWebRequest redirectionRequest = BuildWebRequest(url: redirectUrl, auth: GetAuthForURL(_auth, _url, redirectUrl), connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime);
                     _response = (HttpWebResponse)redirectionRequest.GetResponse();
                     _responseStream = CreateThrottledStream(_response.GetResponseStream());
                 }

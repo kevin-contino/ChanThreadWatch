@@ -46,9 +46,6 @@ namespace JDP {
             // Shouldn't matter since the limit is supposed to be per connection group
             ServicePointManager.DefaultConnectionLimit = Int32.MaxValue;
 
-            // Ignore invalid certificates (workaround for Mono)
-            ServicePointManager.ServerCertificateValidationCallback = (s, cert, chain, errors) => true;
-
             // Enable TLS 1.2 on supported environments
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
         }
@@ -1182,12 +1179,12 @@ namespace JDP {
         }
 
         private void DownloadPageAsync(string path, string url, string auth, DateTime? cacheLastModifiedTime, DownloadPageEndCallback onDownloadEnd) {
-            PageDownload download = new PageDownload(this, path, url, auth, cacheLastModifiedTime, onDownloadEnd);
+            PageDownload download = new PageDownload(this, path, url, General.GetAuthForURL(auth, PageURL, url), cacheLastModifiedTime, onDownloadEnd);
             download.TryDownload();
         }
 
         private void DownloadFileAsync(string path, string url, string auth, string referer, HashType hashType, byte[] correctHash, DownloadFileEndCallback onDownloadEnd) {
-            FileDownload download = new FileDownload(this, path, url, auth, referer, hashType, correctHash, onDownloadEnd);
+            FileDownload download = new FileDownload(this, path, url, General.GetAuthForURL(auth, PageURL, url), referer, hashType, correctHash, onDownloadEnd);
             download.TryDownload();
         }
 
