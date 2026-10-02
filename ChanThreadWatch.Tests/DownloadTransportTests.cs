@@ -159,10 +159,13 @@ namespace JDP.Tests {
         // R9
         [TestMethod]
         public void AbortDuringStalledHtmlBodyEndsPromptly() {
+            // Counts the buffering stream as a download, so its release shows the blocked reader ended
+            Settings.MaximumBytesPerSecond = 1L << 40;
             using (var release = new ManualResetEvent(false))
             using (var server = new LoopbackHttpServer()) {
                 try {
                     server.Route("/start", StalledHtml(release));
+                    int before = ConcurrentDownloads();
                     DownloadProbe probe = DownloadProbe.Start(server.URL("/start"));
                     WaitForRequests(server, 1);
                     Thread.Sleep(300);
@@ -171,10 +174,52 @@ namespace JDP.Tests {
 
                     probe.AssertEndsOnce(Promptly);
                     Assert.AreEqual(1, probe.Exceptions);
+                    Assert.IsTrue(SpinWait.SpinUntil(() => ConcurrentDownloads() == before, Promptly),
+                        "The blocked page read did not end and release its throttle slot");
                 }
                 finally {
                     release.Set();
                 }
+            }
+        }
+
+        [TestMethod]
+        public void AbortWithLowSpeedLimitEndsPromptly() {
+            // Throttle only sleeps once the clock has ticked since the stream was created; the body is
+            // far too large to arrive before that, and the first sleep then lasts many seconds
+            Settings.MaximumBytesPerSecond = 500;
+            using (var server = new LoopbackHttpServer()) {
+                server.Route("/file", LoopbackResponse.Bytes(new byte[32 * 1024 * 1024]));
+                DownloadProbe probe = DownloadProbe.Start(server.URL("/file"));
+                Assert.IsTrue(probe.Responded.WaitOne(Promptly));
+                Thread.Sleep(300);
+
+                probe.Abort();
+
+                probe.AssertEndsOnce(Promptly);
+                Assert.AreEqual(1, probe.Exceptions);
+            }
+        }
+
+        [TestMethod]
+        public void ThrowingOnCompleteIsFollowedByOneOnException() {
+            using (var server = new LoopbackHttpServer()) {
+                server.Route("/file", LoopbackResponse.Text("ok"));
+                var failure = new InvalidOperationException("corrupt");
+                var done = new ManualResetEvent(false);
+                int completes = 0;
+                int exceptions = 0;
+                Exception error = null;
+
+                General.DownloadAsync(server.URL("/file"), null, null, null, null, r => { }, (b, n) => { },
+                    () => { Interlocked.Increment(ref completes); throw failure; },
+                    ex => { error = ex; Interlocked.Increment(ref exceptions); done.Set(); });
+
+                Assert.IsTrue(done.WaitOne(Promptly));
+                Thread.Sleep(300);
+                Assert.AreEqual(1, Volatile.Read(ref completes));
+                Assert.AreEqual(1, Volatile.Read(ref exceptions));
+                Assert.AreSame(failure, error);
             }
         }
 
@@ -360,6 +405,35 @@ namespace JDP.Tests {
         }
 
         // R2
+        [TestMethod]
+        public void HandleUIExceptionShowsOneMessageWhileOneIsOpen() {
+            int shown = 0;
+            Action<string> show = null;
+            show = message => {
+                shown++;
+                // A recurring exception while the box is open re-enters the handler
+                Program.HandleUIException(new InvalidOperationException("again"), show);
+            };
+
+            Program.HandleUIException(new InvalidOperationException("first"), show);
+
+            Assert.AreEqual(1, shown);
+        }
+
+        [TestMethod]
+        public void HandleUIExceptionSurvivesAFailingMessageAndShowsTheNextOne() {
+            int shown = 0;
+            Action<string> show = message => {
+                shown++;
+                throw new InvalidOperationException("cannot show");
+            };
+
+            Program.HandleUIException(new InvalidOperationException("first"), show);
+            Program.HandleUIException(new InvalidOperationException("second"), show);
+
+            Assert.AreEqual(2, shown);
+        }
+
         [TestMethod]
         public void FormatUnhandledExceptionIncludesSourceAndDetails() {
             string text = Program.FormatUnhandledException("UI thread", new InvalidOperationException("boom"), true);

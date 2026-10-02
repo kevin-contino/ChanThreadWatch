@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
@@ -61,6 +62,24 @@ namespace JDP.Tests {
             stream.Close();
 
             Assert.IsFalse(baseStream.CanRead);
+        }
+
+        [TestMethod]
+        public void CloseEndsAThrottleSleepEarly() {
+            Settings.MaximumBytesPerSecond = 1;
+            ThrottledStream stream = new ThrottledStream(new MemoryStream(new byte[1000]), 1);
+            // Let the clock move so the first read is over the limit and sleeps (about 1000 s)
+            Thread.Sleep(50);
+            var reader = new Thread(() => {
+                try { stream.Read(new byte[1000], 0, 1000); }
+                catch (ObjectDisposedException) { }
+            }) { IsBackground = true };
+            reader.Start();
+            Thread.Sleep(300);
+
+            stream.Close();
+
+            Assert.IsTrue(reader.Join(TimeSpan.FromSeconds(10)), "The throttled read kept sleeping after Close");
         }
 
         private static ThrottledStream StartStream() {
