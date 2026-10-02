@@ -33,131 +33,34 @@ namespace JDP {
         }
 
         public static Action DownloadAsync(string url, string auth, string referer, string connectionGroupName, DateTime? cacheLastModifiedTime, Action<HttpWebResponse> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
-            const int readBufferSize = 8192;
-            const int requestTimeoutMS = 60000;
-            const int readTimeoutMS = 60000;
-            object sync = new object();
-            bool aborting = false;
-            HttpWebRequest request = null;
-            HttpWebResponse response = null;
-            Stream responseStream = null;
-            Action cleanup = () => {
-                if (request != null) {
-                    request.Abort();
-                    request = null;
-                }
-                if (responseStream != null) {
-                    try { responseStream.Close(); }
-                    catch { }
-                    responseStream = null;
-                }
-                if (response != null) {
-                    try { response.Close(); }
-                    catch { }
-                    response = null;
-                }
-            };
-            Action<Exception> abortDownloadInternal = (ex) => {
-                lock (sync) {
-                    if (aborting) return;
-                    aborting = true;
-                    cleanup();
-                    onException(ex);
-                }
-            };
-            Action abortDownload = () => {
-                ThreadPool.QueueUserWorkItem((s) => {
-                    abortDownloadInternal(new Exception("Download has been aborted."));
-                });
-            };
-            lock (sync) {
-                try {
-                    request = BuildWebRequest(url: url, auth: auth, connectionGroupName: connectionGroupName, cacheLastModifiedTime: cacheLastModifiedTime, referer: referer);
-                    // Unfortunately BeginGetResponse blocks until the DNS lookup has finished
-                    IAsyncResult requestResult = request.BeginGetResponse((requestResultParam) => {
-                        lock (sync) {
-                            try {
-                                if (aborting) return;
-                                response = (HttpWebResponse)request.EndGetResponse(requestResultParam);
-                                if (GetMIMETypeFromContentType(response.ContentType) == "text/html") {
-                                    var memoryStream = new MemoryStream();
-                                    CopyStream(new ThrottledStream(response.GetResponseStream(), Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite), memoryStream);
-                                    memoryStream.Position = 0;
-                                    byte[] redirectPageBytes = memoryStream.ToArray();
-                                    Encoding pageEncoding = DetectHTMLEncoding(redirectPageBytes, response.ContentType);
-                                    string metaRedirectHtml = pageEncoding.GetString(redirectPageBytes);
-                                    memoryStream.Position = 0;
-                                    responseStream = memoryStream;
-                                    string redirectUrl = GetRedirectUrl(metaRedirectHtml, response.ResponseUri.AbsoluteUri);
-                                    if (!string.IsNullOrEmpty(redirectUrl)) {
-                                        HttpWebRequest redirectionRequest = BuildWebRequest(url: redirectUrl, auth: auth, connectionGroupName: connectionGroupName, cacheLastModifiedTime: cacheLastModifiedTime);
-                                        response = (HttpWebResponse)redirectionRequest.GetResponse();
-                                        responseStream = new ThrottledStream(response.GetResponseStream(), Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite);
-                                    }
-                                }
-                                else {
-                                    responseStream = new ThrottledStream(response.GetResponseStream(), Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite);
-                                }
-                                onResponse(response);
-                                byte[] buff = new byte[readBufferSize];
-                                AsyncCallback readCallback = null;
-                                readCallback = (readResultParam) => {
-                                    lock (sync) {
-                                        try {
-                                            if (aborting) return;
-                                            if (readResultParam != null) {
-                                                int bytesRead = responseStream.EndRead(readResultParam);
-                                                if (bytesRead == 0) {
-                                                    request = null;
-                                                    onComplete();
-                                                    aborting = true;
-                                                    cleanup();
-                                                    return;
-                                                }
-                                                onDownloadChunk(buff, bytesRead);
-                                            }
-                                            IAsyncResult readResult = responseStream.BeginRead(buff, 0, buff.Length, readCallback, null);
-                                            ThreadPool.RegisterWaitForSingleObject(readResult.AsyncWaitHandle,
-                                                (state, timedOut) => {
-                                                    if (!timedOut) return;
-                                                    abortDownloadInternal(new Exception("Timed out while reading response."));
-                                                }, null, readTimeoutMS, true);
-                                        }
-                                        catch (Exception ex) {
-                                            abortDownloadInternal(ex);
-                                        }
-                                    }
-                                };
-                                readCallback(null);
-                            }
-                            catch (Exception ex) {
-                                if (ex is WebException) {
-                                    WebException webEx = (WebException)ex;
-                                    if (webEx.Status == WebExceptionStatus.ProtocolError) {
-                                        HttpStatusCode code = ((HttpWebResponse)webEx.Response).StatusCode;
-                                        if (code == HttpStatusCode.NotFound) {
-                                            ex = new HTTP404Exception();
-                                        }
-                                        else if (code == HttpStatusCode.NotModified) {
-                                            ex = new HTTP304Exception();
-                                        }
-                                    }
-                                }
-                                abortDownloadInternal(ex);
-                            }
-                        }
-                    }, null);
-                    ThreadPool.RegisterWaitForSingleObject(requestResult.AsyncWaitHandle,
-                        (state, timedOut) => {
-                            if (!timedOut) return;
-                            abortDownloadInternal(new Exception("Timed out while waiting for response."));
-                        }, null, requestTimeoutMS, true);
-                }
-                catch (Exception ex) {
-                    abortDownloadInternal(ex);
-                }
-            }
-            return abortDownload;
+            AsyncDownload download = new AsyncDownload(auth, connectionGroupName, cacheLastModifiedTime, onResponse, onDownloadChunk, onComplete, onException);
+            download.Start(url, referer);
+            return download.Abort;
+        }
+
+        private static ThrottledStream CreateThrottledStream(Stream stream) {
+            return new ThrottledStream(stream, Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite);
+        }
+
+        private static Exception TranslateWebException(Exception ex) {
+            WebException webEx = ex as WebException;
+            if (webEx == null || webEx.Status != WebExceptionStatus.ProtocolError) return ex;
+            HttpStatusCode code = ((HttpWebResponse)webEx.Response).StatusCode;
+            if (code == HttpStatusCode.NotFound) return new HTTP404Exception();
+            if (code == HttpStatusCode.NotModified) return new HTTP304Exception();
+            return ex;
+        }
+
+        private static void CloseQuietly(Stream stream) {
+            if (stream == null) return;
+            try { stream.Close(); }
+            catch { }
+        }
+
+        private static void CloseQuietly(WebResponse response) {
+            if (response == null) return;
+            try { response.Close(); }
+            catch { }
         }
 
         public static string GetRedirectUrl(string html, string currentPage) {
@@ -171,54 +74,74 @@ namespace JDP {
                     if (string.IsNullOrEmpty(metaContent)) {
                         continue;
                     }
-                    int currentPosition = 0;
-                    currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
-                    StringBuilder timeString = new StringBuilder();
-                    while (metaContent.Length > currentPosition && (metaContent[currentPosition] >= 48 && metaContent[currentPosition] <= 57 || metaContent[currentPosition] == 46)) {
-                        timeString.Append(metaContent[currentPosition++]);
-                    }
-                    int time;
-                    int.TryParse(timeString.ToString(), out time);
-                    if (time < 0) {
-                        return null;
-                    }
-                    currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
-                    if (!IsCharacterMatch(metaContent[currentPosition++], '\u003B')) {
-                        return null;
-                    }
-                    currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
-                    if (!IsCharacterMatch(metaContent[currentPosition++], '\u0055')) {
-                        return null;
-                    }
-                    if (!IsCharacterMatch(metaContent[currentPosition++], '\u0052')) {
-                        return null;
-                    }
-                    if (!IsCharacterMatch(metaContent[currentPosition++], '\u004C')) {
-                        return null;
-                    }
-                    currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
-                    if (!IsCharacterMatch(metaContent[currentPosition++], '\u003D')) {
-                        return null;
-                    }
-                    currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
-                    char quote = new char();
-                    if (IsCharacterMatch(metaContent[currentPosition], '\u0027') || IsCharacterMatch(metaContent[currentPosition], '\u0022')) {
-                        quote = metaContent[currentPosition++];
-                    }
-                    string redirectUrl = metaContent.Substring(currentPosition);
-                    if (!string.IsNullOrEmpty(quote.ToString())) {
-                        redirectUrl = redirectUrl.TrimEnd(quote);
-                    }
-                    redirectUrl = redirectUrl.TrimEnd('\u0020', '\u0009', '\u000A', '\u000C', '\u000D');
-                    redirectUrl = redirectUrl.Replace('\u0009', '\0').Replace('\u000A', '\0').Replace('\u000D', '\0');
-                    redirectUrl = GetAbsoluteURL(currentPage, redirectUrl);
-                    return redirectUrl;
+                    return ParseMetaRefreshContent(metaContent, currentPage);
                 }
                 return null;
             }
             catch {
                 return null;
             }
+        }
+
+        // Throws IndexOutOfRangeException if the content ends early; GetRedirectUrl treats that as no redirect.
+        private static string ParseMetaRefreshContent(string metaContent, string currentPage) {
+            int currentPosition = 0;
+            currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
+            currentPosition = SkipMetaRefreshTime(metaContent, currentPosition);
+            if (currentPosition == -1) {
+                return null;
+            }
+            // ";", "URL" and "=", each optionally preceded by whitespace
+            foreach (string token in new[] { "\u003B", "\u0055\u0052\u004C", "\u003D" }) {
+                currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
+                currentPosition = MatchCharacters(metaContent, currentPosition, token);
+                if (currentPosition == -1) {
+                    return null;
+                }
+            }
+            currentPosition = GetNextNonWhiteSpaceCharacterPosition(metaContent, currentPosition);
+            return GetMetaRefreshURL(metaContent, currentPosition, currentPage);
+        }
+
+        private static int SkipMetaRefreshTime(string metaContent, int currentPosition) {
+            StringBuilder timeString = new StringBuilder();
+            while (metaContent.Length > currentPosition && IsMetaRefreshTimeCharacter(metaContent[currentPosition])) {
+                timeString.Append(metaContent[currentPosition++]);
+            }
+            int time;
+            int.TryParse(timeString.ToString(), out time);
+            if (time < 0) {
+                return -1;
+            }
+            return currentPosition;
+        }
+
+        private static bool IsMetaRefreshTimeCharacter(char c) {
+            return c >= 48 && c <= 57 || c == 46;
+        }
+
+        private static int MatchCharacters(string str, int currentPosition, string expected) {
+            foreach (char c in expected) {
+                if (!IsCharacterMatch(str[currentPosition++], c)) {
+                    return -1;
+                }
+            }
+            return currentPosition;
+        }
+
+        private static string GetMetaRefreshURL(string metaContent, int currentPosition, string currentPage) {
+            char quote = new char();
+            if (IsCharacterMatch(metaContent[currentPosition], '\u0027') || IsCharacterMatch(metaContent[currentPosition], '\u0022')) {
+                quote = metaContent[currentPosition++];
+            }
+            string redirectUrl = metaContent.Substring(currentPosition);
+            if (!string.IsNullOrEmpty(quote.ToString())) {
+                redirectUrl = redirectUrl.TrimEnd(quote);
+            }
+            redirectUrl = redirectUrl.TrimEnd('\u0020', '\u0009', '\u000A', '\u000C', '\u000D');
+            redirectUrl = redirectUrl.Replace('\u0009', '\0').Replace('\u000A', '\0').Replace('\u000D', '\0');
+            redirectUrl = GetAbsoluteURL(currentPage, redirectUrl);
+            return redirectUrl;
         }
 
         public static string DownloadPageToString(string url) {
@@ -236,15 +159,9 @@ namespace JDP {
                 return encoding.GetString(pageBytes);
             }
             finally {
-                if (responseStream != null)
-                    try { responseStream.Close(); }
-                    catch { }
-                if (response != null)
-                    try { response.Close(); }
-                    catch { }
-                if (memoryStream != null)
-                    try { memoryStream.Close(); }
-                    catch { }
+                CloseQuietly(responseStream);
+                CloseQuietly(response);
+                CloseQuietly(memoryStream);
             }
         }
 
@@ -254,7 +171,7 @@ namespace JDP {
                 request.ConnectionGroupName = connectionGroupName;
             }
             // 4chan blocks (HTTP 403) non-browser user agents, so default to a browser-like one
-            request.UserAgent = (Settings.UseCustomUserAgent == true) ? Settings.CustomUserAgent : DefaultUserAgent;
+            request.UserAgent = GetUserAgent();
             if (cacheLastModifiedTime != null) {
                 request.IfModifiedSince = cacheLastModifiedTime.Value;
             }
@@ -266,6 +183,10 @@ namespace JDP {
                 request.Referer = referer;
             }
             return request;
+        }
+
+        private static string GetUserAgent() {
+            return (Settings.UseCustomUserAgent == true) ? Settings.CustomUserAgent : DefaultUserAgent;
         }
 
         private static void CopyStream(Stream srcStream, params Stream[] dstStreams) {
@@ -308,25 +229,38 @@ namespace JDP {
         }
 
         public static Encoding DetectHTMLEncoding(byte[] bytes, string httpContentType) {
-            string charSet =
-                GetCharSetFromContentType(httpContentType) ??
-                DetectCharacterSetFromBOM(bytes) ??
-                DetectCharacterSetFromContent(bytes, httpContentType);
+            string charSet = DetectCharacterSet(bytes, httpContentType);
             if (charSet != null) {
-                if (IsUTF8(charSet)) {
-                    return new UTF8Encoding(HasBOM(bytes));
-                }
-                else if (IsUTF16(charSet)) {
-                    return new UnicodeEncoding(IsUTFBigEndian(charSet) ?? false, HasBOM(bytes));
-                }
-                else {
-                    try {
-                        return Encoding.GetEncoding(charSet);
-                    }
-                    catch { }
+                Encoding encoding = GetEncodingFromCharacterSet(charSet, bytes);
+                if (encoding != null) {
+                    return encoding;
                 }
             }
             return Encoding.GetEncoding("Windows-1252");
+        }
+
+        private static string DetectCharacterSet(byte[] bytes, string httpContentType) {
+            return
+                GetCharSetFromContentType(httpContentType) ??
+                DetectCharacterSetFromBOM(bytes) ??
+                DetectCharacterSetFromContent(bytes, httpContentType);
+        }
+
+        // Returns null if the character set is not supported
+        private static Encoding GetEncodingFromCharacterSet(string charSet, byte[] bytes) {
+            if (IsUTF8(charSet)) {
+                return new UTF8Encoding(HasBOM(bytes));
+            }
+            else if (IsUTF16(charSet)) {
+                return new UnicodeEncoding(IsUTFBigEndian(charSet) ?? false, HasBOM(bytes));
+            }
+            else {
+                try {
+                    return Encoding.GetEncoding(charSet);
+                }
+                catch { }
+            }
+            return null;
         }
 
         private static string DetectCharacterSetFromBOM(byte[] bytes) {
@@ -342,38 +276,55 @@ namespace JDP {
             string text = UnknownEncodingToString(bytes, 4096);
             HTMLParser htmlParser = new HTMLParser(text);
             string mimeType = GetMIMETypeFromContentType(httpContentType) ?? String.Empty;
-            string charSet;
 
-            if (mimeType.Equals("application/xhtml+xml", StringComparison.OrdinalIgnoreCase) ||
-                mimeType.Equals("application/xml", StringComparison.OrdinalIgnoreCase) ||
-                mimeType.Equals("text/xml", StringComparison.OrdinalIgnoreCase))
-            {
-                if (text.StartsWith("<?xml", StringComparison.OrdinalIgnoreCase)) {
-                    // XML declaration
-                    HTMLParser xmlParser = new HTMLParser("<" + text.Substring(2));
-                    HTMLTag xmlTag = xmlParser.Tags.Count >= 1 ? xmlParser.Tags[0] : null;
-                    if (xmlTag != null && xmlTag.NameEquals("xml") && xmlTag.Offset == 0) {
-                        charSet = xmlTag.GetAttributeValue("encoding");
-                        if (!String.IsNullOrEmpty(charSet)) return charSet;
-                    }
-                }
-
-                // Default
-                return "UTF-8";
+            if (IsXMLMIMEType(mimeType)) {
+                return DetectCharacterSetFromXMLDeclaration(text);
             }
 
             foreach (HTMLTag tag in htmlParser.FindStartTags("meta")) {
-                // charset attribute
-                charSet = tag.GetAttributeValue("charset");
+                string charSet = GetCharSetFromMetaTag(tag);
                 if (!String.IsNullOrEmpty(charSet)) return charSet;
-
-                // http-equiv and content attributes
-                if (tag.GetAttributeValueOrEmpty("http-equiv").Trim().Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) {
-                    charSet = GetCharSetFromContentType(tag.GetAttributeValue("content"));
-                    if (!String.IsNullOrEmpty(charSet)) return charSet;
-                }
             }
 
+            return null;
+        }
+
+        private static bool IsXMLMIMEType(string mimeType) {
+            return mimeType.Equals("application/xhtml+xml", StringComparison.OrdinalIgnoreCase) ||
+                   mimeType.Equals("application/xml", StringComparison.OrdinalIgnoreCase) ||
+                   mimeType.Equals("text/xml", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string DetectCharacterSetFromXMLDeclaration(string text) {
+            HTMLTag xmlTag = GetXMLDeclarationTag(text);
+            if (xmlTag != null) {
+                string charSet = xmlTag.GetAttributeValue("encoding");
+                if (!String.IsNullOrEmpty(charSet)) return charSet;
+            }
+
+            // Default
+            return "UTF-8";
+        }
+
+        private static HTMLTag GetXMLDeclarationTag(string text) {
+            if (!text.StartsWith("<?xml", StringComparison.OrdinalIgnoreCase)) return null;
+            // XML declaration
+            HTMLParser xmlParser = new HTMLParser("<" + text.Substring(2));
+            if (xmlParser.Tags.Count < 1) return null;
+            HTMLTag xmlTag = xmlParser.Tags[0];
+            if (xmlTag.NameEquals("xml") && xmlTag.Offset == 0) return xmlTag;
+            return null;
+        }
+
+        private static string GetCharSetFromMetaTag(HTMLTag tag) {
+            // charset attribute
+            string charSet = tag.GetAttributeValue("charset");
+            if (!String.IsNullOrEmpty(charSet)) return charSet;
+
+            // http-equiv and content attributes
+            if (tag.GetAttributeValueOrEmpty("http-equiv").Trim().Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) {
+                return GetCharSetFromContentType(tag.GetAttributeValue("content"));
+            }
             return null;
         }
 
@@ -394,16 +345,22 @@ namespace JDP {
                 if (pos == -1) continue;
                 string name = part.Substring(0, pos).Trim();
                 if (!name.Equals("charset", StringComparison.OrdinalIgnoreCase)) continue;
-                string value = part.Substring(pos + 1).Trim();
-                bool isQuoted = value.Length >= 1 && (value[0] == '"' || value[0] == '\'');
-                if (isQuoted) {
-                    pos = value.IndexOf(value[0], 1);
-                    if (pos == -1) pos = value.Length;
-                    value = value.Substring(1, pos - 1).Trim();
-                }
-                return value.Length != 0 ? value : null;
+                return ParseCharSetValue(part.Substring(pos + 1).Trim());
             }
             return null;
+        }
+
+        private static string ParseCharSetValue(string value) {
+            if (IsQuotedValue(value)) {
+                int pos = value.IndexOf(value[0], 1);
+                if (pos == -1) pos = value.Length;
+                value = value.Substring(1, pos - 1).Trim();
+            }
+            return value.Length != 0 ? value : null;
+        }
+
+        private static bool IsQuotedValue(string value) {
+            return value.Length >= 1 && (value[0] == '"' || value[0] == '\'');
         }
 
         public static string UnknownEncodingToString(byte[] src, int maxLength) {
@@ -418,10 +375,18 @@ namespace JDP {
         }
 
         private static BOMType GetBOMType(byte[] bytes) {
-            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return BOMType.UTF8;
-            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) return BOMType.UTF16LE;
-            if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) return BOMType.UTF16BE;
+            if (StartsWithBytes(bytes, 0xEF, 0xBB, 0xBF)) return BOMType.UTF8;
+            if (StartsWithBytes(bytes, 0xFF, 0xFE)) return BOMType.UTF16LE;
+            if (StartsWithBytes(bytes, 0xFE, 0xFF)) return BOMType.UTF16BE;
             return BOMType.None;
+        }
+
+        private static bool StartsWithBytes(byte[] bytes, params byte[] prefix) {
+            if (bytes.Length < prefix.Length) return false;
+            for (int i = 0; i < prefix.Length; i++) {
+                if (bytes[i] != prefix[i]) return false;
+            }
+            return true;
         }
 
         private static bool HasBOM(byte[] bytes) {
@@ -481,6 +446,10 @@ namespace JDP {
                 url = "http://" + url;
             }
             if (url.IndexOf('/', url.IndexOf("//", StringComparison.Ordinal) + 2) == -1) return null;
+            return TryGetAbsoluteURI(url);
+        }
+
+        private static string TryGetAbsoluteURI(string url) {
             try {
                 Uri uri;
                 if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return null;
@@ -570,18 +539,24 @@ namespace JDP {
 
         public static bool IsFileNameTooLong(string dir, int fileNameLength) {
             if (!Directory.Exists(dir)) throw new DirectoryNotFoundException();
-            string path = null;
-            bool foundFreeFileName = false;
-            for (char c = 'a'; c <= 'z'; c++) {
-                path = Path.Combine(dir, new string(c, fileNameLength));
-                if (!File.Exists(path)) {
-                    foundFreeFileName = true;
-                    break;
-                }
-            }
-            if (!foundFreeFileName) {
+            string path = FindUnusedFilePath(dir, fileNameLength);
+            if (path == null) {
                 throw new Exception("Unable to determine if filename is too long.");
             }
+            return IsFilePathTooLong(path);
+        }
+
+        private static string FindUnusedFilePath(string dir, int fileNameLength) {
+            for (char c = 'a'; c <= 'z'; c++) {
+                string path = Path.Combine(dir, new string(c, fileNameLength));
+                if (!File.Exists(path)) {
+                    return path;
+                }
+            }
+            return null;
+        }
+
+        private static bool IsFilePathTooLong(string path) {
             try {
                 using (File.Create(path)) { }
                 try { File.Delete(path); }
@@ -608,12 +583,13 @@ namespace JDP {
 
         public static int ParseVersionNumber(string str) {
             string[] split = str.Split('.');
+            int[] masks = { 0x7F, 0xFF, 0xFF, 0xFF };
+            int[] shifts = { 24, 16, 8, 0 };
             int num = 0;
             try {
-                if (split.Length >= 1) num |= (Int32.Parse(split[0]) & 0x7F) << 24;
-                if (split.Length >= 2) num |= (Int32.Parse(split[1]) & 0xFF) << 16;
-                if (split.Length >= 3) num |= (Int32.Parse(split[2]) & 0xFF) << 8;
-                if (split.Length >= 4) num |= (Int32.Parse(split[3]) & 0xFF);
+                for (int i = 0; i < split.Length && i < masks.Length; i++) {
+                    num |= (Int32.Parse(split[i]) & masks[i]) << shifts[i];
+                }
                 return num;
             }
             catch {
@@ -649,18 +625,27 @@ namespace JDP {
             replaceList.Sort((x, y) => x.Offset.CompareTo(y.Offset));
             for (int iReplace = 0; iReplace < replaceList.Count; iReplace++) {
                 ReplaceInfo replace = replaceList[iReplace];
-                if (replace.Offset < offset || replace.Length < 0) continue;
+                if (IsSkippedReplace(replace, offset)) continue;
                 if (replace.Offset + replace.Length > str.Length) break;
-                if (replace.Offset > offset) {
-                    outStream.Write(str.Substring(offset, replace.Offset - offset));
-                }
-                if (!String.IsNullOrEmpty(replace.Value)) {
-                    outStream.Write(replace.Value);
-                }
+                WriteReplace(str, offset, replace, outStream);
                 offset = replace.Offset + replace.Length;
             }
             if (str.Length > offset) {
                 outStream.Write(str.Substring(offset));
+            }
+        }
+
+        // Overlapping and negative length replacements are ignored
+        private static bool IsSkippedReplace(ReplaceInfo replace, int offset) {
+            return replace.Offset < offset || replace.Length < 0;
+        }
+
+        private static void WriteReplace(string str, int offset, ReplaceInfo replace, TextWriter outStream) {
+            if (replace.Offset > offset) {
+                outStream.Write(str.Substring(offset, replace.Offset - offset));
+            }
+            if (!String.IsNullOrEmpty(replace.Value)) {
+                outStream.Write(replace.Value);
             }
         }
 
@@ -672,16 +657,7 @@ namespace JDP {
             }
 
             if (Environment.NewLine != "\n") {
-                int offset = 0;
-                while ((offset = htmlParser.PreprocessedHTML.IndexOf('\n', offset)) != -1) {
-                    replaceList.Add(new ReplaceInfo {
-                        Offset = offset,
-                        Length = 1,
-                        Type = ReplaceType.Other,
-                        Value = Environment.NewLine
-                    });
-                    offset += 1;
-                }
+                AddNewLineReplaces(htmlParser, replaceList);
             }
 
             foreach (HTMLTag tag in htmlParser.FindStartTags("base")) {
@@ -694,36 +670,58 @@ namespace JDP {
                     });
             }
 
+            AddURLAttributeReplaces(htmlParser, pageURL, replaceList, existingOffsets);
+        }
+
+        private static void AddNewLineReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {
+            int offset = 0;
+            while ((offset = htmlParser.PreprocessedHTML.IndexOf('\n', offset)) != -1) {
+                replaceList.Add(new ReplaceInfo {
+                    Offset = offset,
+                    Length = 1,
+                    Type = ReplaceType.Other,
+                    Value = Environment.NewLine
+                });
+                offset += 1;
+            }
+        }
+
+        private static void AddURLAttributeReplaces(HTMLParser htmlParser, string pageURL, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets) {
             foreach (HTMLTag tag in htmlParser.FindStartTags("a", "img", "script", "link")) {
-                bool isATag = tag.NameEquals("a");
-                bool isImgTag = tag.NameEquals("img");
-                bool isScriptTag = tag.NameEquals("script");
-                bool isLinkTag = tag.NameEquals("link");
-                bool usesHRefAttr = isATag || isLinkTag;
-                bool usesSrcAttr = isImgTag || isScriptTag;
-                if (usesHRefAttr || usesSrcAttr) {
-                    HTMLAttribute attribute = tag.GetAttribute(usesHRefAttr ? "href" : usesSrcAttr ? "src" : null);
-                    if (attribute != null && !existingOffsets.Contains(attribute.Offset)) {
-                        // Make attribute's URL absolute
-                        string newURL = GetAbsoluteURL(pageURL, HttpUtility.HtmlDecode(attribute.Value));
-                        // For links to anchors on the current page, use just the fragment
-                        if (isATag && newURL != null && newURL.Length > pageURL.Length &&
-                            newURL.StartsWith(pageURL, StringComparison.Ordinal) && newURL[pageURL.Length] == '#')
-                        {
-                            newURL = newURL.Substring(pageURL.Length);
-                        }
-                        if (newURL != null) {
-                            replaceList.Add(
-                                new ReplaceInfo {
-                                    Offset = attribute.Offset,
-                                    Length = attribute.Length,
-                                    Type = ReplaceType.Other,
-                                    Value = attribute.Name + "=\"" + HttpUtility.HtmlAttributeEncode(newURL) + "\""
-                                });
-                        }
-                    }
+                HTMLAttribute attribute = GetURLAttribute(tag);
+                if (attribute == null || existingOffsets.Contains(attribute.Offset)) continue;
+                string newURL = GetReplacementURL(pageURL, attribute.Value, tag.NameEquals("a"));
+                if (newURL != null) {
+                    replaceList.Add(
+                        new ReplaceInfo {
+                            Offset = attribute.Offset,
+                            Length = attribute.Length,
+                            Type = ReplaceType.Other,
+                            Value = attribute.Name + "=\"" + HttpUtility.HtmlAttributeEncode(newURL) + "\""
+                        });
                 }
             }
+        }
+
+        private static HTMLAttribute GetURLAttribute(HTMLTag tag) {
+            if (tag.NameEqualsAny("a", "link")) return tag.GetAttribute("href");
+            if (tag.NameEqualsAny("img", "script")) return tag.GetAttribute("src");
+            return null;
+        }
+
+        private static string GetReplacementURL(string pageURL, string attributeValue, bool isATag) {
+            // Make attribute's URL absolute
+            string newURL = GetAbsoluteURL(pageURL, HttpUtility.HtmlDecode(attributeValue));
+            // For links to anchors on the current page, use just the fragment
+            if (isATag && IsAnchorOnPage(newURL, pageURL)) {
+                newURL = newURL.Substring(pageURL.Length);
+            }
+            return newURL;
+        }
+
+        private static bool IsAnchorOnPage(string url, string pageURL) {
+            return url != null && url.Length > pageURL.Length &&
+                url.StartsWith(pageURL, StringComparison.Ordinal) && url[pageURL.Length] == '#';
         }
 
         public static string URLFileName(string url) {
@@ -773,7 +771,7 @@ namespace JDP {
                 string path = Path.Combine(Settings.GetSettingsDirectory(), Settings.ThreadsFileName);
                 if (!File.Exists(path)) return;
                 var backupInfo = new FileInfo(path + ".bak");
-                if (!checkSize || !backupInfo.Exists || new FileInfo(path).Length >= backupInfo.Length) {
+                if (ShouldBackupThreadList(path, backupInfo, checkSize)) {
                     string[] lines = File.ReadAllLines(path);
                     if (lines.Length < 1) return;
                     File.WriteAllLines(path + ".bak", lines);
@@ -781,6 +779,163 @@ namespace JDP {
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
+            }
+        }
+
+        // When checking size, avoid overwriting a larger backup with a smaller thread list
+        private static bool ShouldBackupThreadList(string path, FileInfo backupInfo, bool checkSize) {
+            return !checkSize || !backupInfo.Exists || new FileInfo(path).Length >= backupInfo.Length;
+        }
+
+        // Holds the state shared by the asynchronous callbacks of a single DownloadAsync call.
+        // All state changes happen while holding _sync.
+        private sealed class AsyncDownload {
+            private const int ReadBufferSize = 8192;
+            private const int RequestTimeoutMS = 60000;
+            private const int ReadTimeoutMS = 60000;
+
+            private readonly object _sync = new object();
+            private readonly string _auth;
+            private readonly string _connectionGroupName;
+            private readonly DateTime? _cacheLastModifiedTime;
+            private readonly Action<HttpWebResponse> _onResponse;
+            private readonly Action<byte[], int> _onDownloadChunk;
+            private readonly Action _onComplete;
+            private readonly Action<Exception> _onException;
+            private bool _aborting;
+            private HttpWebRequest _request;
+            private HttpWebResponse _response;
+            private Stream _responseStream;
+            private byte[] _buff;
+
+            public AsyncDownload(string auth, string connectionGroupName, DateTime? cacheLastModifiedTime, Action<HttpWebResponse> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
+                _auth = auth;
+                _connectionGroupName = connectionGroupName;
+                _cacheLastModifiedTime = cacheLastModifiedTime;
+                _onResponse = onResponse;
+                _onDownloadChunk = onDownloadChunk;
+                _onComplete = onComplete;
+                _onException = onException;
+            }
+
+            public void Start(string url, string referer) {
+                lock (_sync) {
+                    try {
+                        _request = BuildWebRequest(url: url, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime, referer: referer);
+                        // Unfortunately BeginGetResponse blocks until the DNS lookup has finished
+                        IAsyncResult requestResult = _request.BeginGetResponse(OnGetResponse, null);
+                        AbortOnTimeout(requestResult, RequestTimeoutMS, "Timed out while waiting for response.");
+                    }
+                    catch (Exception ex) {
+                        AbortInternal(ex);
+                    }
+                }
+            }
+
+            public void Abort() {
+                ThreadPool.QueueUserWorkItem((s) => {
+                    AbortInternal(new Exception("Download has been aborted."));
+                });
+            }
+
+            private void AbortInternal(Exception ex) {
+                lock (_sync) {
+                    if (_aborting) return;
+                    _aborting = true;
+                    Cleanup();
+                    _onException(ex);
+                }
+            }
+
+            private void AbortOnTimeout(IAsyncResult asyncResult, int timeoutMS, string message) {
+                ThreadPool.RegisterWaitForSingleObject(asyncResult.AsyncWaitHandle,
+                    (state, timedOut) => {
+                        if (!timedOut) return;
+                        AbortInternal(new Exception(message));
+                    }, null, timeoutMS, true);
+            }
+
+            private void Cleanup() {
+                if (_request != null) {
+                    _request.Abort();
+                    _request = null;
+                }
+                CloseQuietly(_responseStream);
+                _responseStream = null;
+                CloseQuietly(_response);
+                _response = null;
+            }
+
+            private void OnGetResponse(IAsyncResult requestResultParam) {
+                lock (_sync) {
+                    try {
+                        if (_aborting) return;
+                        _response = (HttpWebResponse)_request.EndGetResponse(requestResultParam);
+                        OpenResponseStream();
+                        _onResponse(_response);
+                        _buff = new byte[ReadBufferSize];
+                        OnRead(null);
+                    }
+                    catch (Exception ex) {
+                        AbortInternal(TranslateWebException(ex));
+                    }
+                }
+            }
+
+            private void OpenResponseStream() {
+                if (GetMIMETypeFromContentType(_response.ContentType) == "text/html") {
+                    OpenHTMLResponseStream();
+                }
+                else {
+                    _responseStream = CreateThrottledStream(_response.GetResponseStream());
+                }
+            }
+
+            // Buffers the page so it can be checked for a meta refresh redirect, and follows it if present
+            private void OpenHTMLResponseStream() {
+                var memoryStream = new MemoryStream();
+                CopyStream(CreateThrottledStream(_response.GetResponseStream()), memoryStream);
+                memoryStream.Position = 0;
+                byte[] redirectPageBytes = memoryStream.ToArray();
+                Encoding pageEncoding = DetectHTMLEncoding(redirectPageBytes, _response.ContentType);
+                string metaRedirectHtml = pageEncoding.GetString(redirectPageBytes);
+                memoryStream.Position = 0;
+                _responseStream = memoryStream;
+                string redirectUrl = GetRedirectUrl(metaRedirectHtml, _response.ResponseUri.AbsoluteUri);
+                if (!string.IsNullOrEmpty(redirectUrl)) {
+                    HttpWebRequest redirectionRequest = BuildWebRequest(url: redirectUrl, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime);
+                    _response = (HttpWebResponse)redirectionRequest.GetResponse();
+                    _responseStream = CreateThrottledStream(_response.GetResponseStream());
+                }
+            }
+
+            private void OnRead(IAsyncResult readResultParam) {
+                lock (_sync) {
+                    try {
+                        if (_aborting) return;
+                        if (!HandleReadResult(readResultParam)) return;
+                        IAsyncResult readResult = _responseStream.BeginRead(_buff, 0, _buff.Length, OnRead, null);
+                        AbortOnTimeout(readResult, ReadTimeoutMS, "Timed out while reading response.");
+                    }
+                    catch (Exception ex) {
+                        AbortInternal(ex);
+                    }
+                }
+            }
+
+            // Returns false when the download has completed and no further reads should be started
+            private bool HandleReadResult(IAsyncResult readResultParam) {
+                if (readResultParam == null) return true;
+                int bytesRead = _responseStream.EndRead(readResultParam);
+                if (bytesRead == 0) {
+                    _request = null;
+                    _onComplete();
+                    _aborting = true;
+                    Cleanup();
+                    return false;
+                }
+                _onDownloadChunk(_buff, bytesRead);
+                return true;
             }
         }
     }
