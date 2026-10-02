@@ -1,10 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
-using System.Net.Sockets;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Threading;
+using JDP.Tests.Integration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
@@ -50,37 +48,43 @@ namespace JDP.Tests {
 
         [TestMethod]
         public void MetaRefreshToOtherOriginDropsCredentials() {
-            using (var target = new LoopbackServer(OkResponse))
-            using (var start = new LoopbackServer(MetaRefreshResponse("http://localhost:" + target.Port + "/x"))) {
+            using (var target = new LoopbackHttpServer())
+            using (var start = new LoopbackHttpServer()) {
+                target.Route("/x", OkResponse);
+                start.Route("/start", MetaRefreshResponse(target.URL("/x", "localhost")));
+
                 Download(start.URL("/start"), "user:pass", null);
 
-                StringAssert.Contains(start.Requests[0], "Authorization: Basic");
-                Assert.DoesNotContain("Authorization", target.Requests[0]);
+                Assert.AreEqual("user:pass", start.Requests[0].BasicAuth);
+                Assert.IsNull(target.Requests[0].Header("Authorization"));
             }
         }
 
         // Pins framework behavior S2 relies on: HttpWebRequest drops a manually added Authorization header on automatic redirects
         [TestMethod]
         public void HttpRedirectToOtherOriginDropsCredentials() {
-            using (var target = new LoopbackServer(OkResponse))
-            using (var start = new LoopbackServer("HTTP/1.1 302 Found\r\nLocation: http://localhost:" + target.Port + "/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")) {
+            using (var target = new LoopbackHttpServer())
+            using (var start = new LoopbackHttpServer()) {
+                target.Route("/x", OkResponse);
+                start.Route("/start", LoopbackResponse.Raw("HTTP/1.1 302 Found\r\nLocation: " + target.URL("/x", "localhost") + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+
                 Download(start.URL("/start"), "user:pass", null);
 
-                StringAssert.Contains(start.Requests[0], "Authorization: Basic");
-                Assert.DoesNotContain("Authorization", target.Requests[0]);
+                Assert.AreEqual("user:pass", start.Requests[0].BasicAuth);
+                Assert.IsNull(target.Requests[0].Header("Authorization"));
             }
         }
 
         [TestMethod]
         public void MetaRefreshToSameOriginKeepsCredentials() {
-            using (var server = new LoopbackServer()) {
-                server.Responses.Add(MetaRefreshResponse(server.URL("/next")));
-                server.Responses.Add(OkResponse);
+            using (var server = new LoopbackHttpServer()) {
+                server.Route("/start", MetaRefreshResponse(server.URL("/next")));
+                server.Route("/next", OkResponse);
 
                 Download(server.URL("/start"), "user:pass", null);
 
                 Assert.HasCount(2, server.Requests);
-                StringAssert.Contains(server.Requests[1], "Authorization: Basic");
+                Assert.AreEqual("user:pass", server.Requests[1].BasicAuth);
             }
         }
 
@@ -119,18 +123,19 @@ namespace JDP.Tests {
         // S8
         [TestMethod]
         public void DownloadSendsRefererWithoutAuth() {
-            using (var server = new LoopbackServer(OkResponse)) {
+            using (var server = new LoopbackHttpServer()) {
+                server.Route("/image.jpg", OkResponse);
+
                 Download(server.URL("/image.jpg"), null, "https://boards.example.org/a/thread/1");
 
-                StringAssert.Contains(server.Requests[0], "Referer: https://boards.example.org/a/thread/1");
+                Assert.AreEqual("https://boards.example.org/a/thread/1", server.Requests[0].Header("Referer"));
             }
         }
 
-        private const string OkResponse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        private static readonly LoopbackResponse OkResponse = LoopbackResponse.Text("ok");
 
-        private static string MetaRefreshResponse(string url) {
-            string body = "<html><head><meta http-equiv=\"refresh\" content=\"0; URL=" + url + "\"></head></html>";
-            return "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n" + body;
+        private static LoopbackResponse MetaRefreshResponse(string url) {
+            return LoopbackResponse.Html("<html><head><meta http-equiv=\"refresh\" content=\"0; URL=" + url + "\"></head></html>");
         }
 
         private static void Download(string url, string auth, string referer) {
@@ -139,48 +144,6 @@ namespace JDP.Tests {
             General.DownloadAsync(url, auth, referer, null, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
             Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download timed out");
             Assert.IsNull(error, error?.ToString());
-        }
-
-        // Minimal HTTP server on 127.0.0.1 that answers each connection with the next canned response and records the raw request
-        private sealed class LoopbackServer : IDisposable {
-            private readonly TcpListener _listener = new TcpListener(IPAddress.Loopback, 0);
-            private readonly Thread _thread;
-
-            public List<string> Responses { get; } = new List<string>();
-            public List<string> Requests { get; } = new List<string>();
-
-            public LoopbackServer(params string[] responses) {
-                Responses.AddRange(responses);
-                _listener.Start();
-                _thread = new Thread(Serve) { IsBackground = true };
-                _thread.Start();
-            }
-
-            public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
-
-            public string URL(string path) => "http://127.0.0.1:" + Port + path;
-
-            private void Serve() {
-                try {
-                    for (int i = 0; ; i++) {
-                        using (TcpClient client = _listener.AcceptTcpClient())
-                        using (NetworkStream stream = client.GetStream()) {
-                            var buffer = new byte[16384];
-                            int length = stream.Read(buffer, 0, buffer.Length);
-                            lock (Requests) Requests.Add(Encoding.ASCII.GetString(buffer, 0, length));
-                            byte[] response = Encoding.ASCII.GetBytes(Responses[Math.Min(i, Responses.Count - 1)]);
-                            stream.Write(response, 0, response.Length);
-                        }
-                    }
-                }
-                catch (SocketException) { }
-                catch (ObjectDisposedException) { }
-            }
-
-            public void Dispose() {
-                _listener.Stop();
-                _thread.Join(5000);
-            }
         }
     }
 }

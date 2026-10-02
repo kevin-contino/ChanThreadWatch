@@ -31,7 +31,38 @@ namespace JDP {
             { "endchan.org", typeof(LynxChanSiteHelper) }
         };
 
+        // Exact host name overrides, only set by tests (e.g. to parse a loopback server as 4chan)
+        private static readonly Dictionary<string, Type> _testHostHelpers = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+
+        internal static void RegisterHostForTesting(string host, Type helperType) {
+            lock (_testHostHelpers) {
+                _testHostHelpers[host] = helperType;
+            }
+        }
+
+        internal static void UnregisterHostForTesting(string host) {
+            lock (_testHostHelpers) {
+                _testHostHelpers.Remove(host);
+            }
+        }
+
         public static SiteHelper GetInstance(string host) {
+            Type type = FindTestHostHelperType(host) ?? FindHelperType(host);
+            if (type != null && type.IsSubclassOf(typeof(SiteHelper))) {
+                return (SiteHelper)Activator.CreateInstance(type);
+            }
+            return new SiteHelper();
+        }
+
+        private static Type FindTestHostHelperType(string host) {
+            lock (_testHostHelpers) {
+                Type type;
+                return _testHostHelpers.TryGetValue(host, out type) ? type : null;
+            }
+        }
+
+        // Returns the helper type of the shortest matching domain suffix, or null if none matches
+        private static Type FindHelperType(string host) {
             Type type = null;
             string[] hostSplit = host.ToLower(CultureInfo.InvariantCulture).Split('.');
             for (int i = hostSplit.Length - 1; i >= 0; i--) {
@@ -40,10 +71,7 @@ namespace JDP {
                     type = _siteHelpers[domain];
                 }
             }
-            if (type != null && type.IsSubclassOf(typeof(SiteHelper))) {
-                return (SiteHelper)Activator.CreateInstance(type);
-            }
-            return new SiteHelper();
+            return type;
         }
     }
 

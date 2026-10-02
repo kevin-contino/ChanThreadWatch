@@ -21,6 +21,8 @@ using System.Runtime.InteropServices;
 
 [assembly: ComVisible(false)]
 
+[assembly: InternalsVisibleTo("ChanThreadWatch.Tests")]
+
 // The following GUID is for the ID of the typelib if this project is exposed to COM
 
 [assembly: Guid("edc5b3de-0f23-4083-83de-95b1ef770b46")]

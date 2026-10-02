@@ -1,0 +1,78 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace JDP.Tests.Integration {
+    // Drives the real ThreadWatcher against loopback servers. Each test gets empty settings, its own
+    // download folder under %TEMP%, and 127.0.0.1 parsed as a 4chan host. Settings and the
+    // watcher's work scheduler are process-global, so these tests must not run in parallel.
+    public abstract class ThreadWatcherIntegrationTestBase {
+        protected const string PageHost = "127.0.0.1";
+        protected static readonly TimeSpan RunTimeout = TimeSpan.FromSeconds(30);
+
+        private readonly List<LoopbackHttpServer> _servers = new List<LoopbackHttpServer>();
+
+        protected string DownloadDir { get; private set; }
+
+        [TestInitialize]
+        public void SetUpIntegration() {
+            Settings.UseExeDirectoryForSettings = true;
+            Settings.Load();
+            DownloadDir = Path.Combine(Path.GetTempPath(), "ctw-it-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(DownloadDir);
+            Settings.DownloadFolder = DownloadDir;
+            Settings.DownloadFolderIsRelative = false;
+            SiteHelpers.RegisterHostForTesting(PageHost, typeof(FourChanSiteHelper));
+        }
+
+        [TestCleanup]
+        public void TearDownIntegration() {
+            SiteHelpers.UnregisterHostForTesting(PageHost);
+            foreach (LoopbackHttpServer server in _servers) server.Dispose();
+            _servers.Clear();
+            Settings.Load();
+            DeleteDirectory(DownloadDir);
+        }
+
+        protected LoopbackHttpServer StartServer() {
+            var server = new LoopbackHttpServer();
+            _servers.Add(server);
+            return server;
+        }
+
+        protected static ThreadWatcher CreateWatcher(string pageURL) {
+            return new ThreadWatcher(pageURL) { OneTimeDownload = true };
+        }
+
+        // Starts one check and waits for the watcher to raise StopStatus
+        protected static StopReason RunToStop(ThreadWatcher watcher) {
+            var stopped = new ManualResetEvent(false);
+            StopReason reason = StopReason.Other;
+            watcher.StopStatus += (s, e) => { reason = e.StopReason; stopped.Set(); };
+            watcher.Start();
+            Assert.IsTrue(stopped.WaitOne(RunTimeout), "ThreadWatcher did not stop within " + RunTimeout);
+            Assert.IsTrue(watcher.WaitUntilStopped((int)RunTimeout.TotalMilliseconds), "Check did not finish");
+            return reason;
+        }
+
+        protected static string SavedPagePath(ThreadWatcher watcher) {
+            return Path.Combine(watcher.ThreadDownloadDirectory, FourChanThreadFixture.ThreadName + ".html");
+        }
+
+        private static void DeleteDirectory(string dir) {
+            for (int attempt = 0; attempt < 5 && Directory.Exists(dir); attempt++) {
+                try {
+                    Directory.Delete(dir, true);
+                }
+                catch (IOException) {
+                    Thread.Sleep(100);
+                }
+                catch (UnauthorizedAccessException) {
+                    Thread.Sleep(100);
+                }
+            }
+        }
+    }
+}
