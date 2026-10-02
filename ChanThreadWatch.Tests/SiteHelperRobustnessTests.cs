@@ -1,0 +1,324 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace JDP.Tests {
+    // Malformed or unexpected markup must make the site helpers skip the affected item, never
+    // throw or return entries without a URL.
+    [TestClass]
+    public class SiteHelperRobustnessTests {
+        private const string FourChanURL = "https://boards.4chan.org/wg/thread/100";
+        private const string InfinitechanURL = "https://8ch.net/tech/res/100.html";
+        private const string FuukaURL = "https://warosu.org/g/thread/123";
+        private const string FoolFuukaURL = "https://archive.4plebs.org/tg/thread/123/";
+        private const string LynxChanURL = "https://endchan.org/b/res/5.html";
+
+        // General.GetAbsoluteURL rejects this URL and returns null.
+        private const string BadURL = "http://[bad/src/1.jpg";
+
+        private const string ErrorPage = "<html><head><title>Error</title></head><body><h1>Checking your browser</h1><div class=\"post\">not a post</div></body></html>";
+
+        [TestMethod]
+        public void BadURLIsRejectedByGetAbsoluteURL() {
+            Assert.IsNull(General.GetAbsoluteURL(FourChanURL, BadURL));
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void FourChanGetImagesSkipsUnresolvableImageURL() {
+            string html = FourChanPost("p1", BadURL) + FourChanPost("p2", "//i.4cdn.org/wg/2.jpg");
+
+            AssertOnlyImage(FourChanURL, html, "https://i.4cdn.org/wg/2.jpg");
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void InfinitechanGetImagesSkipsUnresolvableImageURL() {
+            string html = "<div class=\"thread\">" + InfinitechanReply("reply_1", InfinitechanFiles(BadURL, "/file_store/2.jpg"), true) + "</div>";
+
+            AssertOnlyImage(InfinitechanURL, html, "https://8ch.net/file_store/2.jpg");
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void FuukaGetImagesSkipsUnresolvableImageURL() {
+            string html = FuukaPost("p1", BadURL, "a.jpg") + FuukaPost("p2", "https://i.warosu.org/data/g/img/2.jpg", "b.jpg");
+
+            AssertOnlyImage(FuukaURL, html, "https://i.warosu.org/data/g/img/2.jpg");
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void FoolFuukaGetImagesSkipsUnresolvableImageURL() {
+            string html = FoolFuukaPost("1", BadURL) + FoolFuukaPost("2", "https://i.4pcdn.org/tg/2.jpg");
+
+            AssertOnlyImage(FoolFuukaURL, html, "https://i.4pcdn.org/tg/2.jpg");
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void LynxChanGetImagesSkipsUnresolvableImageURL() {
+            string html = "<div class=\"postCell\" id=\"6\"><div class=\"innerPost\"><a class=\"linkName\">Heidi</a><div class=\"panelUploads\">" +
+                LynxChanUpload(BadURL) + LynxChanUpload("/.media/2.png") + "</div></div></div>";
+
+            AssertOnlyImage(LynxChanURL, html, "https://endchan.org/.media/2.png");
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void InfinitechanGetImagesSkipsPostWithoutFilesDiv() {
+            string html = "<div class=\"thread\">" +
+                InfinitechanReply("reply_1", String.Empty, true) +
+                InfinitechanReply("reply_2", InfinitechanFiles("/file_store/2.jpg"), true) + "</div>";
+
+            AssertOnlyImage(InfinitechanURL, html, "https://8ch.net/file_store/2.jpg");
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void InfinitechanGetImagesWithoutNameSpanHasNoPoster() {
+            string html = "<div class=\"thread\">" + InfinitechanReply("reply_1", InfinitechanFiles("/file_store/2.jpg"), false) + "</div>";
+
+            List<ImageInfo> images = GetImages(InfinitechanURL, html);
+
+            Assert.HasCount(1, images);
+            Assert.AreEqual(String.Empty, images[0].Poster);
+        }
+
+        // R8 / B14
+        [TestMethod]
+        public void LynxChanGetImagesSkipsPostWithoutPanelUploads() {
+            string html = "<div class=\"postCell\" id=\"6\"><div class=\"innerPost\"><a class=\"linkName\">Heidi</a></div></div>" +
+                "<div class=\"postCell\" id=\"7\"><div class=\"innerPost\"><div class=\"panelUploads\">" + LynxChanUpload("/.media/2.png") + "</div></div></div>";
+
+            AssertOnlyImage(LynxChanURL, html, "https://endchan.org/.media/2.png");
+        }
+
+        // R8 / B14
+        [TestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public void FourChanGetCrossLinksSkipsUnresolvableQuoteLink(bool withReplaces) {
+            string html = "<blockquote class=\"postMessage\"><a href=\"//[bad/thread/1#p2\" class=\"quotelink\">x</a>" +
+                "<a href=\"/g/thread/5#p6\" class=\"quotelink\">y</a></blockquote>";
+            SiteHelper helper = CreateHelper(FourChanURL, html);
+            List<ReplaceInfo> replaces = withReplaces ? new List<ReplaceInfo>() : null;
+
+            HashSet<string> crossLinks = helper.GetCrossLinks(replaces, true);
+
+            CollectionAssert.AreEqual(new[] { "https://boards.4chan.org/g/thread/5" }, crossLinks.ToArray());
+            if (withReplaces) {
+                CollectionAssert.AreEqual(new[] { "4chan/g/5" }, replaces.Select(r => r.Tag).ToArray());
+            }
+        }
+
+        // R8 / B14: 8ch quote links always resolve against a valid page URL, so an unresolvable
+        // page URL is the only way to make GetAbsoluteURL return null here.
+        [TestMethod]
+        public void InfinitechanGetCrossLinksSkipsUnresolvableQuoteLink() {
+            string html = "<div class=\"body\"><a href=\"/g/res/300.html#301\">x</a></div>";
+            SiteHelper helper = CreateHelper("http://[8ch.net/tech/res/100.html", html);
+
+            HashSet<string> crossLinks = helper.GetCrossLinks(null, true);
+
+            Assert.IsEmpty(crossLinks);
+        }
+
+        // B12
+        [TestMethod]
+        public void InfinitechanGetCrossLinksSkipsLinksToSameThread() {
+            string html = "<div class=\"body\"><a href=\"/tech/res/100.html#101\">same</a><a href=\"/tech/res/200.html#201\">other</a></div>";
+            SiteHelper helper = CreateHelper(InfinitechanURL, html);
+            var replaces = new List<ReplaceInfo>();
+
+            HashSet<string> crossLinks = helper.GetCrossLinks(replaces, false);
+
+            CollectionAssert.AreEqual(new[] { "https://8ch.net/tech/res/200.html" }, crossLinks.ToArray());
+            CollectionAssert.AreEqual(new[] { "8ch/tech/200" }, replaces.Select(r => r.Tag).ToArray());
+        }
+
+        // B13
+        [TestMethod]
+        public void GenericGetImagesUsesPageAsReferer() {
+            const string pageURL = "http://example.com/b/res/1.html";
+            string html = "<a href=\"/b/src/1.jpg\">a</a><a href=\"https://example.com/b/src/2.jpg\">b</a><a href=\"/redirect/src/http://other.example.org/img/3.jpg\">c</a>";
+
+            List<ImageInfo> images = GetImages(pageURL, html);
+
+            CollectionAssert.AreEqual(
+                new[] {
+                    "http://example.com/b/src/1.jpg " + pageURL,
+                    "https://example.com/b/src/2.jpg " + pageURL,
+                    "http://other.example.org/img/3.jpg http://example.com/redirect/src/http://other.example.org/img/3.jpg"
+                },
+                images.Select(i => i.URL + " " + i.Referer).ToArray());
+        }
+
+        // B15
+        [TestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public void FourChanGetCrossLinksSkipsDeadLinksWithoutPostNumber(bool withReplaces) {
+            string html = "<blockquote class=\"postMessage\"><span class=\"deadlink\">&gt;</span><span class=\"deadlink\"></span>" +
+                "<span class=\"deadlink\">&gt;&gt;&gt;/g</span><span class=\"deadlink\">&gt;&gt;7</span></blockquote>";
+            SiteHelper helper = CreateHelper(FourChanURL, html);
+            List<ReplaceInfo> replaces = withReplaces ? new List<ReplaceInfo>() : null;
+
+            helper.GetCrossLinks(replaces, true);
+
+            if (withReplaces) {
+                CollectionAssert.AreEqual(new[] { "4chan/wg/7" }, replaces.Select(r => r.Tag).ToArray());
+            }
+        }
+
+        // B15 (resurrect side): a one-character dead link next to a resurrected post
+        [TestMethod]
+        public void FourChanResurrectDeadPostsSkipsShortDeadLink() {
+            string previous = FourChanThread(FourChanContainer("pc1", "first") + FourChanContainer("pc2", "deleted"));
+            string current = FourChanThread(FourChanContainer("pc1", "<span class=\"deadlink\">&gt;</span>"));
+            SiteHelper helper = CreateHelper(FourChanURL, current);
+
+            helper.ResurrectDeadPosts(new HTMLParser(previous), new List<ReplaceInfo>());
+
+            StringAssert.Contains(helper.GetHTMLParser().PreprocessedHTML, "id=\"pc2\"");
+        }
+
+        // B16
+        [TestMethod]
+        public void FourChanResurrectDeadPostsToleratesDuplicateAndMissingIDs() {
+            string previous = FourChanThread(
+                FourChanContainer("pc1", "first") + FourChanContainer("pc2", "deleted") + FourChanContainer("pc2", "duplicate deleted") +
+                FourChanContainer(null, "no id"));
+            string current = FourChanThread(
+                FourChanContainer("pc1", "first") + FourChanContainer("pc1", "duplicate") + FourChanContainer(null, "no id"));
+            SiteHelper helper = CreateHelper(FourChanURL, current);
+
+            helper.ResurrectDeadPosts(new HTMLParser(previous), new List<ReplaceInfo>());
+
+            string html = helper.GetHTMLParser().PreprocessedHTML;
+            StringAssert.Contains(html, "deleted</blockquote>");
+            Assert.DoesNotContain("duplicate deleted", html);
+        }
+
+        // B16
+        [TestMethod]
+        public void InfinitechanResurrectDeadPostsToleratesDuplicateAndMissingIDs() {
+            string previous = InfinitechanThread(
+                InfinitechanPost("op_1", "first") + InfinitechanPost("reply_2", "deleted") + InfinitechanPost("reply_2", "duplicate deleted") +
+                InfinitechanPost(null, "no id"));
+            string current = InfinitechanThread(
+                InfinitechanPost("op_1", "first") + InfinitechanPost("op_1", "duplicate") + InfinitechanPost(null, "no id"));
+            SiteHelper helper = CreateHelper(InfinitechanURL, current);
+
+            helper.ResurrectDeadPosts(new HTMLParser(previous), new List<ReplaceInfo>());
+
+            string html = helper.GetHTMLParser().PreprocessedHTML;
+            StringAssert.Contains(html, "deleted</div>");
+            Assert.DoesNotContain("duplicate deleted", html);
+        }
+
+        // B16 / R7: an error page served instead of the thread has no thread div
+        [TestMethod]
+        [DataRow(FourChanURL, true)]
+        [DataRow(InfinitechanURL, false)]
+        public void ResurrectDeadPostsLeavesErrorPageUnchanged(string url, bool isFourChan) {
+            string previous = isFourChan ?
+                FourChanThread(FourChanContainer("pc1", "first")) :
+                InfinitechanThread(InfinitechanPost("op_1", "first"));
+            SiteHelper helper = CreateHelper(url, ErrorPage);
+            HTMLParser parser = helper.GetHTMLParser();
+            var replaces = new List<ReplaceInfo>();
+
+            helper.ResurrectDeadPosts(new HTMLParser(previous), replaces);
+
+            Assert.AreSame(parser, helper.GetHTMLParser());
+            Assert.IsEmpty(replaces);
+        }
+
+        // B17
+        [TestMethod]
+        public void FuukaGetImagesSkipsImageWithInvalidMD5() {
+            string html = FuukaPost("p1", "https://i.warosu.org/data/g/img/1.jpg", "bad.jpg <!-- %%% -->") +
+                FuukaPost("p2", "https://i.warosu.org/data/g/img/2.jpg", "good.jpg <!-- AQIDBAUGBwgJCgsMDQ4PEA== -->");
+
+            List<ImageInfo> images = AssertOnlyImage(FuukaURL, html, "https://i.warosu.org/data/g/img/2.jpg");
+
+            Assert.AreEqual(HashType.MD5, images[0].HashType);
+            Assert.IsNotNull(images[0].Hash);
+        }
+
+        private static List<ImageInfo> AssertOnlyImage(string url, string html, string expectedImageURL) {
+            List<ImageInfo> images = GetImages(url, html);
+            CollectionAssert.AreEqual(new[] { expectedImageURL }, images.Select(i => i.URL).ToArray());
+            return images;
+        }
+
+        private static List<ImageInfo> GetImages(string url, string html) {
+            List<ImageInfo> images = CreateHelper(url, html).GetImages(new List<ReplaceInfo>(), new List<ThumbnailInfo>());
+            List<ImageInfo> imagesWithoutReplaces = CreateHelper(url, html).GetImages(null, new List<ThumbnailInfo>());
+            CollectionAssert.AreEqual(images.Select(i => i.URL).ToArray(), imagesWithoutReplaces.Select(i => i.URL).ToArray());
+            return images;
+        }
+
+        private static SiteHelper CreateHelper(string url, string html) {
+            SiteHelper helper = SiteHelpers.GetInstance(new Uri(url.Replace("[", "")).Host);
+            helper.SetURL(url);
+            helper.SetHTMLParser(new HTMLParser("<html><body>" + html + "</body></html>"));
+            return helper;
+        }
+
+        private static string FourChanPost(string id, string imageURL) {
+            return "<div class=\"post reply\" id=\"" + id + "\"><div class=\"file\"><div class=\"fileText\">File: <a href=\"" + imageURL + "\">a.jpg</a></div>" +
+                "<a class=\"fileThumb\" href=\"" + imageURL + "\"><img src=\"//i.4cdn.org/wg/" + id + "s.jpg\"></a></div></div>";
+        }
+
+        private static string FourChanThread(string containers) {
+            return "<div class=\"thread\" id=\"t1\">" + containers + "</div>";
+        }
+
+        private static string FourChanContainer(string id, string message) {
+            string idAttribute = id != null ? " id=\"" + id + "\"" : String.Empty;
+            return "<div class=\"postContainer replyContainer\"" + idAttribute + "><div class=\"post reply\"><input type=\"checkbox\">" +
+                "<blockquote class=\"postMessage\">" + message + "</blockquote></div></div>";
+        }
+
+        private static string InfinitechanThread(string posts) {
+            return "<div class=\"thread\" id=\"thread_100\">" + posts + "</div>";
+        }
+
+        private static string InfinitechanPost(string id, string body) {
+            string idAttribute = id != null ? " id=\"" + id + "\"" : String.Empty;
+            return "<div class=\"post reply\"" + idAttribute + "><p class=\"intro\"><input type=\"checkbox\"><span class=\"name\">Anonymous</span></p>" +
+                "<div class=\"body\">" + body + "</div></div>";
+        }
+
+        private static string InfinitechanReply(string id, string files, bool withName) {
+            string name = withName ? "<span class=\"name\">Carol</span>" : String.Empty;
+            return "<div class=\"post reply has-file\" id=\"" + id + "\"><p class=\"intro\"><label>" + name + "</label></p>" + files + "<div class=\"body\">x</div></div>";
+        }
+
+        private static string InfinitechanFiles(params string[] imageURLs) {
+            return "<div class=\"files\">" + String.Concat(imageURLs.Select(imageURL =>
+                "<div class=\"file\"><p class=\"fileinfo\">File: <a href=\"" + imageURL + "\">a.jpg</a> <span class=\"postfilename\">a.jpg</span></p>" +
+                "<a href=\"" + imageURL + "\" target=\"_blank\"><img src=\"/file_store/thumb/a.jpg\" data-md5=\"AQIDBAUGBwgJCgsMDQ4PEA==\"></a></div>")) + "</div>";
+        }
+
+        private static string FuukaPost(string id, string imageURL, string fileName) {
+            return "<div id=\"" + id + "\"><span>File: 1 KB, 1x1, " + fileName + "</span>" +
+                "<label><input type=\"checkbox\"><span class=\"postername\">Anonymous</span></label>" +
+                "<a href=\"" + imageURL + "\"><img src=\"https://i.warosu.org/data/g/thumb/" + id + "s.jpg\" class=\"thumb\"></a></div>";
+        }
+
+        private static string FoolFuukaPost(string id, string imageURL) {
+            return "<article class=\"post has_image\" id=\"" + id + "\"><header><span class=\"post_poster_data\"><span class=\"post_author\">Frank</span></span></header>" +
+                "<div class=\"post_file\"><a href=\"" + imageURL + "\" class=\"post_file_filename\">a.jpg</a></div>" +
+                "<div class=\"thread_image_box\"><a href=\"" + imageURL + "\" class=\"thread_image_link\"><img src=\"https://i.4pcdn.org/tg/" + id + "s.jpg\" data-md5=\"AQIDBAUGBwgJCgsMDQ4PEA==\"></a></div></article>";
+        }
+
+        private static string LynxChanUpload(string imageURL) {
+            return "<figure class=\"uploadCell\"><a class=\"nameLink\" href=\"" + imageURL + "\">Open</a><a class=\"originalNameLink\">a.png</a>" +
+                "<a class=\"imgLink\" href=\"" + imageURL + "\"><img src=\"/.media/t_" + imageURL.Length + "\"></a></figure>";
+        }
+    }
+}

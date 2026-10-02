@@ -1,19 +1,13 @@
 interBoardAutoFollow=False
 crossLinks:
-  https://8ch.net/tech/res/100.html
   https://8ch.net/tech/res/200.html
 replaces:
-  879 | 29 | QuoteLinkHref | [8ch/tech/100] | [/tech/res/100.html#101] | href="/tech/res/100.html#101"
   928 | 29 | QuoteLinkHref | [8ch/tech/200] | [/tech/res/200.html#201] | href="/tech/res/200.html#201"
-  4018 | 29 | QuoteLinkHref | [8ch/tech/100] | [/tech/res/100.html#100] | href="/tech/res/100.html#100"
 interBoardAutoFollow=True
 crossLinks:
   https://8ch.net/g/res/300.html
-  https://8ch.net/tech/res/100.html
   https://8ch.net/tech/res/200.html
 replaces:
-  879 | 29 | QuoteLinkHref | [8ch/tech/100] | [/tech/res/100.html#101] | href="/tech/res/100.html#101"
   928 | 29 | QuoteLinkHref | [8ch/tech/200] | [/tech/res/200.html#201] | href="/tech/res/200.html#201"
   977 | 26 | QuoteLinkHref | [8ch/g/300] | [/g/res/300.html#301] | href="/g/res/300.html#301"
-  4018 | 29 | QuoteLinkHref | [8ch/tech/100] | [/tech/res/100.html#100] | href="/tech/res/100.html#100"
   4604 | 26 | QuoteLinkHref | [8ch/g/300] | [/g/res/300.html#302] | href="/g/res/300.html#302"

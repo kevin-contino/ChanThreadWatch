@@ -201,10 +201,12 @@ namespace JDP {
 
             image.URL = url;
             if (image.URL == null || image.FileName.Length == 0) return null;
+            // A URL embedded in a redirect link is downloaded directly, with the redirect link as
+            // the referer. Any other image is downloaded with the page as the referer.
             int pos = Math.Max(
                 image.URL.LastIndexOf("http://", StringComparison.OrdinalIgnoreCase),
                 image.URL.LastIndexOf("https://", StringComparison.OrdinalIgnoreCase));
-            if (pos == -1) {
+            if (pos <= 0) {
                 image.Referer = _url;
             }
             else {
@@ -271,11 +273,46 @@ namespace JDP {
         }
 
         protected static bool IsMissingFileName(ImageInfo image) {
-            return image.URL.Length == 0 || image.FileName.Length == 0;
+            return String.IsNullOrEmpty(image.URL) || image.FileName.Length == 0;
+        }
+
+        // Also true if the page gives a hash that could not be decoded.
+        protected static bool IsMissingImageData(ImageInfo image) {
+            return IsMissingFileName(image) || (image.HashType != HashType.None && image.Hash == null);
         }
 
         protected static bool IsMissingFileNameOrHash(ImageInfo image) {
             return IsMissingFileName(image) || image.Hash == null;
+        }
+
+        // Returns the tag ranges of the elements with the class inside the container, or none if
+        // the container is missing.
+        protected IEnumerable<HTMLTagRange> FindTagRangesWithClass(HTMLTagRange containingTagRange, string tagName, string className) {
+            if (containingTagRange == null) return new HTMLTagRange[0];
+            return Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(containingTagRange, tagName),
+                t => HTMLParser.ClassAttributeValueHas(t, className)), t => _htmlParser.CreateTagRange(t)), r => r != null);
+        }
+
+        protected HTMLTag FindThreadDivStartTag() {
+            return Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread")));
+        }
+
+        // Returns the tag ranges with their ids in document order. Skips tag ranges without an id,
+        // and keeps only the first tag range of each id.
+        protected static List<KeyValuePair<string, HTMLTagRange>> GetTagRangesWithUniqueID(IEnumerable<HTMLTagRange> tagRanges) {
+            List<KeyValuePair<string, HTMLTagRange>> result = new List<KeyValuePair<string, HTMLTagRange>>();
+            HashSet<string> ids = new HashSet<string>();
+            foreach (HTMLTagRange tagRange in tagRanges) {
+                string id = tagRange.StartTag.GetAttributeValue("id");
+                if (id == null || !ids.Add(id)) continue;
+                result.Add(new KeyValuePair<string, HTMLTagRange>(id, tagRange));
+            }
+            return result;
+        }
+
+        protected static bool IsResurrected(Dictionary<string, HTMLTagRange> resurrectedTagRanges, HTMLTagRange tagRange) {
+            string id = tagRange.StartTag.GetAttributeValue("id");
+            return id != null && resurrectedTagRanges.ContainsKey(id);
         }
 
         protected string GetTitleOrInnerHTML(HTMLTagRange tagRange) {
@@ -424,8 +461,9 @@ namespace JDP {
                 HTMLAttribute attribute = quoteLinkTag.GetAttribute("href");
                 if (attribute == null) continue;
                 string href = RemoveFragment(attribute.Value);
-                if (IsSkippedQuoteLink(href, interBoardAutoFollow)) continue;
-                crossLinks.Add(General.GetAbsoluteURL(_url, href));
+                string url = General.GetAbsoluteURL(_url, href);
+                if (url == null || IsSkippedQuoteLink(href, interBoardAutoFollow)) continue;
+                crossLinks.Add(url);
                 if (replaceList != null) {
                     replaceList.Add(
                         new ReplaceInfo {
@@ -448,36 +486,34 @@ namespace JDP {
         }
 
         private void AddDeadLinkReplaces(HTMLTagRange postMessageTagRange, List<ReplaceInfo> replaceList) {
-            foreach (HTMLTagRange deadLinkTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(postMessageTagRange, "span"),
-                t => HTMLParser.ClassAttributeValueHas(t, "deadlink")), t => _htmlParser.CreateTagRange(t)), r => r != null))
-            {
-                string boardName;
-                string pageID;
-                string deadLinkInnerHTML = HttpUtility.HtmlDecode(_htmlParser.GetInnerHTML(deadLinkTagRange));
-                if (deadLinkInnerHTML.Contains(">>>")) {
-                    boardName = deadLinkInnerHTML.Split('/')[1];
-                    pageID = deadLinkInnerHTML.Split('/')[2];
-                }
-                else {
-                    boardName = GetBoardName();
-                    pageID = deadLinkInnerHTML.Substring(2);
-                }
-
-                if (replaceList != null) {
-                    replaceList.Add(
-                        new ReplaceInfo {
-                            Offset = deadLinkTagRange.Offset,
-                            Length = deadLinkTagRange.Length,
-                            Type = ReplaceType.DeadLink,
-                            Tag = String.Join("/", new[] { GetSiteName(), boardName, pageID }),
-                            Value = _htmlParser.GetHTML(deadLinkTagRange)
-                        });
-                }
+            if (replaceList == null) return;
+            foreach (HTMLTagRange deadLinkTagRange in FindTagRangesWithClass(postMessageTagRange, "span", "deadlink")) {
+                string tag = GetDeadLinkTag(HttpUtility.HtmlDecode(_htmlParser.GetInnerHTML(deadLinkTagRange)));
+                if (tag == null) continue;
+                replaceList.Add(
+                    new ReplaceInfo {
+                        Offset = deadLinkTagRange.Offset,
+                        Length = deadLinkTagRange.Length,
+                        Type = ReplaceType.DeadLink,
+                        Tag = tag,
+                        Value = _htmlParser.GetHTML(deadLinkTagRange)
+                    });
             }
         }
 
+        // Returns the site/board/post tag of a dead link such as ">>123" or ">>>/g/123", or null if
+        // the text has no post number.
+        private string GetDeadLinkTag(string deadLinkInnerHTML) {
+            if (deadLinkInnerHTML.Contains(">>>")) {
+                string[] split = deadLinkInnerHTML.Split('/');
+                return split.Length >= 3 ? String.Join("/", new[] { GetSiteName(), split[1], split[2] }) : null;
+            }
+            return deadLinkInnerHTML.Length > 2 ? String.Join("/", new[] { GetSiteName(), GetBoardName(), deadLinkInnerHTML.Substring(2) }) : null;
+        }
+
+        // Leaves the page unchanged if it has no thread div, e.g. an error page.
         public override void ResurrectDeadPosts(HTMLParser previousParser, List<ReplaceInfo> replaceList) {
-            if (previousParser == null) return;
+            if (previousParser == null || FindThreadDivStartTag() == null) return;
             Dictionary<string, HTMLTagRange> resurrectedPostContainers = new Dictionary<string, HTMLTagRange>();
 
             ApplyReplaces(GetDeadPostReplaces(previousParser, resurrectedPostContainers));
@@ -492,30 +528,29 @@ namespace JDP {
         private List<ReplaceInfo> GetDeadPostReplaces(HTMLParser previousParser, Dictionary<string, HTMLTagRange> resurrectedPostContainers) {
             List<ReplaceInfo> deadPostReplaceList = new List<ReplaceInfo>();
             Dictionary<string, HTMLTagRange> newPostContainers = new Dictionary<string, HTMLTagRange>();
-            foreach (HTMLTagRange postContainerTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
-                t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => _htmlParser.CreateTagRange(t)), r => r != null))
+            foreach (KeyValuePair<string, HTMLTagRange> postContainer in GetTagRangesWithUniqueID(Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
+                t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => _htmlParser.CreateTagRange(t)), r => r != null)))
             {
-                newPostContainers.Add(postContainerTagRange.StartTag.GetAttributeValue("id"), postContainerTagRange);
+                newPostContainers.Add(postContainer.Key, postContainer.Value);
             }
 
             HTMLTagRange lastExistingPostContainerTagRange = null;
-            foreach (HTMLTagRange previousPostContainerTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(previousParser.FindStartTags("div"),
-                t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => previousParser.CreateTagRange(t)), r => r != null))
+            foreach (KeyValuePair<string, HTMLTagRange> previousPostContainer in GetTagRangesWithUniqueID(Enumerable.Where(Enumerable.Select(Enumerable.Where(previousParser.FindStartTags("div"),
+                t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => previousParser.CreateTagRange(t)), r => r != null)))
             {
                 HTMLTagRange tempTagRange;
-                if (newPostContainers.TryGetValue(previousPostContainerTagRange.StartTag.GetAttributeValue("id"), out tempTagRange)) {
+                if (newPostContainers.TryGetValue(previousPostContainer.Key, out tempTagRange)) {
                     lastExistingPostContainerTagRange = tempTagRange;
                     continue;
                 }
-                deadPostReplaceList.Add(CreateDeadPostReplace(previousParser, previousPostContainerTagRange, lastExistingPostContainerTagRange));
-                resurrectedPostContainers.Add(previousPostContainerTagRange.StartTag.GetAttributeValue("id"), previousPostContainerTagRange);
+                deadPostReplaceList.Add(CreateDeadPostReplace(previousParser, previousPostContainer.Value, lastExistingPostContainerTagRange));
+                resurrectedPostContainers.Add(previousPostContainer.Key, previousPostContainer.Value);
             }
             return deadPostReplaceList;
         }
 
         private ReplaceInfo CreateDeadPostReplace(HTMLParser previousParser, HTMLTagRange previousPostContainerTagRange, HTMLTagRange lastExistingPostContainerTagRange) {
-            int offset = lastExistingPostContainerTagRange != null ? lastExistingPostContainerTagRange.EndOffset :
-                Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))).EndOffset;
+            int offset = lastExistingPostContainerTagRange != null ? lastExistingPostContainerTagRange.EndOffset : FindThreadDivStartTag().EndOffset;
             HTMLTag inputTag = previousParser.FindTag(false, previousPostContainerTagRange, "input");
             string value = previousParser.GetHTML(previousPostContainerTagRange);
             if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong>")) {
@@ -537,7 +572,7 @@ namespace JDP {
                     t => HTMLParser.ClassAttributeValueHas(t, "deadlink")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
                 string deadLinkInnerHTML = HttpUtility.HtmlDecode(_htmlParser.GetInnerHTML(deadLinkTagRange));
-                if (String.IsNullOrEmpty(deadLinkInnerHTML) || deadLinkInnerHTML.Contains(">>>")) continue;
+                if (deadLinkInnerHTML.Length <= 2 || deadLinkInnerHTML.Contains(">>>")) continue;
                 string deadLinkID = deadLinkInnerHTML.Substring(2);
                 if (resurrectedPostContainers.ContainsKey("pc" + deadLinkID)) {
                     deadLinkReplaceList.Add(
@@ -557,7 +592,7 @@ namespace JDP {
             foreach (HTMLTagRange postContainerTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "postContainer")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
-                if (!resurrectedPostContainers.ContainsKey(postContainerTagRange.StartTag.GetAttributeValue("id"))) continue;
+                if (!IsResurrected(resurrectedPostContainers, postContainerTagRange)) continue;
 
                 FileTags file = FindFileTags(postContainerTagRange, "div");
                 if (file == null) continue;
@@ -639,10 +674,6 @@ namespace JDP {
             };
         }
 
-        private static bool IsMissingImageData(ImageInfo image) {
-            return IsMissingFileName(image) || (image.HashType != HashType.None && image.Hash == null);
-        }
-
         private string GetOriginalFileName(FileTags file, bool isSpoiler) {
             if (isSpoiler) {
                 return file.InfoTagRange.StartTag.GetAttributeValue("title");
@@ -681,9 +712,7 @@ namespace JDP {
                 string poster = GetPoster(postTagRange);
                 HTMLTagRange filesDivTagRange = FindFilesDivTagRange(postTagRange);
 
-                foreach (HTMLTagRange fileDivTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(filesDivTagRange, "div"),
-                    t => HTMLParser.ClassAttributeValueHas(t, "file")), t => _htmlParser.CreateTagRange(t)), r => r != null))
-                {
+                foreach (HTMLTagRange fileDivTagRange in FindTagRangesWithClass(filesDivTagRange, "div", "file")) {
                     FileTags file = ReadFileURLs(FindFileTags(fileDivTagRange));
                     if (file == null) continue;
 
@@ -708,6 +737,7 @@ namespace JDP {
         private string GetPoster(HTMLTagRange postTagRange) {
             HTMLTagRange nameTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
                 _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "name"))));
+            if (nameTagRange == null) return String.Empty;
 
             HTMLTagRange tripSpanTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
                 _htmlParser.FindStartTags(postTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "trip"))));
@@ -785,8 +815,9 @@ namespace JDP {
                     HTMLAttribute attribute = quoteLinkTag.GetAttribute("href");
                     string href = attribute.Value.Remove(attribute.Value.IndexOf('#'));
                     string[] urlSplit = href.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (IsSkippedQuoteLink(urlSplit, interBoardAutoFollow)) continue;
-                    crossLinks.Add(General.GetAbsoluteURL(_url, href));
+                    string url = General.GetAbsoluteURL(_url, href);
+                    if (url == null || IsSkippedQuoteLink(urlSplit, interBoardAutoFollow)) continue;
+                    crossLinks.Add(url);
                     if (replaceList != null) {
                         replaceList.Add(
                             new ReplaceInfo {
@@ -804,11 +835,12 @@ namespace JDP {
 
         // Skips links to this thread, and links to other boards unless inter-board links are followed.
         private bool IsSkippedQuoteLink(string[] urlSplit, bool interBoardAutoFollow) {
-            return (urlSplit[0] == GetBoardName() && urlSplit[2] == GetThreadID()) || (!interBoardAutoFollow && GetBoardName() != urlSplit[0]);
+            return (urlSplit[0] == GetBoardName() && urlSplit[2] == GetThreadID() + ".html") || (!interBoardAutoFollow && GetBoardName() != urlSplit[0]);
         }
 
+        // Leaves the page unchanged if it has no thread div, e.g. an error page.
         public override void ResurrectDeadPosts(HTMLParser previousParser, List<ReplaceInfo> replaceList) {
-            if (previousParser == null) return;
+            if (previousParser == null || FindThreadDivStartTag() == null) return;
             Dictionary<string, HTMLTagRange> resurrectedPosts = new Dictionary<string, HTMLTagRange>();
 
             ApplyReplaces(GetDeadPostReplaces(previousParser, resurrectedPosts));
@@ -822,30 +854,29 @@ namespace JDP {
         private List<ReplaceInfo> GetDeadPostReplaces(HTMLParser previousParser, Dictionary<string, HTMLTagRange> resurrectedPosts) {
             List<ReplaceInfo> deadPostReplaceList = new List<ReplaceInfo>();
             Dictionary<string, HTMLTagRange> newPosts = new Dictionary<string, HTMLTagRange>();
-            foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
-                t => HTMLParser.ClassAttributeValueHas(t, "post")), t => _htmlParser.CreateTagRange(t)), r => r != null))
+            foreach (KeyValuePair<string, HTMLTagRange> post in GetTagRangesWithUniqueID(Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
+                t => HTMLParser.ClassAttributeValueHas(t, "post")), t => _htmlParser.CreateTagRange(t)), r => r != null)))
             {
-                newPosts.Add(postTagRange.StartTag.GetAttributeValue("id"), postTagRange);
+                newPosts.Add(post.Key, post.Value);
             }
 
             HTMLTagRange lastExistingPostTagRange = null;
-            foreach (HTMLTagRange previousPostTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(previousParser.FindStartTags("div"),
-                t => HTMLParser.ClassAttributeValueHas(t, "post")), t => previousParser.CreateTagRange(t)), r => r != null))
+            foreach (KeyValuePair<string, HTMLTagRange> previousPost in GetTagRangesWithUniqueID(Enumerable.Where(Enumerable.Select(Enumerable.Where(previousParser.FindStartTags("div"),
+                t => HTMLParser.ClassAttributeValueHas(t, "post")), t => previousParser.CreateTagRange(t)), r => r != null)))
             {
                 HTMLTagRange tempTagRange;
-                if (newPosts.TryGetValue(previousPostTagRange.StartTag.GetAttributeValue("id"), out tempTagRange)) {
+                if (newPosts.TryGetValue(previousPost.Key, out tempTagRange)) {
                     lastExistingPostTagRange = tempTagRange;
                     continue;
                 }
-                deadPostReplaceList.Add(CreateDeadPostReplace(previousParser, previousPostTagRange, lastExistingPostTagRange));
-                resurrectedPosts.Add(previousPostTagRange.StartTag.GetAttributeValue("id"), previousPostTagRange);
+                deadPostReplaceList.Add(CreateDeadPostReplace(previousParser, previousPost.Value, lastExistingPostTagRange));
+                resurrectedPosts.Add(previousPost.Key, previousPost.Value);
             }
             return deadPostReplaceList;
         }
 
         private ReplaceInfo CreateDeadPostReplace(HTMLParser previousParser, HTMLTagRange previousPostTagRange, HTMLTagRange lastExistingPostTagRange) {
-            int offset = lastExistingPostTagRange != null ? lastExistingPostTagRange.EndOffset :
-                Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "thread"))).EndOffset;
+            int offset = lastExistingPostTagRange != null ? lastExistingPostTagRange.EndOffset : FindThreadDivStartTag().EndOffset;
             HTMLTag inputTag = previousParser.FindStartTag(previousPostTagRange, "input");
             string value = previousParser.GetHTML(previousPostTagRange);
             if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong> ")) {
@@ -864,13 +895,11 @@ namespace JDP {
             foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("div"),
                 t => HTMLParser.ClassAttributeValueHas(t, "has-file")), t => _htmlParser.CreateTagRange(t)), r => r != null))
             {
-                if (!resurrectedPosts.ContainsKey(postTagRange.StartTag.GetAttributeValue("id"))) continue;
+                if (!IsResurrected(resurrectedPosts, postTagRange)) continue;
 
                 HTMLTagRange filesDivTagRange = FindFilesDivTagRange(postTagRange);
 
-                foreach (HTMLTagRange fileDivTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(filesDivTagRange, "div"),
-                    t => HTMLParser.ClassAttributeValueHas(t, "file")), t => _htmlParser.CreateTagRange(t)), r => r != null))
-                {
+                foreach (HTMLTagRange fileDivTagRange in FindTagRangesWithClass(filesDivTagRange, "div", "file")) {
                     FileTags file = FindFileTags(fileDivTagRange);
                     if (file == null) continue;
 
@@ -938,7 +967,8 @@ namespace JDP {
             };
         }
 
-        // Returns null if the file info is incomplete or the image has no usable file name.
+        // Returns null if the file info is incomplete, or the image has no usable file name or an
+        // MD5 that cannot be decoded.
         private ImageInfo CreateImage(HTMLTagRange labelTagRange, FileTags file) {
             string[] fileInfoSplit = _htmlParser.GetInnerHTML(file.InfoTagRange).Split(new[] { ',' }, 3);
             if (fileInfoSplit.Length < 3) return null;
@@ -956,7 +986,7 @@ namespace JDP {
                 Hash = General.TryBase64Decode(imageMD5),
                 Poster = General.CleanFileName(HttpUtility.HtmlDecode(poster))
             };
-            return IsMissingFileName(image) ? null : image;
+            return IsMissingImageData(image) ? null : image;
         }
 
         // The file info ends with the file name, optionally followed by the MD5 in an HTML comment.
@@ -1164,9 +1194,7 @@ namespace JDP {
                 HTMLTagRange filesDivTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
                     _htmlParser.FindStartTags(postTagRange, "div"), t => HTMLParser.ClassAttributeValueHas(t, "panelUploads"))));
 
-                foreach (HTMLTagRange fileDivTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags(filesDivTagRange, "figure"),
-                    t => HTMLParser.ClassAttributeValueHas(t, "uploadCell")), t => _htmlParser.CreateTagRange(t)), r => r != null))
-                {
+                foreach (HTMLTagRange fileDivTagRange in FindTagRangesWithClass(filesDivTagRange, "figure", "uploadCell")) {
                     FileTags file = FindFile(fileDivTagRange);
                     if (file == null) continue;
 

@@ -4,14 +4,12 @@ images:
   https://i.warosu.org/data/g/img/0001/01/125.gif | https://warosu.org/g/thread/123 | [nohash.gif] | [Frank] | None | (null)
   https://i.warosu.org/data/g/img/0001/01/126.gif | https://warosu.org/g/thread/123 | [anon.gif] | [] | None | (null)
   https://i.warosu.org/data/g/img/0001/01/127.gif | https://warosu.org/g/thread/123 | [no poster label spans.gif] | [] | None | (null)
-  https://i.warosu.org/data/g/img/0001/01/137.gif | https://warosu.org/g/thread/123 | [badhash.gif] | [x] | MD5 | (null)
 thumbnails:
   https://i.warosu.org/data/g/thumb/0001/01/123s.jpg | https://warosu.org/g/thread/123
   https://i.warosu.org/data/g/thumb/0001/01/124s.jpg | https://warosu.org/g/thread/123
   https://i.warosu.org/data/g/thumb/0001/01/125s.jpg | https://warosu.org/g/thread/123
   https://i.warosu.org/data/g/thumb/0001/01/126s.jpg | https://warosu.org/g/thread/123
   https://i.warosu.org/data/g/thumb/0001/01/127s.jpg | https://warosu.org/g/thread/123
-  https://i.warosu.org/data/g/thumb/0001/01/137s.jpg | https://warosu.org/g/thread/123
 replaces:
   434 | 54 | ImageLinkHref | [123.jpg] | (null) | href="https://i.warosu.org/data/g/img/0001/01/123.jpg"
   494 | 56 | ImageSrc | [123s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/123s.jpg"
@@ -23,5 +21,3 @@ replaces:
   1566 | 56 | ImageSrc | [126s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/126s.jpg"
   1787 | 54 | ImageLinkHref | [127.gif] | (null) | href="https://i.warosu.org/data/g/img/0001/01/127.gif"
   1847 | 56 | ImageSrc | [127s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/127s.jpg"
-  3954 | 54 | ImageLinkHref | [137.gif] | (null) | href="https://i.warosu.org/data/g/img/0001/01/137.gif"
-  4014 | 56 | ImageSrc | [137s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/137s.jpg"

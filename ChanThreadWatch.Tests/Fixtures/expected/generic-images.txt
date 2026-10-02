@@ -1,11 +1,11 @@
 images:
-  http://example.com/b/src/1001.jpg | http://example.com/b/src/1001.jpg | (null) | [] | None | (null)
-  http://example.com/b/src/1002.png | http://example.com/b/src/1002.png | (null) | [] | None | (null)
-  http://example.com/b/src/1003.gif | http://example.com/b/src/1003.gif | (null) | [] | None | (null)
+  http://example.com/b/src/1001.jpg | http://example.com/b/res/1.html | (null) | [] | None | (null)
+  http://example.com/b/src/1002.png | http://example.com/b/res/1.html | (null) | [] | None | (null)
+  http://example.com/b/src/1003.gif | http://example.com/b/res/1.html | (null) | [] | None | (null)
   ftp://files.example.net/src/1004.jpg | http://example.com/b/res/1.html | (null) | [] | None | (null)
-  https://example.com/b/src/1005.webm?x=1&y=2 | https://example.com/b/src/1005.webm?x=1&y=2 | (null) | [] | None | (null)
+  https://example.com/b/src/1005.webm?x=1&y=2 | http://example.com/b/res/1.html | (null) | [] | None | (null)
   http://other.example.org/img/1006.jpg | http://example.com/redirect/src/http://other.example.org/img/1006.jpg | (null) | [] | None | (null)
-  http://example.com/b/src/1007.jpg | http://example.com/b/src/1007.jpg | (null) | [] | None | (null)
+  http://example.com/b/src/1007.jpg | http://example.com/b/res/1.html | (null) | [] | None | (null)
 thumbnails:
   http://example.com/b/thumb/1001s.jpg | http://example.com/b/res/1.html
   http://example.com/b/thumb/1004s.jpg | http://example.com/b/res/1.html
