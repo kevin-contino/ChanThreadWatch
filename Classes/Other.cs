@@ -693,6 +693,7 @@ namespace JDP {
         private long _byteCount;
         private long _start;
         private bool _hasStarted;
+        private bool _isReleased;
         private readonly object _throttleSync = new object();
 
         protected long CurrentMilliseconds {
@@ -759,18 +760,6 @@ namespace JDP {
             return _baseStream.BeginWrite(buffer, offset, count, callback, state);
         }
 
-        public override void Close() {
-            try {
-                _baseStream.Close();
-            } finally {
-                if (_hasStarted) {
-                    lock (_downloadsSync) {
-                        _concurrentDownloads -= 1;
-                    }
-                }
-            }
-        }
-
         public override int EndRead(IAsyncResult asyncResult) {
             return _baseStream.EndRead(asyncResult);
         }
@@ -827,7 +816,7 @@ namespace JDP {
 
                 long weightedMaximumBytesPerSecond;
                 lock (_downloadsSync) {
-                    weightedMaximumBytesPerSecond = _maximumBytesPerSecond / _concurrentDownloads;
+                    weightedMaximumBytesPerSecond = Math.Max(_maximumBytesPerSecond / Math.Max(_concurrentDownloads, 1), 1);
                 }
 
                 SleepIfOverLimit(weightedMaximumBytesPerSecond);
@@ -846,13 +835,24 @@ namespace JDP {
         // Counts this stream as a concurrent download the first time it is throttled.
         // Called while holding _throttleSync.
         private void MarkStarted() {
-            if (_hasStarted) {
-                return;
-            }
             lock (_downloadsSync) {
+                if (_hasStarted || _isReleased) {
+                    return;
+                }
                 _concurrentDownloads += 1;
+                _hasStarted = true;
             }
-            _hasStarted = true;
+        }
+
+        // Stops counting this stream as a concurrent download. Safe to call more than
+        // once; the count is decremented at most once per stream.
+        private void ReleaseDownloadSlot() {
+            lock (_downloadsSync) {
+                if (_hasStarted && !_isReleased) {
+                    _concurrentDownloads -= 1;
+                }
+                _isReleased = true;
+            }
         }
 
         // Sleeps long enough to bring the average speed down to the weighted limit.
@@ -884,9 +884,18 @@ namespace JDP {
             }
         }
 
+        // Stream.Close and Stream.Dispose both end up here, so closing or disposing
+        // more than once is safe.
         protected override void Dispose(bool disposing) {
-            _baseStream.Dispose();
-            base.Dispose(disposing);
+            try {
+                if (disposing) {
+                    _baseStream.Dispose();
+                }
+            }
+            finally {
+                ReleaseDownloadSlot();
+                base.Dispose(disposing);
+            }
         }
     }
 

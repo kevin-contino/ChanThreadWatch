@@ -158,6 +158,9 @@ namespace JDP {
                 MoveSettingsFiles(oldSettingsFolder, newSettingsFolder);
             }
             catch {
+                // Settings stay in the old folder, so take back its mutex (this releases the new one).
+                // If another instance took the old folder in the meantime, the new mutex is kept.
+                Program.ObtainMutex(oldSettingsFolder);
                 MessageBox.Show(this, "Unable to move the settings files.",
                     "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;

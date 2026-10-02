@@ -611,6 +611,46 @@ namespace JDP {
             }
         }
 
+        // An update may raise the major version by at most this much over the running version.
+        private const int MaxUpdateMajorVersionJump = 1;
+
+        private static readonly int[] _versionComponentMaximums = { 0x7F, 0xFF, 0xFF, 0xFF };
+
+        // Returns a release tag (e.g. "v1.17.2") as a plain version string ("1.17.2"), or null if
+        // the tag is not a plausible version: one to four numeric components that each fit in
+        // ParseVersionNumber's packing, with a major version not far above currentVersion.
+        public static string NormalizeUpdateVersion(string tag, string currentVersion) {
+            int[] components = ParseVersionComponents(tag == null ? null : StripVersionPrefix(tag.Trim()));
+            int[] current = ParseVersionComponents(currentVersion);
+            if (components == null || current == null || components[0] > current[0] + MaxUpdateMajorVersionJump) {
+                return null;
+            }
+            return String.Join(".", Array.ConvertAll(components, c => c.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        private static string StripVersionPrefix(string tag) {
+            return tag.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? tag.Substring(1) : tag;
+        }
+
+        // Returns null unless every component is a plain non-negative number within its packing range.
+        private static int[] ParseVersionComponents(string version) {
+            if (version == null) return null;
+            string[] split = version.Split('.');
+            if (split.Length > _versionComponentMaximums.Length) return null;
+            int[] components = new int[split.Length];
+            for (int i = 0; i < split.Length; i++) {
+                components[i] = ParseVersionComponent(split[i], _versionComponentMaximums[i]);
+                if (components[i] == -1) return null;
+            }
+            return components;
+        }
+
+        // Returns -1 if the text is not a plain number between 0 and maximum.
+        private static int ParseVersionComponent(string text, int maximum) {
+            int value;
+            return Int32.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value) && value <= maximum ? value : -1;
+        }
+
         public static byte[] TryBase64Decode(string s) {
             try {
                 return Convert.FromBase64String(s);
