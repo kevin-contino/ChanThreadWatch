@@ -876,10 +876,10 @@ namespace JDP {
 
         private void ThreadWatcher_StopStatus(ThreadWatcher watcher, StopStatusEventArgs args) {
             // Read on the watcher's thread, before a restart could reset them
-            string checkError = watcher.CheckError;
+            string stopError = watcher.StopError;
             int failedFileCount = watcher.FailedFileCount;
             BeginInvoke(() => {
-                DisplayStatus(watcher, FormatStopStatus(args.StopReason, checkError, failedFileCount));
+                DisplayStatus(watcher, FormatStopStatus(args.StopReason, stopError, failedFileCount));
                 SetupWaitTimer();
                 if (args.StopReason != StopReason.UserRequest && args.StopReason != StopReason.Exiting) {
                     _saveThreadList = true;
@@ -933,15 +933,27 @@ namespace JDP {
         }
 
         private void ThreadWatcher_AddThread(ThreadWatcher watcher, AddThreadEventArgs args) {
+            ThreadWatcher rootThread = watcher.RootThread;
             BeginInvoke(() => {
-                ThreadInfo thread = watcher.CreateChildThreadInfo(args.PageURL, DateTime.Now, Settings.RecursiveAutoFollow != false);
-                SiteHelper siteHelper = SiteHelpers.GetInstance((new Uri(thread.URL)).Host);
-                siteHelper.SetURL(thread.URL);
-                if (_watchers.ContainsKey(siteHelper.GetPageID())) return;
-                if (AddThread(thread)) {
-                    _saveThreadList = true;
+                try {
+                    AddFollowedThread(watcher, args.PageURL);
+                }
+                finally {
+                    // The watcher reserved room for this thread under its root before raising
+                    // the event; the thread is now either added (and counted) or rejected
+                    rootThread.ReleaseDescendantSlot();
                 }
             });
+        }
+
+        private void AddFollowedThread(ThreadWatcher watcher, string pageURL) {
+            ThreadInfo thread = watcher.CreateChildThreadInfo(pageURL, DateTime.Now, Settings.RecursiveAutoFollow != false);
+            SiteHelper siteHelper = SiteHelpers.GetInstance((new Uri(thread.URL)).Host);
+            siteHelper.SetURL(thread.URL);
+            if (_watchers.ContainsKey(siteHelper.GetPageID())) return;
+            if (AddThread(thread)) {
+                _saveThreadList = true;
+            }
         }
 
         private bool AddThread(string pageURL) {
@@ -1277,8 +1289,8 @@ namespace JDP {
 
         // E.g. "Stopped: Download complete", "Stopped: Download complete, 2 files failed" or
         // "Stopped: Error: HTTP 403 Forbidden"
-        internal static string FormatStopStatus(StopReason stopReason, string checkError, int failedFileCount) {
-            if (checkError != null && IsStopWithoutKnownReason(stopReason)) return "Stopped: Error: " + checkError;
+        internal static string FormatStopStatus(StopReason stopReason, string stopError, int failedFileCount) {
+            if (stopError != null && IsStopWithoutKnownReason(stopReason)) return "Stopped: Error: " + stopError;
             string reasonText = GetStopReasonText(stopReason);
             if (stopReason == StopReason.DownloadComplete && failedFileCount > 0) {
                 reasonText += ", " + FormatFailedFileCount(failedFileCount);
@@ -1291,7 +1303,7 @@ namespace JDP {
             return _stopReasonTexts.TryGetValue(stopReason, out reasonText) ? reasonText : "Unknown error";
         }
 
-        // A one-time download whose page failed stops with Other; its error explains why
+        // stopError is only set for a stop it caused (a one-time download whose page failed stops with Other)
         private static bool IsStopWithoutKnownReason(StopReason stopReason) {
             return stopReason == StopReason.Other || stopReason == StopReason.DownloadComplete;
         }

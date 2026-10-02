@@ -124,14 +124,38 @@ namespace JDP.Tests {
             Assert.HasCount(2, parent.DescendantThreads);
         }
 
+        // A child added again for the same page replaces the old one, as the thread list does
         [TestMethod]
-        public void AddingTheSameChildTwiceKeepsOne() {
+        public void AddingAChildForTheSamePageReplacesTheOldOne() {
             ThreadWatcher parent = new ThreadWatcher(ThreadURL);
             ThreadWatcher child = new ThreadWatcher("http://example.com/b/res/2.html");
+            ThreadWatcher replacement = new ThreadWatcher("http://example.com/b/res/2.html");
 
             Assert.IsTrue(parent.AddChildThread(child));
-            Assert.IsFalse(parent.AddChildThread(new ThreadWatcher("http://example.com/b/res/2.html")));
-            Assert.AreSame(child, parent.ChildThreads[child.PageID]);
+            Assert.IsFalse(parent.AddChildThread(replacement));
+            Assert.HasCount(1, parent.ChildThreads);
+            Assert.AreSame(replacement, parent.ChildThreads[child.PageID]);
+        }
+
+        [TestMethod]
+        public void DescendantSlotsAreLimitedUntilReleased() {
+            ThreadWatcher.MaxDescendantThreads = 2;
+            try {
+                ThreadWatcher root = new ThreadWatcher(ThreadURL);
+                Assert.IsTrue(root.TryReserveDescendantSlot());
+                Assert.IsTrue(root.TryReserveDescendantSlot());
+                Assert.IsFalse(root.TryReserveDescendantSlot());
+
+                root.ReleaseDescendantSlot();
+                root.AddChildThread(new ThreadWatcher("http://example.com/b/res/2.html"));
+
+                Assert.IsFalse(root.TryReserveDescendantSlot());
+                root.ReleaseDescendantSlot();
+                Assert.IsTrue(root.TryReserveDescendantSlot());
+            }
+            finally {
+                ThreadWatcher.MaxDescendantThreads = ThreadWatcher.DefaultMaxDescendantThreads;
+            }
         }
 
         // R7

@@ -10,6 +10,9 @@ namespace JDP {
     public class ThreadWatcher {
         private const int _maxDownloadTries = 3;
 
+        // Checks in a row that download the whole page again to retry a file that failed
+        private const int _maxRefetchesForFailedFile = 3;
+
         // A download's file is preallocated to the size the server announces, which reduces
         // fragmentation; announced sizes above this are only partly preallocated, so a wrong or
         // hostile Content-Length cannot reserve a large amount of disk space up front.
@@ -66,6 +69,13 @@ namespace JDP {
         private int _failedFileCount;
         private bool _hasFilesToRetry;
         private bool _loggedDescendantLimit;
+        // Separate from _settingsSync: counting descendants takes their locks, and a child can
+        // take its parent's _settingsSync while holding its own
+        private readonly object _descendantSlotSync = new object();
+        private int _reservedDescendantSlots;
+        private string _stopError;
+        // Checks in a row that each file (by URL) failed in; guarded by itself
+        private readonly Dictionary<string, int> _fileFailureCheckCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
         static ThreadWatcher() {
             // HttpWebRequest uses ThreadPool for asynchronous calls
@@ -233,12 +243,31 @@ namespace JDP {
             get { lock (_settingsSync) { return new Dictionary<string, ThreadWatcher>(_childThreads); } }
         }
 
-        // Returns false if a child with the same page ID was already added
+        // Replaces a child with the same page ID, as the thread list does when it registers a
+        // new watcher for a page. Returns false if a child with that page ID was replaced.
         public bool AddChildThread(ThreadWatcher childThread) {
             lock (_settingsSync) {
-                if (_childThreads.ContainsKey(childThread.PageID)) return false;
-                _childThreads.Add(childThread.PageID, childThread);
+                bool isNew = !_childThreads.ContainsKey(childThread.PageID);
+                _childThreads[childThread.PageID] = childThread;
+                return isNew;
+            }
+        }
+
+        // Reserves room for one thread that auto-follow is about to add under this root
+        // watcher. Threads are added later on the UI thread, so the reservations that have not
+        // been released yet count against the limit too. Returns false if the limit is reached.
+        public bool TryReserveDescendantSlot() {
+            lock (_descendantSlotSync) {
+                if (DescendantThreads.Count + _reservedDescendantSlots >= MaxDescendantThreads) return false;
+                _reservedDescendantSlots++;
                 return true;
+            }
+        }
+
+        // Releases a reservation once the thread has been added (or rejected)
+        public void ReleaseDescendantSlot() {
+            lock (_descendantSlotSync) {
+                if (_reservedDescendantSlots > 0) _reservedDescendantSlots--;
             }
         }
 
@@ -266,6 +295,12 @@ namespace JDP {
         // The error of the last check (e.g. "HTTP 403 Forbidden"), or null if the check went fine
         public string CheckError {
             get { lock (_settingsSync) { return _checkError; } }
+        }
+
+        // The error that caused the watcher to stop (e.g. a one-time download whose page failed),
+        // or null if it stopped for another reason
+        public string StopError {
+            get { lock (_settingsSync) { return _stopError; } }
         }
 
         // The images and thumbnails that failed in the last check
@@ -335,6 +370,7 @@ namespace JDP {
                 }
                 _isStopping = false;
                 _stopReason = StopReason.Other;
+                _stopError = null;
                 _hasRun = true;
                 _hasInitialized = false;
                 _nextCheckWorkItem = _workScheduler.AddItem(TickCount.Now, Check, PageHost);
@@ -342,12 +378,18 @@ namespace JDP {
         }
 
         public void Stop(StopReason reason) {
+            Stop(reason, null);
+        }
+
+        // stopError is the error that caused the stop, shown with it; null for other stops
+        private void Stop(StopReason reason, string stopError) {
             bool stoppingNow = false;
             bool checkFinished = false;
             List<Action> downloadAborters = null;
             lock (_settingsSync) {
                 if (!IsStopping) {
                     stoppingNow = true;
+                    _stopError = stopError;
                     checkFinished = BeginStopping(reason, out downloadAborters);
                 }
             }
@@ -711,7 +753,7 @@ namespace JDP {
                 RefetchPagesIfFilesFailed();
 
                 if (OneTimeDownload) {
-                    Stop(GetOneTimeDownloadStopReason());
+                    StopOneTimeDownload();
                 }
             }
             catch (Exception ex) {
@@ -723,8 +765,9 @@ namespace JDP {
         }
 
         // A one-time download whose page could not be downloaded did not complete
-        private StopReason GetOneTimeDownloadStopReason() {
-            return CheckError != null ? StopReason.Other : StopReason.DownloadComplete;
+        private void StopOneTimeDownload() {
+            string checkError = CheckError;
+            Stop(checkError != null ? StopReason.Other : StopReason.DownloadComplete, checkError);
         }
 
         // Pages are normally requested with If-Modified-Since, and an unchanged page (304) queues
@@ -843,13 +886,19 @@ namespace JDP {
         // was downloaded (an error, an unchanged page, or a page that is not a thread).
         private bool DownloadThreadPage(SiteHelper siteHelper, PageInfo pageInfo) {
             DateTime? previousCacheTime = pageInfo.CacheTime;
-            HTMLParser pageParser = DownloadPage(pageInfo);
-            if (pageParser == null) return false;
+            DownloadedPage page = DownloadPage(pageInfo);
+            if (page == null) return false;
 
+            HTMLParser pageParser = TryParsePage(page.Content, pageInfo.URL);
+            if (pageParser == null) {
+                RejectPage(pageInfo, previousCacheTime, "page could not be read");
+                return false;
+            }
+            ApplyDownloadedPage(pageInfo, page);
             siteHelper.SetURL(pageInfo.URL);
             siteHelper.SetHTMLParser(pageParser);
             if (siteHelper.IsThreadPage()) return true;
-            RejectNonThreadPage(pageInfo, previousCacheTime);
+            RejectPage(pageInfo, previousCacheTime, "not a thread page");
             return false;
         }
 
@@ -865,9 +914,9 @@ namespace JDP {
         }
 
         // Blocks until the download ends; returns null if the page wasn't downloaded. The page is
-        // parsed here on the check thread, not in the download callback, so that a parse error
-        // cannot keep the end event from being set.
-        private HTMLParser DownloadPage(PageInfo pageInfo) {
+        // parsed afterwards on the check thread, not in the download callback, so that a parse
+        // error cannot keep the end event from being set.
+        private DownloadedPage DownloadPage(PageInfo pageInfo) {
             DownloadedPage page = null;
             ManualResetEvent downloadEndEvent = new ManualResetEvent(false);
             DownloadPageEndCallback downloadEnd = (result, content, lastModifiedTime, encoding) => {
@@ -883,33 +932,45 @@ namespace JDP {
             DownloadPageAsync(pageInfo.Path, pageInfo.URL, PageAuth, pageInfo.CacheTime, downloadEnd);
             downloadEndEvent.WaitOne();
             downloadEndEvent.Close();
-            return page != null ? ParseDownloadedPage(pageInfo, page) : null;
+            return page;
         }
 
-        private static HTMLParser ParseDownloadedPage(PageInfo pageInfo, DownloadedPage page) {
-            HTMLParser pageParser = PageParserFactory(page.Content);
+        // Returns null (and logs the exception) if the page could not be parsed
+        private static HTMLParser TryParsePage(string content, string url) {
+            try {
+                return PageParserFactory(content);
+            }
+            catch (Exception ex) {
+                Logger.Log("Error parsing page " + url + ":" + Environment.NewLine + ex);
+                return null;
+            }
+        }
+
+        private static void ApplyDownloadedPage(PageInfo pageInfo, DownloadedPage page) {
             pageInfo.IsFresh = true;
             pageInfo.CacheTime = page.LastModifiedTime;
             pageInfo.Encoding = page.Encoding;
             pageInfo.ReplaceList = (Settings.SaveThumbnails != false) ? new List<ReplaceInfo>() : null;
-            return pageParser;
         }
 
-        // An error, ban or captcha page served with 200 OK: keep the saved copy of the thread
-        // and its cache time, and report the problem
-        private void RejectNonThreadPage(PageInfo pageInfo, DateTime? previousCacheTime) {
+        // A page that can't be used (an error, ban or captcha page served with 200 OK, or one
+        // that can't be parsed): keep the saved copy of the thread and its cache time, and
+        // report the problem
+        private void RejectPage(PageInfo pageInfo, DateTime? previousCacheTime, string description) {
             pageInfo.IsFresh = false;
             pageInfo.CacheTime = previousCacheTime;
             RestorePageBackup(pageInfo.Path, pageInfo.Path + ".bak");
-            SetCheckError("not a thread page", pageInfo.URL, null);
+            SetCheckError(description, pageInfo.URL, null);
         }
 
+        // Each AddThread event holds a reservation on the root watcher (TryReserveDescendantSlot)
+        // that the handler must release with ReleaseDescendantSlot once it has added or rejected
+        // the thread
         private void AddCrossLinkedThreads(SiteHelper siteHelper, PageInfo pageInfo) {
             Dictionary<string, ThreadWatcher> descendantThreads = RootThread.DescendantThreads;
-            int remaining = MaxDescendantThreads - descendantThreads.Count;
             foreach (string crossLink in siteHelper.GetCrossLinks(pageInfo.ReplaceList, Settings.InterBoardAutoFollow != false)) {
                 if (!IsNewCrossLink(TryGetCrossLinkPageID(crossLink), descendantThreads)) continue;
-                if (remaining-- <= 0) {
+                if (!RootThread.TryReserveDescendantSlot()) {
                     LogDescendantLimitReached();
                     return;
                 }
@@ -1115,9 +1176,7 @@ namespace JDP {
                 if (IsCompletedOrSkipped(result)) {
                     RecordCompletedImage(image, saveFileName, result, counts);
                 }
-                else {
-                    MarkFilesToRetry();
-                }
+                RecordFileRetryState(image.URL, result);
             }
         }
 
@@ -1130,6 +1189,31 @@ namespace JDP {
             };
             counts.Record(result);
             OnDownloadStatus(new DownloadStatusEventArgs(DownloadType.Image, counts.Completed, counts.Total));
+        }
+
+        // A file that did not finish makes the next check download the page again so that the
+        // file is retried, but only for a few checks in a row; after that it is retried only when
+        // the page changes, so a file that always fails doesn't turn off If-Modified-Since.
+        private void RecordFileRetryState(string url, DownloadResult result) {
+            if (result != DownloadResult.RetryLater) {
+                lock (_fileFailureCheckCounts) _fileFailureCheckCounts.Remove(url);
+                return;
+            }
+            if (CountFailedCheck(url) <= _maxRefetchesForFailedFile) {
+                MarkFilesToRetry();
+            }
+        }
+
+        private int CountFailedCheck(string url) {
+            int count;
+            lock (_fileFailureCheckCounts) {
+                _fileFailureCheckCounts.TryGetValue(url, out count);
+                _fileFailureCheckCounts[url] = ++count;
+            }
+            if (count == _maxRefetchesForFailedFile + 1) {
+                Logger.Log("Giving up retrying " + url + " until the page changes.");
+            }
+            return count;
         }
 
         private void MarkFilesToRetry() {
@@ -1175,9 +1259,7 @@ namespace JDP {
                 if (IsCompletedOrSkipped(result)) {
                     RecordCompletedThumbnail(thumb, result, counts);
                 }
-                else {
-                    MarkFilesToRetry();
-                }
+                RecordFileRetryState(thumb.URL, result);
                 downloadEndEvent.Set();
             };
             downloadEndEvents.Add(downloadEndEvent);
@@ -1766,12 +1848,13 @@ namespace JDP {
                     }
                 }
 
+                // A backup that already exists is the last complete copy (the saved page is only
+                // left incomplete when one exists), so it is kept and the page is overwritten.
+                // Otherwise the page is moved to the backup; if that fails, File.Move throws and
+                // the attempt fails as a local file error before the page is overwritten.
                 private void BackupExistingPage() {
-                    if (!File.Exists(_download._path)) return;
-                    if (File.Exists(_download._backupPath)) {
-                        TryDeleteFile(_download._backupPath);
-                    }
-                    TryMoveFile(_download._path, _download._backupPath);
+                    if (!File.Exists(_download._path) || File.Exists(_download._backupPath)) return;
+                    File.Move(_download._path, _download._backupPath);
                 }
 
                 private void OnResponse(HttpWebResponse response) {
@@ -2024,12 +2107,14 @@ namespace JDP {
                         // Fatal IO error, stop
                         Logger.Log("Error saving file " + _download._path + ":" + Environment.NewLine + inner);
                         _watcher.Stop(StopReason.IOError);
+                        EndTryDownload(DownloadResult.Skipped);
                     }
                     else {
-                        // Problem with this one file (e.g. disk full, file in use), skip it
+                        // Problem with this one file (e.g. disk full, file in use), try it again
+                        // in a later check
                         _watcher.ReportFileFailure(_download._url, ex);
+                        EndTryDownload(DownloadResult.RetryLater);
                     }
-                    EndTryDownload(DownloadResult.Skipped);
                 }
             }
         }

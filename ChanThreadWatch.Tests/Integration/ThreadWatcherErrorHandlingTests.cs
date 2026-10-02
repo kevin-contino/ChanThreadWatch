@@ -24,6 +24,7 @@ namespace JDP.Tests.Integration {
 
             Assert.AreEqual(StopReason.Other, reason);
             Assert.AreEqual("HTTP 403 Forbidden", watcher.CheckError);
+            Assert.AreEqual("HTTP 403 Forbidden", watcher.StopError);
             Assert.HasCount(3, server.RequestsTo(FourChanThreadFixture.ThreadPath));
             StringAssert.Contains(ReadLog(), "Error downloading page " + url + ": HTTP 403 Forbidden");
             Assert.IsFalse(File.Exists(SavedPagePath(watcher)));
@@ -46,6 +47,27 @@ namespace JDP.Tests.Integration {
 
             CollectionAssert.AreEqual(new[] { "HTTP 500 Internal Server Error", null }, checkErrors);
             Assert.IsTrue(File.Exists(SavedPagePath(watcher)));
+        }
+
+        // R5: the error of an earlier check is not shown as the reason for a later, unrelated stop
+        [TestMethod]
+        public void StopForAnotherReasonDoesNotCarryTheCheckError() {
+            LoopbackHttpServer server = StartServer();
+            server.Route(FourChanThreadFixture.ThreadPath, LoopbackResponse.StatusOnly(403, "Forbidden"));
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            var waiting = new ManualResetEvent(false);
+            var stopped = new ManualResetEvent(false);
+            watcher.OneTimeDownload = false;
+            watcher.WaitStatus += (s, e) => waiting.Set();
+            watcher.StopStatus += (s, e) => stopped.Set();
+            watcher.Start();
+            Assert.IsTrue(waiting.WaitOne(RunTimeout));
+
+            watcher.Stop(StopReason.Other);
+
+            Assert.IsTrue(stopped.WaitOne(RunTimeout));
+            Assert.AreEqual("HTTP 403 Forbidden", watcher.CheckError);
+            Assert.IsNull(watcher.StopError);
         }
 
         // R5: a certificate that is not trusted is reported with the host rather than retried
@@ -146,6 +168,65 @@ namespace JDP.Tests.Integration {
             StringAssert.Contains(File.ReadAllText(SavedPagePath(watcher)), "<a class=\"fileThumb\" href=\"1700000000001.jpg\"");
         }
 
+        // R10: a file that keeps failing makes only a few checks download the whole page again;
+        // after that the page is requested with If-Modified-Since again
+        [TestMethod]
+        public void FileThatKeepsFailingStopsForcingPageDownloads() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            LoopbackResponse page = LoopbackResponse.Html(fixture.Html(server.BaseURL(), server.BaseURL()))
+                .WithHeader("Last-Modified", "Wed, 01 Jan 2025 00:00:00 GMT");
+            server.Route(FourChanThreadFixture.ThreadPath, r => r.Header("If-Modified-Since") != null ? LoopbackResponse.StatusOnly(304, "Not Modified") : page);
+            server.Route(FirstImage, LoopbackResponse.StatusOnly(403, "Forbidden"));
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunChecks(watcher, 5);
+
+            List<RecordedRequest> pageRequests = server.RequestsTo(FourChanThreadFixture.ThreadPath);
+            Assert.HasCount(5, pageRequests);
+            for (int i = 1; i <= 3; i++) {
+                Assert.IsNull(pageRequests[i].Header("If-Modified-Since"), "check " + (i + 1));
+            }
+            Assert.IsNotNull(pageRequests[4].Header("If-Modified-Since"));
+            Assert.HasCount(4 * 3, server.RequestsTo(FirstImage));
+            StringAssert.Contains(ReadLog(), "Giving up retrying " + server.URL(FirstImage) + " until the page changes.");
+        }
+
+        // R4/R10: a file that can't be written (here: in use) is tried again in a later
+        // check rather than skipped for the rest of the session
+        [TestMethod]
+        public void FileThatCannotBeWrittenIsRetriedInALaterCheck() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            LoopbackResponse error = LoopbackResponse.StatusOnly(500, "Internal Server Error");
+            server.RouteSequence(FirstImage, error, error, error, LoopbackResponse.Bytes(fixture.Images[FirstImage], "image/jpeg"));
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            string imagePath = Path.Combine(DownloadDir, "0_wg_100", "1700000000001.jpg");
+            FileStream blocker = null;
+            var failedCounts = new List<int>();
+            watcher.WaitStatus += (s, e) => failedCounts.Add(watcher.FailedFileCount);
+
+            try {
+                RunChecks(watcher, 3, check => {
+                    // Check 1 fails on the server; check 2 finds the file in use; check 3 can write it
+                    if (check == 1) blocker = new FileStream(imagePath, FileMode.Create, FileAccess.Write, FileShare.None);
+                    if (check == 2) {
+                        blocker.Dispose();
+                        File.Delete(imagePath);
+                    }
+                });
+            }
+            finally {
+                blocker?.Dispose();
+            }
+
+            CollectionAssert.AreEqual(new[] { 1, 1, 0 }, failedCounts);
+            CollectionAssert.AreEqual(fixture.Images[FirstImage], File.ReadAllBytes(imagePath));
+            StringAssert.Contains(ReadLog(), "Error downloading file " + server.URL(FirstImage) + ": cannot write file");
+        }
+
         // R10: once nothing failed, the page is requested with If-Modified-Since again
         [TestMethod]
         public void PageIsRequestedConditionallyWhenNothingFailed() {
@@ -198,20 +279,78 @@ namespace JDP.Tests.Integration {
             Assert.IsFalse(File.Exists(SavedPagePath(watcher)));
         }
 
-        // B8: an exception while the downloaded page is parsed stops the watcher instead of
-        // leaving the check waiting forever
+        // B8: an exception while the downloaded page is parsed ends the check instead of leaving
+        // it waiting forever; the page is rejected like one that is not a thread, so the saved
+        // copy is kept and the error is shown
         [TestMethod]
-        public void PageParseFailureStopsInsteadOfHanging() {
+        public void PageParseFailureIsReportedAndKeepsTheSavedThread() {
             var fixture = new FourChanThreadFixture();
             LoopbackHttpServer server = StartServer();
             fixture.RouteAll(server);
+            string url = server.URL(FourChanThreadFixture.ThreadPath);
+            ThreadWatcher first = CreateWatcher(url);
+            RunToStop(first);
+            string savedPage = File.ReadAllText(SavedPagePath(first));
             ThreadWatcher.PageParserFactory = html => { throw new InvalidOperationException("parse failed"); };
-            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
 
+            ThreadWatcher watcher = CreateWatcher(url);
             StopReason reason = RunToStop(watcher);
 
             Assert.AreEqual(StopReason.Other, reason);
+            Assert.AreEqual("page could not be read", watcher.CheckError);
+            Assert.AreEqual("page could not be read", watcher.StopError);
+            Assert.AreEqual(savedPage, File.ReadAllText(SavedPagePath(watcher)));
+            Assert.IsFalse(File.Exists(SavedPagePath(watcher) + ".bak"));
             StringAssert.Contains(ReadLog(), "parse failed");
+        }
+
+        // R7: when an earlier save was left incomplete, its backup is the last complete copy;
+        // a page that is not a thread brings that copy back instead of losing it
+        [TestMethod]
+        public void PageThatIsNotAThreadRestoresTheBackupOfAnIncompleteSave() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            string url = server.URL(FourChanThreadFixture.ThreadPath);
+            ThreadWatcher first = CreateWatcher(url);
+            RunToStop(first);
+            string pagePath = SavedPagePath(first);
+            string completePage = File.ReadAllText(pagePath);
+            File.WriteAllText(pagePath + ".bak", completePage);
+            File.WriteAllText(pagePath, "<html><body><div class=\"thread\">incomplete");
+            server.Route(FourChanThreadFixture.ThreadPath, LoopbackResponse.Html("<html><body><h1>You are banned!</h1></body></html>"));
+
+            ThreadWatcher second = CreateWatcher(url);
+            RunToStop(second);
+
+            Assert.AreEqual("not a thread page", second.CheckError);
+            Assert.AreEqual(completePage, File.ReadAllText(pagePath));
+            Assert.IsFalse(File.Exists(pagePath + ".bak"));
+        }
+
+        // When the saved page can't be moved to its backup, the download fails as a disk error
+        // and the saved page is not overwritten
+        [TestMethod]
+        public void PageIsNotOverwrittenWhenItsBackupCannotBeMade() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            string url = server.URL(FourChanThreadFixture.ThreadPath);
+            ThreadWatcher first = CreateWatcher(url);
+            RunToStop(first);
+            string pagePath = SavedPagePath(first);
+            string savedPage = File.ReadAllText(pagePath);
+            server.Route(FourChanThreadFixture.ThreadPath, LoopbackResponse.Html(fixture.Html(server.BaseURL(), server.BaseURL()).Replace("OP text", "changed")));
+
+            StopReason reason;
+            ThreadWatcher second = CreateWatcher(url);
+            // Open without delete sharing, so the page can be written but not moved
+            using (new FileStream(pagePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+                reason = RunToStop(second);
+            }
+
+            Assert.AreEqual(StopReason.IOError, reason);
+            Assert.AreEqual(savedPage, File.ReadAllText(pagePath));
         }
 
         // R2: an exception during a reparse is logged and still ends the reparse, so shutdown
@@ -349,6 +488,97 @@ namespace JDP.Tests.Integration {
             StringAssert.Contains(ReadLog(), "Auto-follow limit of 3 threads reached for " + url);
         }
 
+        // S4: threads raised for adding count against the limit until the handler releases them,
+        // so checks that run before the UI has added the threads cannot pass the limit
+        [TestMethod]
+        public void AutoFollowLimitHoldsAcrossChecksBeforeThreadsAreAdded() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            server.Route(FourChanThreadFixture.ThreadPath, LoopbackResponse.Html(PageWithCrossLinks(fixture, server, 201, 205)));
+            ThreadWatcher.MaxDescendantThreads = 3;
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            watcher.AutoFollow = true;
+            var added = new List<string>();
+            // The handler never adds or releases, like a UI thread that has not caught up
+            watcher.AddThread += (s, e) => { lock (added) added.Add(e.PageURL); };
+
+            RunChecks(watcher, 3);
+
+            Assert.HasCount(3, added);
+        }
+
+        // S4: once the threads are added, the limit counts them instead of the reservations
+        [TestMethod]
+        public void AutoFollowLimitCountsAddedThreads() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            server.Route(FourChanThreadFixture.ThreadPath, LoopbackResponse.Html(PageWithCrossLinks(fixture, server, 201, 205)));
+            ThreadWatcher.MaxDescendantThreads = 3;
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            watcher.AutoFollow = true;
+            var added = new List<string>();
+            watcher.AddThread += (s, e) => {
+                lock (added) added.Add(e.PageURL);
+                watcher.AddChildThread(new ThreadWatcher(e.PageURL) { ParentThread = watcher });
+                watcher.RootThread.ReleaseDescendantSlot();
+            };
+
+            RunChecks(watcher, 3);
+
+            Assert.HasCount(3, added);
+            Assert.HasCount(3, watcher.DescendantThreads);
+        }
+
+        private static string PageWithCrossLinks(FourChanThreadFixture fixture, LoopbackHttpServer server, int first, int last) {
+            var links = new StringBuilder();
+            for (int i = first; i <= last; i++) {
+                links.AppendFormat("<a href=\"/wg/thread/{0}#p{0}\" class=\"quotelink\">&gt;&gt;{0}</a><br>", i);
+            }
+            return fixture.Html(server.BaseURL(), server.BaseURL()).Replace("OP text", links.ToString());
+        }
+
+        // S4: a file exactly at the limit is saved
+        [TestMethod]
+        public void FileExactlyAtTheLimitIsSaved() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            byte[] image = fixture.Images[FirstImage];
+            server.Route(FirstImage, new LoopbackResponse { RawBytes = CloseDelimited(image) });
+            ThreadWatcher.MaxFileBytes = image.Length;
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            StopReason reason = RunToStop(watcher);
+
+            Assert.AreEqual(StopReason.DownloadComplete, reason);
+            CollectionAssert.AreEqual(image, File.ReadAllBytes(Path.Combine(watcher.ThreadDownloadDirectory, "1700000000001.jpg")));
+            Assert.AreEqual(0, watcher.FailedFileCount);
+        }
+
+        [TestMethod]
+        public void FileAnnouncedExactlyAtTheLimitIsSaved() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher.MaxFileBytes = fixture.Images[FirstImage].Length;
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunToStop(watcher);
+
+            Assert.IsTrue(File.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "1700000000001.jpg")));
+            Assert.AreEqual(0, watcher.FailedFileCount);
+        }
+
+        private static byte[] CloseDelimited(byte[] body) {
+            byte[] head = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nConnection: close\r\n\r\n");
+            byte[] raw = new byte[head.Length + body.Length];
+            Buffer.BlockCopy(head, 0, raw, 0, head.Length);
+            Buffer.BlockCopy(body, 0, raw, head.Length, body.Length);
+            return raw;
+        }
+
         // S4: a file announced as larger than the limit is not downloaded
         [TestMethod]
         public void FileAnnouncedAsTooLargeIsNotSaved() {
@@ -387,6 +617,8 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(StopReason.DownloadComplete, reason);
             Assert.IsFalse(File.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "1700000000001.jpg")));
             Assert.AreEqual(1, watcher.FailedFileCount);
+            Assert.HasCount(1, server.RequestsTo(FirstImage));
+            StringAssert.Contains(ReadLog(), "Error downloading file " + server.URL(FirstImage) + ": file is larger than the limit of 10000 bytes");
         }
 
         // S4: a huge announced size is only partly preallocated on disk

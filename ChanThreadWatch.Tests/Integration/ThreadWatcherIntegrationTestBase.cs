@@ -65,14 +65,18 @@ namespace JDP.Tests.Integration {
 
         // Runs the given number of checks of a watching (not one-time) watcher back to back, then
         // stops it. Each check after the first starts as soon as the previous one has finished.
-        protected static void RunChecks(ThreadWatcher watcher, int checkCount) {
+        // beforeNextCheck, if given, runs after each check but the last with the 1-based number of
+        // the check that finished.
+        protected static void RunChecks(ThreadWatcher watcher, int checkCount, System.Action<int> beforeNextCheck = null) {
             var waiting = new AutoResetEvent(false);
             watcher.OneTimeDownload = false;
             watcher.WaitStatus += (s, e) => waiting.Set();
             watcher.Start();
             for (int i = 0; i < checkCount; i++) {
                 Assert.IsTrue(waiting.WaitOne(RunTimeout), "Check " + (i + 1) + " did not finish within " + RunTimeout);
-                if (i < checkCount - 1) watcher.MillisecondsUntilNextCheck = 0;
+                if (i == checkCount - 1) break;
+                beforeNextCheck?.Invoke(i + 1);
+                watcher.MillisecondsUntilNextCheck = 0;
             }
             watcher.Stop(StopReason.UserRequest);
             Assert.IsTrue(watcher.WaitUntilStopped((int)RunTimeout.TotalMilliseconds), "Check did not finish");
