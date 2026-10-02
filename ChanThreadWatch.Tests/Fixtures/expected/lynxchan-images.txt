@@ -1,0 +1,34 @@
+images:
+  https://endchan.org/.media/aaa.png | https://endchan.org/b/res/5.html | [op original.png] | [] | None | (null)
+  https://endchan.org/.media/bbb.png | https://endchan.org/b/res/5.html | [inner & name.png] | [Heidi] | None | (null)
+  https://endchan.org/.media/ccc.png | https://endchan.org/b/res/5.html | [spoiler one.png] | [Heidi] | None | (null)
+  https://endchan.org/.media/ddd.png | https://endchan.org/b/res/5.html | [spoiler two.png] | [Heidi] | None | (null)
+  https://endchan.org/.media/nnn.webm | https://endchan.org/b/res/5.html | [clip.webm] | [] | None | (null)
+  https://endchan.org/.media/ooo.png | https://endchan.org/b/res/5.html | [spoiler three.png] | [] | None | (null)
+thumbnails:
+  https://endchan.org/.media/t_aaa | https://endchan.org/b/res/5.html
+  https://endchan.org/.media/t_bbb | https://endchan.org/b/res/5.html
+  https://endchan.org/spoiler.spoiler | https://endchan.org/b/res/5.html
+  https://endchan.org/.media/t_nnn | https://endchan.org/b/res/5.html
+replaces:
+  338 | 22 | ImageLinkHref | [aaa.png] | (null) | href="/.media/aaa.png"
+  530 | 22 | ImageLinkHref | [aaa.png] | (null) | href="/.media/aaa.png"
+  558 | 19 | ImageSrc | [t_aaa] | (null) | src="/.media/t_aaa"
+  403 | 22 | ImageLinkHref | [aaa.png] | (null) | href="/.media/aaa.png"
+  824 | 22 | ImageLinkHref | [bbb.png] | (null) | href="/.media/bbb.png"
+  931 | 19 | ImageSrc | [t_bbb] | (null) | src="/.media/t_bbb"
+  1012 | 22 | ImageLinkHref | [ccc.png] | (null) | href="/.media/ccc.png"
+  1132 | 22 | ImageLinkHref | [ccc.png] | (null) | href="/.media/ccc.png"
+  1160 | 22 | ImageSrc | [spoiler.spoiler] | (null) | src="/spoiler.spoiler"
+  1071 | 22 | ImageLinkHref | [ccc.png] | (null) | href="/.media/ccc.png"
+  1244 | 22 | ImageLinkHref | [ddd.png] | (null) | href="/.media/ddd.png"
+  1364 | 22 | ImageLinkHref | [ddd.png] | (null) | href="/.media/ddd.png"
+  1392 | 22 | ImageSrc | [spoiler.spoiler] | (null) | src="/spoiler.spoiler"
+  1303 | 22 | ImageLinkHref | [ddd.png] | (null) | href="/.media/ddd.png"
+  3189 | 23 | ImageLinkHref | [nnn.webm] | (null) | href="/.media/nnn.webm"
+  3323 | 23 | ImageLinkHref | [nnn.webm] | (null) | href="/.media/nnn.webm"
+  3352 | 19 | ImageSrc | [t_nnn] | (null) | src="/.media/t_nnn"
+  3267 | 23 | ImageLinkHref | [nnn.webm] | (null) | href="/.media/nnn.webm"
+  3433 | 22 | ImageLinkHref | [ooo.png] | (null) | href="/.media/ooo.png"
+  3532 | 22 | ImageLinkHref | [ooo.png] | (null) | href="/.media/ooo.png"
+  3560 | 22 | ImageSrc | [spoiler.spoiler] | (null) | src="/spoiler.spoiler"

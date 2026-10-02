@@ -1,0 +1,36 @@
+images:
+  https://i.4cdn.org/wg/208.jpg | https://boards.4chan.org/wg/thread/8143532 | [sun rise & set.jpg] | [] | None | (null)
+  https://i.4cdn.org/wg/209.png | https://boards.4chan.org/wg/thread/8143532 | [titled name.png] | [Alice] | MD5 | 01-02-03-04-05-06-07-08-09-0A-0B-0C-0D-0E-0F-10
+  https://i.4cdn.org/wg/210.jpg | https://boards.4chan.org/wg/thread/8143532 | [210.jpg] | [] | None | (null)
+  https://i.4cdn.org/wg/211.jpg | https://boards.4chan.org/wg/thread/8143532 | [211.jpg] | [Id42] | None | (null)
+  https://i.4cdn.org/wg/212.png | https://boards.4chan.org/wg/thread/8143532 | [] | [] | None | (null)
+  https://i.4cdn.org/wg/213.png | https://boards.4chan.org/wg/thread/8143532 | [second spoiler.png] | [] | None | (null)
+  https://i.4cdn.org/wg/216.jpg | https://boards.4chan.org/wg/thread/8143532 | [216.jpg] | [] | None | (null)
+thumbnails:
+  https://i.4cdn.org/wg/208s.jpg | https://boards.4chan.org/wg/thread/8143532
+  https://i.4cdn.org/wg/209s.jpg | https://boards.4chan.org/wg/thread/8143532
+  https://i.4cdn.org/wg/210s.jpg | https://boards.4chan.org/wg/thread/8143532
+  https://i.4cdn.org/wg/211s.jpg | https://boards.4chan.org/wg/thread/8143532
+  https://s.4cdn.org/image/spoiler-wg1.png | https://boards.4chan.org/wg/thread/8143532
+  https://i.4cdn.org/wg/216s.jpg | https://boards.4chan.org/wg/thread/8143532
+replaces:
+  1562 | 30 | ImageLinkHref | [208.jpg] | (null) | href="//i.4cdn.org/wg/208.jpg"
+  1654 | 30 | ImageLinkHref | [208.jpg] | (null) | href="//i.4cdn.org/wg/208.jpg"
+  1690 | 30 | ImageSrc | [208s.jpg] | (null) | src="//i.4cdn.org/wg/208s.jpg"
+  1913 | 30 | ImageLinkHref | [209.png] | (null) | href="//i.4cdn.org/wg/209.png"
+  1988 | 30 | ImageLinkHref | [209.png] | (null) | href="//i.4cdn.org/wg/209.png"
+  2024 | 30 | ImageSrc | [209s.jpg] | (null) | src="//i.4cdn.org/wg/209s.jpg"
+  2255 | 30 | ImageLinkHref | [210.jpg] | (null) | href="//i.4cdn.org/wg/210.jpg"
+  2324 | 30 | ImageLinkHref | [210.jpg] | (null) | href="//i.4cdn.org/wg/210.jpg"
+  2360 | 30 | ImageSrc | [210s.jpg] | (null) | src="//i.4cdn.org/wg/210s.jpg"
+  2626 | 30 | ImageLinkHref | [211.jpg] | (null) | href="//i.4cdn.org/wg/211.jpg"
+  2695 | 30 | ImageLinkHref | [211.jpg] | (null) | href="//i.4cdn.org/wg/211.jpg"
+  2731 | 30 | ImageSrc | [211s.jpg] | (null) | src="//i.4cdn.org/wg/211s.jpg"
+  2839 | 30 | ImageLinkHref | [212.png] | (null) | href="//i.4cdn.org/wg/212.png"
+  2925 | 30 | ImageLinkHref | [212.png] | (null) | href="//i.4cdn.org/wg/212.png"
+  2961 | 40 | ImageSrc | [spoiler-wg1.png] | (null) | src="//s.4cdn.org/image/spoiler-wg1.png"
+  3106 | 30 | ImageLinkHref | [213.png] | (null) | href="//i.4cdn.org/wg/213.png"
+  3192 | 30 | ImageLinkHref | [213.png] | (null) | href="//i.4cdn.org/wg/213.png"
+  3228 | 40 | ImageSrc | [spoiler-wg2.png] | (null) | src="//s.4cdn.org/image/spoiler-wg2.png"
+  3741 | 30 | ImageLinkHref | [216.jpg] | (null) | href="//i.4cdn.org/wg/216.jpg"
+  3815 | 30 | ImageSrc | [216s.jpg] | (null) | src="//i.4cdn.org/wg/216s.jpg"

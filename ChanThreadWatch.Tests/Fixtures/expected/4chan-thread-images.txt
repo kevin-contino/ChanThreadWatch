@@ -1,0 +1,22 @@
+images:
+  https://i.4cdn.org/wg/1700000000001.jpg | https://boards.4chan.org/wg/thread/8143532 | [mountain & lake.jpg] | [] | MD5 | 01-02-03-04-05-06-07-08-09-0A-0B-0C-0D-0E-0F-10
+  https://i.4cdn.org/wg/1700000000002.png | https://boards.4chan.org/wg/thread/8143532 | [a very long file name.png] | [Bob!Trip] | MD5 | 10-11-12-13-14-15-16-17-18-19-1A-1B-1C-1D-1E-1F
+  https://i.4cdn.org/wg/1700000000003.png | https://boards.4chan.org/wg/thread/8143532 | [secret.png] | [AbC123] | MD5 | 20-21-22-23-24-25-26-27-28-29-2A-2B-2C-2D-2E-2F
+  https://i.4cdn.org/wg/1700000000004.gif | https://boards.4chan.org/wg/thread/8143532 | [hidden.gif] | [] | None | (null)
+thumbnails:
+  https://i.4cdn.org/wg/1700000000001s.jpg | https://boards.4chan.org/wg/thread/8143532
+  https://i.4cdn.org/wg/1700000000002s.jpg | https://boards.4chan.org/wg/thread/8143532
+  https://s.4cdn.org/image/spoiler-wg.png | https://boards.4chan.org/wg/thread/8143532
+replaces:
+  447 | 40 | ImageLinkHref | [1700000000001.jpg] | (null) | href="//i.4cdn.org/wg/1700000000001.jpg"
+  579 | 40 | ImageLinkHref | [1700000000001.jpg] | (null) | href="//i.4cdn.org/wg/1700000000001.jpg"
+  641 | 40 | ImageSrc | [1700000000001s.jpg] | (null) | src="//i.4cdn.org/wg/1700000000001s.jpg"
+  1327 | 40 | ImageLinkHref | [1700000000002.png] | (null) | href="//i.4cdn.org/wg/1700000000002.png"
+  1459 | 40 | ImageLinkHref | [1700000000002.png] | (null) | href="//i.4cdn.org/wg/1700000000002.png"
+  1521 | 40 | ImageSrc | [1700000000002s.jpg] | (null) | src="//i.4cdn.org/wg/1700000000002s.jpg"
+  2138 | 40 | ImageLinkHref | [1700000000003.png] | (null) | href="//i.4cdn.org/wg/1700000000003.png"
+  2269 | 40 | ImageLinkHref | [1700000000003.png] | (null) | href="//i.4cdn.org/wg/1700000000003.png"
+  2331 | 39 | ImageSrc | [spoiler-wg.png] | (null) | src="//s.4cdn.org/image/spoiler-wg.png"
+  2833 | 40 | ImageLinkHref | [1700000000004.gif] | (null) | href="//i.4cdn.org/wg/1700000000004.gif"
+  2963 | 40 | ImageLinkHref | [1700000000004.gif] | (null) | href="//i.4cdn.org/wg/1700000000004.gif"
+  3025 | 39 | ImageSrc | [spoiler-wg.png] | (null) | src="//s.4cdn.org/image/spoiler-wg.png"

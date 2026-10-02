@@ -1,0 +1,27 @@
+images:
+  https://i.warosu.org/data/g/img/0001/01/123.jpg | https://warosu.org/g/thread/123 | [op name.jpg] | [] | MD5 | 01-02-03-04-05-06-07-08-09-0A-0B-0C-0D-0E-0F-10
+  https://i.warosu.org/data/g/img/0001/01/124.png | https://warosu.org/g/thread/123 | [a&b.png] | [Eve& Co!Trip] | MD5 | FB-FF-BF-00-00-00-00-00-00-00-00-00-00-00-00-00
+  https://i.warosu.org/data/g/img/0001/01/125.gif | https://warosu.org/g/thread/123 | [nohash.gif] | [Frank] | None | (null)
+  https://i.warosu.org/data/g/img/0001/01/126.gif | https://warosu.org/g/thread/123 | [anon.gif] | [] | None | (null)
+  https://i.warosu.org/data/g/img/0001/01/127.gif | https://warosu.org/g/thread/123 | [no poster label spans.gif] | [] | None | (null)
+  https://i.warosu.org/data/g/img/0001/01/137.gif | https://warosu.org/g/thread/123 | [badhash.gif] | [x] | MD5 | (null)
+thumbnails:
+  https://i.warosu.org/data/g/thumb/0001/01/123s.jpg | https://warosu.org/g/thread/123
+  https://i.warosu.org/data/g/thumb/0001/01/124s.jpg | https://warosu.org/g/thread/123
+  https://i.warosu.org/data/g/thumb/0001/01/125s.jpg | https://warosu.org/g/thread/123
+  https://i.warosu.org/data/g/thumb/0001/01/126s.jpg | https://warosu.org/g/thread/123
+  https://i.warosu.org/data/g/thumb/0001/01/127s.jpg | https://warosu.org/g/thread/123
+  https://i.warosu.org/data/g/thumb/0001/01/137s.jpg | https://warosu.org/g/thread/123
+replaces:
+  434 | 54 | ImageLinkHref | [123.jpg] | (null) | href="https://i.warosu.org/data/g/img/0001/01/123.jpg"
+  494 | 56 | ImageSrc | [123s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/123s.jpg"
+  898 | 54 | ImageLinkHref | [124.png] | (null) | href="https://i.warosu.org/data/g/img/0001/01/124.png"
+  958 | 56 | ImageSrc | [124s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/124s.jpg"
+  1201 | 54 | ImageLinkHref | [125.gif] | (null) | href="https://i.warosu.org/data/g/img/0001/01/125.gif"
+  1261 | 56 | ImageSrc | [125s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/125s.jpg"
+  1506 | 54 | ImageLinkHref | [126.gif] | (null) | href="https://i.warosu.org/data/g/img/0001/01/126.gif"
+  1566 | 56 | ImageSrc | [126s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/126s.jpg"
+  1787 | 54 | ImageLinkHref | [127.gif] | (null) | href="https://i.warosu.org/data/g/img/0001/01/127.gif"
+  1847 | 56 | ImageSrc | [127s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/127s.jpg"
+  3954 | 54 | ImageLinkHref | [137.gif] | (null) | href="https://i.warosu.org/data/g/img/0001/01/137.gif"
+  4014 | 56 | ImageSrc | [137s.jpg] | (null) | src="https://i.warosu.org/data/g/thumb/0001/01/137s.jpg"

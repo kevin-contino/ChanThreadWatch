@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!-- Synthetic page for the generic SiteHelper, which treats any link whose URL contains /src/ as an image. -->
+<html>
+<head><title>Generic</title></head>
+<body>
+<a name="top">link without href</a>
+<a href="/b/res/2.html">not an image link</a>
+<a href="/b/src/1001.jpg"><img src="/b/thumb/1001s.jpg"></a>
+<a href="/b/src/1002.png">text only image link</a>
+<a href="/b/src/1003.gif"><img alt="no src"></a>
+<a href="/b/src/1001.jpg"><img src="/b/thumb/1001s.jpg"></a>
+<a href="/b/src/">empty file name</a>
+<a href="ftp://files.example.net/src/1004.jpg"><img src="/b/thumb/1004s.jpg"></a>
+<a href="https://example.com/b/src/1005.webm?x=1&amp;y=2"><img src="//cdn.example.com/b/thumb/1005s.jpg"></a>
+<a href="/redirect/src/http://other.example.org/img/1006.jpg"><img src="/b/thumb/1006s.jpg"></a>
+<a href="/b/src/1007.jpg"><img src="http://[bad"></a>
+<a href="/b/src/1008.jpg">unclosed image link
+</body>
+</html>
