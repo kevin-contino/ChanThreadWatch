@@ -917,8 +917,8 @@ namespace JDP {
             BeginInvoke(() => {
                 ThreadInfo thread = new ThreadInfo {
                     URL = args.PageURL,
-                    PageAuth = watcher.PageAuth,
-                    ImageAuth = watcher.ImageAuth,
+                    PageAuth = General.GetAuthForURL(watcher.PageAuth, watcher.PageURL, args.PageURL),
+                    ImageAuth = General.GetAuthForURL(watcher.ImageAuth, watcher.PageURL, args.PageURL),
                     CheckIntervalSeconds = watcher.CheckIntervalSeconds,
                     OneTimeDownload = watcher.OneTimeDownload,
                     SaveDir = null,
