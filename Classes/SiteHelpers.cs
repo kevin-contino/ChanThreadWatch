@@ -400,6 +400,12 @@ namespace JDP {
         public virtual string GetNextPageURL() {
             return null;
         }
+
+        // False if the downloaded page is recognizably not a thread (e.g. an error, ban or captcha
+        // page served with 200 OK). Sites whose markup is not known count every page as a thread.
+        public virtual bool IsThreadPage() {
+            return true;
+        }
     }
 
     public class FourChanSiteHelper : FourChanLookAlikeSiteHelper {
@@ -613,6 +619,10 @@ namespace JDP {
     }
 
     public class FourChanLookAlikeSiteHelper : SiteHelper {
+        public override bool IsThreadPage() {
+            return FindThreadDivStartTag() != null;
+        }
+
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
             bool seenSpoiler = false;
@@ -708,6 +718,10 @@ namespace JDP {
     }
 
     public class InfinitechanSiteHelper : SiteHelper {
+        public override bool IsThreadPage() {
+            return FindThreadDivStartTag() != null;
+        }
+
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
             bool seenSpoiler = false;

@@ -875,8 +875,11 @@ namespace JDP {
         }
 
         private void ThreadWatcher_StopStatus(ThreadWatcher watcher, StopStatusEventArgs args) {
+            // Read on the watcher's thread, before a restart could reset them
+            string checkError = watcher.CheckError;
+            int failedFileCount = watcher.FailedFileCount;
             BeginInvoke(() => {
-                SetStopStatus(watcher, args.StopReason);
+                DisplayStatus(watcher, FormatStopStatus(args.StopReason, checkError, failedFileCount));
                 SetupWaitTimer();
                 if (args.StopReason != StopReason.UserRequest && args.StopReason != StopReason.Exiting) {
                     _saveThreadList = true;
@@ -931,22 +934,7 @@ namespace JDP {
 
         private void ThreadWatcher_AddThread(ThreadWatcher watcher, AddThreadEventArgs args) {
             BeginInvoke(() => {
-                ThreadInfo thread = new ThreadInfo {
-                    URL = args.PageURL,
-                    PageAuth = General.GetAuthForURL(watcher.PageAuth, watcher.PageURL, args.PageURL),
-                    ImageAuth = General.GetAuthForURL(watcher.ImageAuth, watcher.PageURL, args.PageURL),
-                    CheckIntervalSeconds = watcher.CheckIntervalSeconds,
-                    OneTimeDownload = watcher.OneTimeDownload,
-                    SaveDir = null,
-                    Description = String.Empty,
-                    StopReason = null,
-                    ExtraData = new WatcherExtraData {
-                        AddedOn = DateTime.Now,
-                        AddedFrom = watcher.PageID
-                    },
-                    Category = watcher.Category,
-                    AutoFollow = Settings.RecursiveAutoFollow != false
-                };
+                ThreadInfo thread = watcher.CreateChildThreadInfo(args.PageURL, DateTime.Now, Settings.RecursiveAutoFollow != false);
                 SiteHelper siteHelper = SiteHelpers.GetInstance((new Uri(thread.URL)).Host);
                 siteHelper.SetURL(thread.URL);
                 if (_watchers.ContainsKey(siteHelper.GetPageID())) return;
@@ -1064,7 +1052,7 @@ namespace JDP {
         }
 
         private static void RegisterThreadWatcher(ThreadWatcher watcher, ThreadWatcher parentThread) {
-            if (parentThread != null) parentThread.ChildThreads.Add(watcher.PageID, watcher);
+            if (parentThread != null) parentThread.AddChildThread(watcher);
             if (!_watchers.ContainsKey(watcher.PageID)) {
                 _watchers.Add(watcher.PageID, watcher);
             }
@@ -1276,15 +1264,40 @@ namespace JDP {
 
         private void SetWaitStatus(ThreadWatcher watcher) {
             int remainingSeconds = (watcher.MillisecondsUntilNextCheck + 999) / 1000;
-            DisplayStatus(watcher, String.Format("Waiting {0} seconds", remainingSeconds));
+            DisplayStatus(watcher, FormatWaitStatus(remainingSeconds, watcher.CheckError, watcher.FailedFileCount));
         }
 
-        private void SetStopStatus(ThreadWatcher watcher, StopReason stopReason) {
-            string reasonText;
-            if (!_stopReasonTexts.TryGetValue(stopReason, out reasonText)) {
-                reasonText = "Unknown error";
+        // E.g. "Waiting 60 seconds", "Error: HTTP 403 Forbidden, waiting 60 seconds" or
+        // "2 files failed, waiting 60 seconds"
+        internal static string FormatWaitStatus(int remainingSeconds, string checkError, int failedFileCount) {
+            if (checkError != null) return String.Format("Error: {0}, waiting {1} seconds", checkError, remainingSeconds);
+            if (failedFileCount > 0) return String.Format("{0}, waiting {1} seconds", FormatFailedFileCount(failedFileCount), remainingSeconds);
+            return String.Format("Waiting {0} seconds", remainingSeconds);
+        }
+
+        // E.g. "Stopped: Download complete", "Stopped: Download complete, 2 files failed" or
+        // "Stopped: Error: HTTP 403 Forbidden"
+        internal static string FormatStopStatus(StopReason stopReason, string checkError, int failedFileCount) {
+            if (checkError != null && IsStopWithoutKnownReason(stopReason)) return "Stopped: Error: " + checkError;
+            string reasonText = GetStopReasonText(stopReason);
+            if (stopReason == StopReason.DownloadComplete && failedFileCount > 0) {
+                reasonText += ", " + FormatFailedFileCount(failedFileCount);
             }
-            DisplayStatus(watcher, "Stopped: " + reasonText);
+            return "Stopped: " + reasonText;
+        }
+
+        private static string GetStopReasonText(StopReason stopReason) {
+            string reasonText;
+            return _stopReasonTexts.TryGetValue(stopReason, out reasonText) ? reasonText : "Unknown error";
+        }
+
+        // A one-time download whose page failed stops with Other; its error explains why
+        private static bool IsStopWithoutKnownReason(StopReason stopReason) {
+            return stopReason == StopReason.Other || stopReason == StopReason.DownloadComplete;
+        }
+
+        private static string FormatFailedFileCount(int failedFileCount) {
+            return String.Format("{0} file{1} failed", failedFileCount, failedFileCount != 1 ? "s" : String.Empty);
         }
 
         private void SetReparseStatus(ThreadWatcher watcher, ReparseType reparseType, int completeCount, int totalCount) {
@@ -1418,8 +1431,8 @@ namespace JDP {
         private static void LinkToParentThread(ThreadWatcher threadWatcher) {
             ThreadWatcher parentThread = FindLoadedParentThread(threadWatcher);
             threadWatcher.ParentThread = parentThread;
-            if (parentThread != null && !parentThread.ChildThreads.ContainsKey(threadWatcher.PageID)) {
-                parentThread.ChildThreads.Add(threadWatcher.PageID, threadWatcher);
+            if (parentThread != null) {
+                parentThread.AddChildThread(threadWatcher);
             }
         }
 

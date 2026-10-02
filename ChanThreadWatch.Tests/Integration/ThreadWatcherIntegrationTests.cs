@@ -106,7 +106,8 @@ namespace JDP.Tests.Integration {
         }
 
         // Pins current behavior: a hash mismatch is retried once, and if the second try returns the
-        // same (wrong) bytes the file is accepted and saved as completed.
+        // same (wrong) bytes the file is accepted and saved as completed. B21: this tolerance for
+        // sites with wrong hashes is kept, but the accepted file is logged as a warning.
         [TestMethod]
         public void HashMismatchWithStableBytesIsRetriedOnceThenAccepted() {
             var fixture = new FourChanThreadFixture();
@@ -121,14 +122,17 @@ namespace JDP.Tests.Integration {
 
             Assert.AreEqual(StopReason.DownloadComplete, reason);
             Assert.HasCount(2, server.RequestsTo(badPath));
-            CollectionAssert.AreEqual(wrongBytes, File.ReadAllBytes(Path.Combine(watcher.ThreadDownloadDirectory, "1700000000001.jpg")));
+            string savedPath = Path.Combine(watcher.ThreadDownloadDirectory, "1700000000001.jpg");
+            CollectionAssert.AreEqual(wrongBytes, File.ReadAllBytes(savedPath));
             StringAssert.Contains(File.ReadAllText(SavedPagePath(watcher)), "<a class=\"fileThumb\" href=\"1700000000001.jpg\"");
+            Assert.AreEqual(0, watcher.FailedFileCount);
+            StringAssert.Contains(ReadLog(), "Warning: saved " + savedPath + " although it does not match the hash");
         }
 
-        // Pins current behavior: when every try returns different wrong bytes, the image is tried
-        // three times, no file is kept, and the run still ends as DownloadComplete. The saved page
-        // then has no href at all on both links to the image (the replacement for an image that
-        // did not complete has no value, so WriteReplacedString drops the attribute).
+        // When every try returns different wrong bytes, the image is tried three times and no file
+        // is kept. The run still ends as DownloadComplete, but (B23) the image is counted as
+        // failed and logged, and (B22) both links to it in the saved page keep pointing at the
+        // image online instead of losing their href.
         [TestMethod]
         public void HashMismatchWithChangingBytesGivesUpAfterThreeTries() {
             var fixture = new FourChanThreadFixture();
@@ -147,10 +151,14 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(StopReason.DownloadComplete, reason);
             Assert.HasCount(3, server.RequestsTo(badPath));
             Assert.IsFalse(File.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "1700000000001.jpg")));
+            Assert.AreEqual(1, watcher.FailedFileCount);
+            Assert.IsNull(watcher.CheckError);
+            StringAssert.Contains(ReadLog(), "Error downloading file " + server.URL(badPath) + ": Download is corrupt");
             string html = File.ReadAllText(SavedPagePath(watcher));
-            StringAssert.Contains(html, "<div class=\"fileText\" id=\"fT100\">File: <a  target=\"_blank\">mountain &amp; lake.jpg</a>");
-            StringAssert.Contains(html, "<a class=\"fileThumb\"  target=\"_blank\"><img src=\"thumbs/1700000000001s.jpg\"");
-            Assert.DoesNotContain("1700000000001.jpg", html);
+            string remoteURL = server.URL(badPath);
+            StringAssert.Contains(html, "<div class=\"fileText\" id=\"fT100\">File: <a href=\"" + remoteURL + "\" target=\"_blank\">mountain &amp; lake.jpg</a>");
+            StringAssert.Contains(html, "<a class=\"fileThumb\" href=\"" + remoteURL + "\" target=\"_blank\"><img src=\"thumbs/1700000000001s.jpg\"");
+            Assert.DoesNotContain("href=\"1700000000001.jpg\"", html);
         }
 
         // S2: credentials are only sent to the origin of the thread page
