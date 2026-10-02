@@ -33,6 +33,7 @@ namespace JDP.Tests {
         [DataRow("https://boards.example.org/a/thread/1", "http://boards.example.org/a/src/1.jpg", false)]
         [DataRow("https://boards.example.org/a/thread/1", "https://boards.example.org:8443/x", false)]
         [DataRow("https://boards.example.org/a/thread/1", "https://boards.example.org.evil.com/x", false)]
+        [DataRow("https://boards.example.org/a/thread/1", "https://boards.example.org@evil.com/x", false)]
         [DataRow("https://boards.example.org/a/thread/1", "not a url", false)]
         public void IsSameOriginComparesSchemeHostAndPort(string a, string b, bool expected) {
             Assert.AreEqual(expected, General.IsSameOrigin(a, b));
@@ -51,6 +52,18 @@ namespace JDP.Tests {
         public void MetaRefreshToOtherOriginDropsCredentials() {
             using (var target = new LoopbackServer(OkResponse))
             using (var start = new LoopbackServer(MetaRefreshResponse("http://localhost:" + target.Port + "/x"))) {
+                Download(start.URL("/start"), "user:pass", null);
+
+                StringAssert.Contains(start.Requests[0], "Authorization: Basic");
+                Assert.DoesNotContain("Authorization", target.Requests[0]);
+            }
+        }
+
+        // Pins framework behavior S2 relies on: HttpWebRequest drops a manually added Authorization header on automatic redirects
+        [TestMethod]
+        public void HttpRedirectToOtherOriginDropsCredentials() {
+            using (var target = new LoopbackServer(OkResponse))
+            using (var start = new LoopbackServer("HTTP/1.1 302 Found\r\nLocation: http://localhost:" + target.Port + "/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")) {
                 Download(start.URL("/start"), "user:pass", null);
 
                 StringAssert.Contains(start.Requests[0], "Authorization: Basic");
@@ -93,6 +106,10 @@ namespace JDP.Tests {
         [DataRow("AUX .png", "_AUX .png")]
         [DataRow("NUL ", "_NUL")]
         [DataRow("CONSOLE", "CONSOLE")]
+        [DataRow("CON.", "_CON")]
+        [DataRow("CONIN$", "_CONIN$")]
+        [DataRow("com\u00B9.jpg", "_com\u00B9.jpg")]
+        [DataRow("LPT\u00B3", "_LPT\u00B3")]
         [DataRow("COM10", "COM10")]
         [DataRow("icon.png", "icon.png")]
         public void CleanFileNamePrefixesReservedDeviceNames(string input, string expected) {
