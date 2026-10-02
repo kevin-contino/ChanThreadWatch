@@ -1363,11 +1363,11 @@ namespace JDP {
                 htmlParser.FindStartTags(labelLatestDivTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "css-truncate-target"))));
             if (versionSpanTagRange == null) return;
             string latestStr = htmlParser.GetInnerHTML(versionSpanTagRange).Replace("v", "");
-            int latest = ParseVersionNumber(latestStr);
+            int latest = General.ParseVersionNumber(latestStr);
             if (latest == -1) return;
-            int current = ParseVersionNumber(General.Version);
+            int current = General.ParseVersionNumber(General.Version);
             if (!String.IsNullOrEmpty(Settings.LatestUpdateVersion)) {
-                current = Math.Max(current, ParseVersionNumber(Settings.LatestUpdateVersion));
+                current = Math.Max(current, General.ParseVersionNumber(Settings.LatestUpdateVersion));
             }
             if (latest > current) {
                 lock (_startupPromptSync) {
@@ -1381,21 +1381,6 @@ namespace JDP {
                         }
                     });
                 }
-            }
-        }
-
-        private int ParseVersionNumber(string str) {
-            string[] split = str.Split('.');
-            int num = 0;
-            try {
-                if (split.Length >= 1) num |= (Int32.Parse(split[0]) & 0x7F) << 24;
-                if (split.Length >= 2) num |= (Int32.Parse(split[1]) & 0xFF) << 16;
-                if (split.Length >= 3) num |= (Int32.Parse(split[2]) & 0xFF) << 8;
-                if (split.Length >= 4) num |= (Int32.Parse(split[3]) & 0xFF);
-                return num;
-            }
-            catch {
-                return -1;
             }
         }
 

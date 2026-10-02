@@ -3,6 +3,8 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2012
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch", "ChanThreadWatch.csproj", "{1DAC6953-5A72-45F4-8677-3F2B0A15F32A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Tests", "ChanThreadWatch.Tests\ChanThreadWatch.Tests.csproj", "{2E769235-6A3B-4538-9E7A-DC76D1EA3A13}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -13,6 +15,10 @@ Global
 		{1DAC6953-5A72-45F4-8677-3F2B0A15F32A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1DAC6953-5A72-45F4-8677-3F2B0A15F32A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1DAC6953-5A72-45F4-8677-3F2B0A15F32A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2E769235-6A3B-4538-9E7A-DC76D1EA3A13}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2E769235-6A3B-4538-9E7A-DC76D1EA3A13}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2E769235-6A3B-4538-9E7A-DC76D1EA3A13}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2E769235-6A3B-4538-9E7A-DC76D1EA3A13}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
