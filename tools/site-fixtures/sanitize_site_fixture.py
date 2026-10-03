@@ -48,8 +48,16 @@ BLOCK_TAGS = {"html", "head", "body", "div", "article", "figure", "header", "p",
 ALWAYS_KEPT_TAGS = {"html", "head", "body", "input", "label", "img", "table", "tbody", "tr", "td"}
 
 
+# The base64 MD5 of "fixture-image-N-K", with K the smallest number from 0 whose base64 MD5
+# contains both "/" and "+", so the standard form ({{md5s_N}}) always has the characters a
+# URL-safe MD5 replaces. SiteFixtures.PlaceholderMD5 in the tests uses the same values.
 def placeholder_md5(index):
-    return base64.b64encode(hashlib.md5(b"fixture-image-%d" % index).digest()).decode("ascii")
+    k = 0
+    while True:
+        value = base64.b64encode(hashlib.md5(b"fixture-image-%d-%d" % (index, k)).digest()).decode("ascii")
+        if "/" in value and "+" in value:
+            return value
+        k += 1
 
 
 class Node:
@@ -215,8 +223,8 @@ class Mapper:
     def image_md5_path(self, segments):
         """Maps a "same image" path (/<board>/image/<md5>, optionally with a trailing "/") whose MD5
         is standard base64, and so can contain "/" or "+" and span segments, or is percent-encoded.
-        The MD5 becomes {{md5u_N}}. Returns None if the path has no such MD5; a URL-safe MD5 is
-        one segment, which segment() maps."""
+        A standard MD5 becomes {{md5s_N}} and a percent-encoded one {{md5u_N}}. Returns None if
+        the path has no such MD5; a URL-safe MD5 is one segment, which segment() maps."""
         lowered = [s.lower() for s in segments]
         if "image" not in lowered:
             return None
@@ -227,7 +235,8 @@ class Mapper:
         if index is None:
             return None
         head = [self.segment(s, lowered[i - 1] if i > 0 else "") for i, s in enumerate(segments[:start])]
-        return "/".join(head + ["{{md5u_%d}}" % index] + segments[end:])
+        form = "md5s" if re.search(r"[/+]", md5) else "md5u"
+        return "/".join(head + ["{{%s_%d}}" % (form, index)] + segments[end:])
 
     def url(self, value, page_host):
         value = value.strip()
@@ -252,7 +261,7 @@ class Mapper:
 # A bare link is kept only if it points at a post, a thread or a file (by number, MD5, hash
 # name or media extension); navigation links to boards and pages are dropped.
 def is_post_link(href):
-    return re.search(r"777[0-9]{7}|\{\{md5u_|f[0-9]{6}|\.(jpe?g|png|gif|webp|webm|mp4)$", href) is not None
+    return re.search(r"777[0-9]{7}|\{\{md5[us]_|f[0-9]{6}|\.(jpe?g|png|gif|webp|webm|mp4)$", href) is not None
 
 
 def decode_md5(value):
@@ -391,6 +400,7 @@ def substitute(fixture_html):
     """Replaces the placeholders with the values the tests use."""
     text = fixture_html.replace("{{base}}", BASE_URL).replace("{{media}}", MEDIA_URL)
     text = re.sub(r"\{\{md5_(\d+)\}\}", lambda m: placeholder_md5(int(m.group(1))), text)
+    text = re.sub(r"\{\{md5s_(\d+)\}\}", lambda m: placeholder_md5(int(m.group(1))).rstrip("="), text)
     return re.sub(r"\{\{md5u_(\d+)\}\}", lambda m: placeholder_md5(int(m.group(1))).rstrip("=").replace("+", "-").replace("/", "_"), text)
 
 

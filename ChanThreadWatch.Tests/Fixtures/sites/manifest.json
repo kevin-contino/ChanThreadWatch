@@ -9,6 +9,26 @@
     "thumbnails": 7,
     "crossLinks": 0
   },
+  "4chan-crosslinks": {
+    "helper": "FourChanSiteHelper",
+    "pagePath": "/w40/thread/7770000004",
+    "capture": "direct",
+    "captured": "2026-10-03",
+    "images": 39,
+    "hashes": 39,
+    "thumbnails": 39,
+    "crossLinks": 1
+  },
+  "4chan-names": {
+    "helper": "FourChanSiteHelper",
+    "pagePath": "/w7/thread/7770000004",
+    "capture": "direct",
+    "captured": "2026-10-03",
+    "images": 6,
+    "hashes": 6,
+    "thumbnails": 6,
+    "crossLinks": 0
+  },
   "8ch": {
     "helper": "InfinitechanSiteHelper",
     "pagePath": "/w21/res/7770000004.html",
@@ -57,6 +77,16 @@
     "images": 1,
     "hashes": 1,
     "thumbnails": 1,
+    "crossLinks": 0
+  },
+  "fuuka-base64-md5": {
+    "helper": "FuukaSiteHelper",
+    "pagePath": "/w3/thread/7770000005",
+    "capture": "direct",
+    "captured": "2026-10-03",
+    "images": 3,
+    "hashes": 3,
+    "thumbnails": 3,
     "crossLinks": 0
   },
   "lynxchan": {

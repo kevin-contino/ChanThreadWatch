@@ -31,10 +31,16 @@ namespace JDP.Tests {
 
         public static string ReadFixture(string name) => File.ReadAllText(Path.Combine(Directory, name + ".html"));
 
-        // The MD5 the {{md5_N}} placeholder stands for. sanitize_site_fixture.py uses the same values.
+        // The MD5 the {{md5_N}} placeholder stands for: the base64 MD5 of "fixture-image-N-K", with
+        // K the smallest number from 0 whose base64 MD5 contains both "/" and "+". So the standard
+        // form ({{md5s_N}}) always has the characters a URL-safe MD5 replaces.
+        // sanitize_site_fixture.py uses the same values.
         public static string PlaceholderMD5(int index) {
             using (MD5 md5 = MD5.Create()) {
-                return Convert.ToBase64String(md5.ComputeHash(Encoding.ASCII.GetBytes("fixture-image-" + index)));
+                for (int k = 0; ; k++) {
+                    string value = Convert.ToBase64String(md5.ComputeHash(Encoding.ASCII.GetBytes("fixture-image-" + index + "-" + k)));
+                    if (value.Contains("/") && value.Contains("+")) return value;
+                }
             }
         }
 
@@ -43,10 +49,12 @@ namespace JDP.Tests {
         }
 
         // md5 returns the base64 MD5 that {{md5_N}} stands for, given N; {{md5u_N}} gets the
-        // URL-safe form of the same value without padding
+        // URL-safe form of the same value without padding, and {{md5s_N}} the standard form
+        // without padding
         public static string Substitute(string fixture, string baseURL, string mediaURL, Func<int, string> md5) {
             string html = fixture.Replace("{{base}}", baseURL).Replace("{{media}}", mediaURL);
             html = Regex.Replace(html, @"\{\{md5_(\d+)\}\}", m => md5(Int32.Parse(m.Groups[1].Value)));
+            html = Regex.Replace(html, @"\{\{md5s_(\d+)\}\}", m => md5(Int32.Parse(m.Groups[1].Value)).TrimEnd('='));
             return Regex.Replace(html, @"\{\{md5u_(\d+)\}\}", m => md5(Int32.Parse(m.Groups[1].Value)).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
         }
 
@@ -80,7 +88,7 @@ namespace JDP.Tests {
                 string fileName = (string)grammar["fileName"];
                 string index = (string)grammar["index"];
                 string keywords = String.Join("|", Strings(allowlist["urlKeywords"]).Concat(Strings(allowlist["fileExtensions"])).Select(Regex.Escape));
-                string token = "(?:" + number + "|" + word + "|" + grammar["hex"] + "|" + grammar["md5UrlSafe"] + "|" + keywords + "|[-_./])";
+                string token = "(?:" + number + "|" + word + "|" + grammar["hex"] + "|" + grammar["md5UrlSafe"] + "|" + grammar["md5Standard"] + "|" + keywords + "|[-_./])";
                 string prefixes = String.Join("|", Strings(allowlist["idPrefixes"]).Select(Regex.Escape));
 
                 _tags = new HashSet<string>(Strings(allowlist["keptTags"]));

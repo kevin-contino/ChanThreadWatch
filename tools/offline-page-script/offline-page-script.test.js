@@ -30,6 +30,24 @@ const SITES = {
         quotes: [['7770000006', '7770000004'], ['7770000016', '7770000014'], ['7770000017', '7770000016']],
         serverBacklinks: false
     },
+    '4chan-crosslinks': {
+        posts: 'div.post',
+        site: '4chan',
+        post: (doc, id) => doc.getElementById('p' + id),
+        prefix: 'p',
+        thumbs: 'a.fileThumb img',
+        quotes: [['7770000009', '7770000007'], ['7770000014', '7770000012'], ['7770000015', '7770000014']],
+        serverBacklinks: false
+    },
+    '4chan-names': {
+        posts: 'div.post',
+        site: '4chan',
+        post: (doc, id) => doc.getElementById('p' + id),
+        prefix: 'p',
+        thumbs: 'a.fileThumb img',
+        quotes: [['7770000006', '7770000004'], ['7770000011', '7770000009'], ['7770000012', '7770000010']],
+        serverBacklinks: false
+    },
     '8ch': {
         posts: 'div.post',
         site: 'vichan',
@@ -47,6 +65,15 @@ const SITES = {
         prefix: 'p',
         thumbs: 'a img.thumb',
         quotes: [['7770000006', '7770000005'], ['7770000007', '7770000006'], ['7770000008', '7770000007']],
+        serverBacklinks: false
+    },
+    'fuuka-base64-md5': {
+        posts: 'td.comment, div.comment',
+        site: 'fuuka',
+        post: (doc, id) => doc.getElementById('p' + id),
+        prefix: 'p',
+        thumbs: 'a img.thumb',
+        quotes: [['7770000006', '7770000005'], ['7770000014', '7770000012'], ['7770000015', '7770000011']],
         serverBacklinks: false
     },
     foolfuuka: {
@@ -99,7 +126,7 @@ function readFixture(name) {
     return fs.readFileSync(path.join(FIXTURES, name + '.html'), 'utf8')
         .replaceAll('{{base}}', BASE_URL)
         .replaceAll('{{media}}', MEDIA_URL)
-        .replace(/\{\{md5u?_\d+\}\}/g, 'AAAAAAAAAAAAAAAAAAAAAA==');
+        .replace(/\{\{md5[us]?_\d+\}\}/g, 'AAAAAAAAAAAAAAAAAAAAAA==');
 }
 
 // Like General.GetReplacementURL: a link to an anchor on the page becomes just the fragment
@@ -127,8 +154,19 @@ function savedPage(name, scriptSite, { prepare = null, scripts = 1 } = {}) {
     rewriteThumbnailLinks(dom.window.document, pageURL, config.thumbs);
     if (prepare) prepare(dom.window.document, config);
     const html = dom.serialize();
+    dom.window.close();
     const script = ('<script data-site="' + scriptSite + '">' + SCRIPT + '</script>').repeat(scripts);
     return html.replace('<head>', () => '<head>' + script);
+}
+
+// A test uses at most two loaded pages at a time. Older pages are closed, so the windows of
+// large fixtures do not pile up until the heap runs out.
+const MAX_OPEN_PAGES = 2;
+const openWindows = [];
+
+function keepOpen(window) {
+    openWindows.push(window);
+    while (openWindows.length > MAX_OPEN_PAGES) openWindows.shift().close();
 }
 
 // Resolves once the page is parsed and the script, which waits for DOMContentLoaded, has run
@@ -137,6 +175,7 @@ async function load(name, scriptSite = SITES[name].site, options = {}) {
     const virtualConsole = new VirtualConsole();
     virtualConsole.on('jsdomError', (error) => errors.push(error));
     const dom = new JSDOM(savedPage(name, scriptSite, options), { url: 'file:///C:/threads/thread.html', runScripts: 'dangerously', virtualConsole });
+    keepOpen(dom.window);
     const page = { window: dom.window, doc: dom.window.document, config: SITES[name], errors };
     if (page.doc.readyState === 'loading') {
         await new Promise((resolve) => page.doc.addEventListener('DOMContentLoaded', resolve));
@@ -201,7 +240,11 @@ function isLocalImage(href) {
     return /\.(?:jpe?g|png|gif|webp)$/i.test(href);
 }
 
-for (const name of Object.keys(MANIFEST)) {
+// run-tests.js runs each fixture in its own process through FIXTURE, so the memory of large
+// fixtures does not add up
+const FIXTURE_NAMES = process.env.FIXTURE ? [process.env.FIXTURE] : Object.keys(MANIFEST);
+
+for (const name of FIXTURE_NAMES) {
     test.describe(name, () => {
         test.it('has a test mapping', () => {
             assert.ok(SITES[name], 'no mapping for fixture ' + name);

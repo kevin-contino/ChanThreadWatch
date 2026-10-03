@@ -3,7 +3,7 @@
   "private": true,
   "description": "Tests Resources/OfflinePageScript.js against the site fixtures in jsdom",
   "scripts": {
-    "test": "node --test"
+    "test": "node run-tests.js"
   },
   "devDependencies": {
     "jsdom": "29.1.1"

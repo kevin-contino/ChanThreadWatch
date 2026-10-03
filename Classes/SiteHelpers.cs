@@ -998,10 +998,10 @@ namespace JDP {
             return imageList;
         }
 
-        // Finds the post header span (the first span in the post), the image link and its thumbnail
-        // image. Returns null if any of them is missing.
+        // Finds the file info span, the image link and its thumbnail image. Returns null if any of
+        // them is missing.
         private FileTags FindFileTags(HTMLTagRange postTagRange) {
-            HTMLTagRange postHeaderRange = _htmlParser.CreateTagRange(_htmlParser.FindStartTag(postTagRange, "span"));
+            HTMLTagRange postHeaderRange = FindFileInfoTagRange(postTagRange);
             if (postHeaderRange == null) return null;
 
             HTMLTagRange imageLinkTagRange = _htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags(postTagRange, "a"), IsImage)));
@@ -1016,6 +1016,14 @@ namespace JDP {
                 LinkStartTag = imageLinkTagRange.StartTag,
                 ThumbImageTag = thumbImageTag
             };
+        }
+
+        // The file info is the span with the fileinfo class. On a reply the first span is the
+        // poster name, so the first span is only used when no span has the class.
+        private HTMLTagRange FindFileInfoTagRange(HTMLTagRange postTagRange) {
+            HTMLTag fileInfoStartTag = Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags(postTagRange, "span"),
+                t => HTMLParser.ClassAttributeValueHas(t, "fileinfo")));
+            return _htmlParser.CreateTagRange(fileInfoStartTag ?? _htmlParser.FindStartTag(postTagRange, "span"));
         }
 
         // Returns null if the file info is incomplete, or the image has no usable file name or an
