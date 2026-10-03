@@ -58,10 +58,12 @@ namespace JDP.Tests.Integration {
             }
         }
 
-        // The interval is per host: the first image, on another host, does not wait for the page
+        // The interval is per host: the first image, on another host, does not wait for the page.
+        // The bound leaves a slow runner seconds to parse the page, and a shared interval
+        // would hold the first image back twice as long as the bound.
         [TestMethod]
         public void DifferentHostsAreNotDelayedByEachOther() {
-            ConnectionManager.MinRequestStartIntervalMS = 2000;
+            ConnectionManager.MinRequestStartIntervalMS = 10000;
             var fixture = new FourChanThreadFixture();
             LoopbackHttpServer server = StartServer();
             RouteFiles(server, fixture, TimeSpan.Zero);
@@ -74,7 +76,7 @@ namespace JDP.Tests.Integration {
             Assert.IsTrue(started.WaitOne(RunTimeout), "No file download started");
             long pageTime = ArrivalTimes(FourChanThreadFixture.ThreadPath)[0];
             long firstFileTime = ArrivalTimes(FourChanThreadFixture.ImagePaths[0])[0];
-            Assert.IsLessThan(1000, firstFileTime - pageTime);
+            Assert.IsLessThan(5000, firstFileTime - pageTime);
             watcher.Stop(StopReason.UserRequest);
             Assert.IsTrue(watcher.WaitUntilStopped((int)RunTimeout.TotalMilliseconds), "Check did not finish");
         }
