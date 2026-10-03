@@ -118,10 +118,24 @@ namespace JDP {
         }
     }
 
-    // One per host, shared by every watcher: limits the connections to the host, and pauses all
-    // requests to it while it rate limits this client (a limit applies to the client as a whole)
+    // One per host, shared by every watcher: limits the connections to the host, spaces out the
+    // requests sent to it, and pauses all requests to it while it rate limits this client (a
+    // limit applies to the client as a whole)
     public class ConnectionManager {
-        private const int _maxConnectionsPerHost = 4;
+        // Downloads from one host that may be in progress at the same time, across all watchers
+        internal const int DefaultMaxConnectionsPerHost = 1;
+        // Shortest time between the starts of two requests to one host, retries included
+        internal const int DefaultMinRequestStartIntervalMS = 1000;
+
+        // Settable so tests can use other limits. Production code never changes them. A change of
+        // MaxConnectionsPerHost only applies to hosts that no download has used yet.
+        internal static int MaxConnectionsPerHost { get; set; } = DefaultMaxConnectionsPerHost;
+        internal static int MinRequestStartIntervalMS { get; set; } = DefaultMinRequestStartIntervalMS;
+
+        // Starts the requests that have to wait for MinRequestStartIntervalMS, so no thread is
+        // blocked while they wait
+        private static readonly WorkScheduler _requestStartScheduler = new WorkScheduler();
+        private const string _requestStartThreadGroup = "ConnectionManager request starts";
 
         // A rate limit pause lasts at least MinRateLimitPauseMS and at most MaxRateLimitPauseMS,
         // whatever the server asks. When the server gives no usable wait time, the first pause
@@ -139,12 +153,14 @@ namespace JDP {
 
         private static Dictionary<string, ConnectionManager> _connectionManagers = new Dictionary<string, ConnectionManager>(StringComparer.OrdinalIgnoreCase);
 
-        private FIFOSemaphore _semaphore = new FIFOSemaphore(_maxConnectionsPerHost, _maxConnectionsPerHost);
+        private FIFOSemaphore _semaphore = new FIFOSemaphore(MaxConnectionsPerHost, MaxConnectionsPerHost);
         private Stack<string> _groupNames = new Stack<string>();
         private readonly string _host;
         private readonly object _pauseSync = new object();
         private long _pausedUntilTicks;
         private int _rateLimitBackoffLevel;
+        private readonly object _requestStartSync = new object();
+        private long _lastRequestStartTicks = Int64.MinValue / 2;
 
         private ConnectionManager(string host) {
             _host = host;
@@ -207,11 +223,13 @@ namespace JDP {
             }
         }
 
-        // Ends every pause and backoff, so that one test's rate limit does not affect the next
-        internal static void ResetRateLimitsForTesting() {
+        // Ends every pause, backoff and reserved request start, so that one test's rate limit or
+        // request interval does not affect the next
+        internal static void ResetForTesting() {
             lock (_connectionManagers) {
                 foreach (ConnectionManager manager in _connectionManagers.Values) {
                     manager.ResetRateLimit();
+                    manager.ResetRequestStarts();
                 }
             }
         }
@@ -220,6 +238,31 @@ namespace JDP {
             lock (_pauseSync) {
                 _pausedUntilTicks = 0;
                 _rateLimitBackoffLevel = 0;
+            }
+        }
+
+        private void ResetRequestStarts() {
+            lock (_requestStartSync) {
+                _lastRequestStartTicks = Int64.MinValue / 2;
+            }
+        }
+
+        // Runs start (which sends a request to the host) right away, or later on a scheduler
+        // thread if the previous request to the host started less than MinRequestStartIntervalMS
+        // ago. Each call reserves its own start time, so requests that wait start in call order.
+        public void StartRequest(Action start) {
+            long startTicks = ReserveRequestStart();
+            if (startTicks <= TickCount.Now) {
+                start();
+                return;
+            }
+            _requestStartScheduler.AddItem(startTicks, start, _requestStartThreadGroup);
+        }
+
+        private long ReserveRequestStart() {
+            lock (_requestStartSync) {
+                _lastRequestStartTicks = Math.Max(TickCount.Now, _lastRequestStartTicks + MinRequestStartIntervalMS);
+                return _lastRequestStartTicks;
             }
         }
 

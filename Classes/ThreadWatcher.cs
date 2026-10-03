@@ -1858,20 +1858,31 @@ namespace JDP {
             }
 
             public void TryDownload() {
-                Attempt attempt = new Attempt(this);
                 _tryNumber++;
+                if (TryEndWithoutSending()) return;
+                // Sent no sooner than the host's minimum interval after the previous request to it
+                _connectionManager.StartRequest(StartAttempt);
+            }
+
+            // The watcher may have stopped, or the host been paused, while the request waited
+            private void StartAttempt() {
+                if (TryEndWithoutSending()) return;
+                new Attempt(this).Start();
+            }
+
+            // Ends the download without sending a request if the watcher is stopping, the tries
+            // are used up, or the host is rate limiting this client (nothing is sent to it until
+            // the pause is over). Returns false if the request may be sent.
+            private bool TryEndWithoutSending() {
                 if (_watcher.IsStopping || _tryNumber > _maxDownloadTries) {
                     ReportIfOutOfTries();
-                    attempt.EndTryDownload(DownloadResult.RetryLater);
-                    return;
+                    new Attempt(this).EndTryDownload(DownloadResult.RetryLater);
+                    return true;
                 }
-                if (_connectionManager.IsPaused) {
-                    // The host is rate limiting this client, so nothing is sent to it until the pause is over
-                    _watcher.RecordRateLimitedDownload(_connectionManager);
-                    attempt.EndTryDownload(DownloadResult.RateLimited);
-                    return;
-                }
-                attempt.Start();
+                if (!_connectionManager.IsPaused) return false;
+                _watcher.RecordRateLimitedDownload(_connectionManager);
+                new Attempt(this).EndTryDownload(DownloadResult.RateLimited);
+                return true;
             }
 
             private void ReportIfOutOfTries() {
@@ -2057,20 +2068,31 @@ namespace JDP {
             }
 
             public void TryDownload() {
-                Attempt attempt = new Attempt(this);
                 _tryNumber++;
+                if (TryEndWithoutSending()) return;
+                // Sent no sooner than the host's minimum interval after the previous request to it
+                _connectionManager.StartRequest(StartAttempt);
+            }
+
+            // The watcher may have stopped, or the host been paused, while the request waited
+            private void StartAttempt() {
+                if (TryEndWithoutSending()) return;
+                new Attempt(this).Start();
+            }
+
+            // Ends the download without sending a request if the watcher is stopping, the tries
+            // are used up, or the host is rate limiting this client (nothing is sent to it until
+            // the pause is over). Returns false if the request may be sent.
+            private bool TryEndWithoutSending() {
                 if (_watcher.IsStopping || _tryNumber > _maxDownloadTries) {
                     ReportIfOutOfTries();
-                    attempt.EndTryDownload(DownloadResult.RetryLater);
-                    return;
+                    new Attempt(this).EndTryDownload(DownloadResult.RetryLater);
+                    return true;
                 }
-                if (_connectionManager.IsPaused) {
-                    // The host is rate limiting this client, so nothing is sent to it until the pause is over
-                    _watcher.RecordRateLimitedDownload(_connectionManager);
-                    attempt.EndTryDownload(DownloadResult.RateLimited);
-                    return;
-                }
-                attempt.Start();
+                if (!_connectionManager.IsPaused) return false;
+                _watcher.RecordRateLimitedDownload(_connectionManager);
+                new Attempt(this).EndTryDownload(DownloadResult.RateLimited);
+                return true;
             }
 
             private void ReportIfOutOfTries() {

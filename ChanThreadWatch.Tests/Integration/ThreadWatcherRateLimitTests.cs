@@ -42,8 +42,7 @@ namespace JDP.Tests.Integration {
 
             CollectionAssert.AreEqual(new[] { 0, 0 }, failedCounts);
             CollectionAssert.AreEqual(new[] { MediaHost, null }, rateLimitedHosts);
-            StringAssert.StartsWith(statuses[0], "Rate limited by localhost, resuming at ");
-            StringAssert.EndsWith(statuses[0], ", waiting 60 seconds");
+            StringAssert.Matches(statuses[0], new System.Text.RegularExpressions.Regex(@"^Rate limited by localhost until \d\d:\d\d:\d\d$"));
             Assert.AreEqual("Waiting 60 seconds", statuses[1]);
             Assert.HasCount(2, server.RequestsTo(FirstImage));
             Assert.IsNull(server.RequestsTo(FourChanThreadFixture.ThreadPath)[1].Header("If-Modified-Since"));

@@ -14,7 +14,7 @@ namespace JDP.Tests {
             ConnectionManager.MinRateLimitPauseMS = ConnectionManager.DefaultMinRateLimitPauseMS;
             ConnectionManager.MaxRateLimitPauseMS = ConnectionManager.DefaultMaxRateLimitPauseMS;
             ConnectionManager.UnspecifiedRateLimitPauseMS = ConnectionManager.DefaultUnspecifiedRateLimitPauseMS;
-            ConnectionManager.ResetRateLimitsForTesting();
+            ConnectionManager.ResetForTesting();
         }
 
         [TestMethod]
@@ -85,7 +85,7 @@ namespace JDP.Tests {
             try {
                 DateTime resume = new DateTime(2026, 10, 3, 14, 32, 5);
 
-                Assert.AreEqual("Rate limited by i.4cdn.org, resuming at 14:32:05, waiting 60 seconds",
+                Assert.AreEqual("Rate limited by i.4cdn.org until 14:32:05",
                     frmChanThreadWatch.FormatWaitStatus(60, null, 0, "i.4cdn.org", resume));
                 Assert.AreEqual("Error: HTTP 403 Forbidden, waiting 60 seconds",
                     frmChanThreadWatch.FormatWaitStatus(60, "HTTP 403 Forbidden", 0, "i.4cdn.org", resume));
