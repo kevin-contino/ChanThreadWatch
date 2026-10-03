@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Capturing;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Exceptions;
 using FlaUI.UIA3;
@@ -28,6 +29,9 @@ namespace JDP.UITests {
         private LoopbackHttpServer _server;
         private UIA3Automation _automation;
         private Process _process;
+        private Window _window;
+
+        public TestContext TestContext { get; set; }
 
         [TestInitialize]
         public void SetUp() {
@@ -41,11 +45,40 @@ namespace JDP.UITests {
 
         [TestCleanup]
         public void TearDown() {
-            // The app must never outlive the test, even when an assertion failed mid-run
-            KillApp();
-            _automation?.Dispose();
-            _server?.Dispose();
-            DeleteDirectory(_appDir);
+            try {
+                if (TestContext.CurrentTestOutcome != UnitTestOutcome.Passed) SaveScreenshot();
+            }
+            finally {
+                // The app must never outlive the test, even when an assertion failed mid-run
+                KillApp();
+                _automation?.Dispose();
+                _server?.Dispose();
+                DeleteDirectory(_appDir);
+            }
+        }
+
+        // The CI runner's desktop is gone once the job ends, so a failed test keeps a picture of it
+        private void SaveScreenshot() {
+            Directory.CreateDirectory(TestContext.TestResultsDirectory);
+            string path = Path.Combine(TestContext.TestResultsDirectory, TestContext.TestName + ".png");
+            using (CaptureImage image = CaptureWindowOrScreen()) {
+                image.ToFile(path);
+            }
+            TestContext.AddResultFile(path);
+        }
+
+        // Captures the whole desktop when the app window never appeared or has already closed
+        private CaptureImage CaptureWindowOrScreen() {
+            if (_window == null || _process.HasExited) return Capture.Screen();
+            try {
+                return Capture.Element(_window);
+            }
+            catch (COMException) {
+                return Capture.Screen();
+            }
+            catch (ElementNotAvailableException) {
+                return Capture.Screen();
+            }
         }
 
         // In Debug builds the app keeps its portable settings in a "Debug" subfolder of the exe folder
@@ -107,9 +140,9 @@ namespace JDP.UITests {
             _process = Process.Start(startInfo);
             // FlaUI gets its own handle to the process so that disposing it leaves _process usable
             using (Application app = Application.Attach(_process.Id)) {
-                Window window = app.GetMainWindow(_automation, Timeout);
-                Assert.IsNotNull(window, "the main window did not appear");
-                return window;
+                _window = app.GetMainWindow(_automation, Timeout);
+                Assert.IsNotNull(_window, "the main window did not appear");
+                return _window;
             }
         }
 
