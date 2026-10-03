@@ -797,7 +797,8 @@ namespace JDP {
         public static void WriteSavedPage(string str, List<ReplaceInfo> replaceList, TextWriter outStream) {
             using (StringWriter replaced = new StringWriter()) {
                 WriteReplacedString(str, replaceList, replaced);
-                outStream.Write(SavedPageSweep.Sweep(replaced.ToString()));
+                // A byte order mark from the download is dropped; the writer adds its own
+                outStream.Write(SavedPageSweep.Sweep(replaced.ToString().TrimStart('\uFEFF')));
             }
         }
 

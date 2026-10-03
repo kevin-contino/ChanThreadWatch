@@ -96,6 +96,16 @@ namespace JDP.Tests {
             StringAssert.StartsWith(SavedPageSweep.Sweep(html), "&lt;script data-site=\"4chan\">");
         }
 
+        // The writer adds its own byte order mark, so one that came with the download is dropped
+        [TestMethod]
+        public void SavedPageDropsTheDownloadedByteOrderMark() {
+            using (var written = new StringWriter()) {
+                General.WriteSavedPage("\uFEFF<!DOCTYPE html><p>x</p>", new List<ReplaceInfo>(), written);
+
+                Assert.AreEqual("<!DOCTYPE html><p>x</p>", written.ToString());
+            }
+        }
+
         [TestMethod]
         public void KeepsAnOrdinaryPage() {
             const string html = "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>a &lt; b</title>" +
