@@ -54,7 +54,10 @@ SITES = [
 ]
 
 # Problem names the sanitizer prints on a mismatch. Only these are passed through.
-PROBLEM = re.compile(r"^\s+(isThread|images\.(?:url|originalFileName|poster|hash|hashType)|thumbnails|crossLinks)\b")
+# A problem line names the field, then either both counts or that the values do not map one to
+# one. Only those two forms are kept, so the counts are the only values that reach the log.
+PROBLEM = re.compile(r"^\s+(isThread|images\.(?:url|originalFileName|poster|hash|hashType)|thumbnails|crossLinks)\b"
+                     r"(?:: (\d+) in the capture, (\d+) in the fixture$|(: values do not map one to one)$)?")
 COUNTS = re.compile(r"^canary: \d+ bytes, (\d+) images, (\d+) thumbnails, \d+ cross links, thread page: (True|False)$")
 
 
@@ -103,6 +106,15 @@ def find_thread(site, index_html):
     raise SiteFailure("no thread link found")
 
 
+def describe_problem(match):
+    """Returns e.g. "images.url (3 in capture, 2 in fixture)" or "images.url (not one to one)"."""
+    if match.group(2):
+        return "%s (%s in capture, %s in fixture)" % (match.group(1), match.group(2), match.group(3))
+    if match.group(4):
+        return "%s (not one to one)" % match.group(1)
+    return match.group(1)
+
+
 def verify(site, thread_url, capture_path):
     """Runs the sanitizer in verify mode and returns (images, thumbnails). Its stderr is never
     printed, because an error from PowerShell can quote the URL or the page."""
@@ -116,7 +128,7 @@ def verify(site, thread_url, capture_path):
     lines = output.stdout.splitlines()
     counts = next((m for m in map(COUNTS.match, lines) if m), None)
     if output.returncode != 0:
-        problems = [m.group(1) for m in map(PROBLEM.match, lines) if m]
+        problems = [describe_problem(m) for m in map(PROBLEM.match, lines) if m]
         if counts is None or not problems:
             raise SiteFailure("verification failed: sanitizer error (exit code %d)" % output.returncode)
         raise SiteFailure("verification failed: " + ", ".join(problems))
