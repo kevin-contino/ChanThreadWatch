@@ -1280,7 +1280,7 @@ namespace JDP {
 
         private void SetWaitStatus(ThreadWatcher watcher) {
             int remainingSeconds = (watcher.MillisecondsUntilNextCheck + 999) / 1000;
-            DisplayStatus(watcher, FormatWaitStatus(remainingSeconds, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitedHost, watcher.RateLimitResumeTime));
+            DisplayStatus(watcher, FormatWaitStatus(remainingSeconds, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitPausedHost, watcher.RateLimitResumeTime));
         }
 
         // E.g. "Waiting 60 seconds", "Error: HTTP 403 Forbidden, waiting 60 seconds",

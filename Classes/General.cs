@@ -91,7 +91,7 @@ namespace JDP {
             if (response.StatusCode == HttpStatusCode.NotFound) return new HTTP404Exception();
             if (response.StatusCode == HttpStatusCode.NotModified) return new HTTP304Exception();
             string retryAfter = response.Headers["Retry-After"];
-            if (IsRateLimitStatus(response.StatusCode, retryAfter != null)) return new HTTPRateLimitedException(ParseRetryAfter(retryAfter, DateTime.UtcNow), ex);
+            if (IsRateLimitStatus(response.StatusCode, retryAfter != null)) return new HTTPRateLimitedException(response.ResponseUri.Host, ParseRetryAfter(retryAfter, DateTime.UtcNow), ex);
             return ex;
         }
 
@@ -221,7 +221,24 @@ namespace JDP {
             return redirectUrl;
         }
 
+        // Sends nothing (throws RateLimitException) while the host is paused by a rate limit, and
+        // pauses the host if it answers with one (throws HTTPRateLimitedException). Not paced by
+        // MinRequestStartIntervalMS: callers (e.g. a new watcher's constructor) run on the UI thread.
         public static string DownloadPageToString(string url) {
+            ConnectionManager connectionManager = ConnectionManager.GetInstance(url);
+            connectionManager.ThrowIfPaused();
+            try {
+                return DownloadPageToStringUnchecked(url);
+            }
+            catch (WebException ex) {
+                HTTPRateLimitedException rateLimited = TranslateWebException(ex) as HTTPRateLimitedException;
+                if (rateLimited == null) throw;
+                connectionManager.PauseAndLog(rateLimited.RetryAfter);
+                throw rateLimited;
+            }
+        }
+
+        private static string DownloadPageToStringUnchecked(string url) {
             HttpWebRequest request = BuildWebRequest(url: url);
             HttpWebResponse response = null;
             try {
@@ -1257,6 +1274,8 @@ namespace JDP {
             // The redirect request is published in _request before GetResponse blocks, so
             // AbortInternal can abort it. Request.Timeout bounds the wait otherwise.
             private Stream FollowMetaRefresh(string redirectUrl) {
+                // Sends nothing to a host that is paused by a rate limit
+                ConnectionManager.GetInstance(redirectUrl).ThrowIfPaused();
                 HttpWebRequest redirectionRequest = BuildWebRequest(url: redirectUrl, auth: GetAuthForURL(_auth, _url, redirectUrl), connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime);
                 ReplaceRequest(redirectionRequest);
                 HttpWebResponse redirectionResponse = (HttpWebResponse)redirectionRequest.GetResponse();

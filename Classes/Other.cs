@@ -82,11 +82,25 @@ namespace JDP {
 
     public class HTTP304Exception : Exception { }
 
-    // HTTP 429, or 503 with Retry-After: the server asks the client to wait before sending more
+    // A request was not sent because requests to Host are paused by a rate limit
+    public class RateLimitException : Exception {
+        public RateLimitException(string host)
+            : this(host, "Requests to " + host + " are paused by a rate limit.", null) { }
+
+        protected RateLimitException(string host, string message, Exception innerException)
+            : base(message, innerException)
+        {
+            Host = host;
+        }
+
+        public string Host { get; private set; }
+    }
+
+    // HTTP 429, or 503 with Retry-After: Host asks the client to wait before sending more
     // requests. RetryAfter is the wait the server gave, or null if it gave none (or an invalid one).
-    public class HTTPRateLimitedException : Exception {
-        public HTTPRateLimitedException(TimeSpan? retryAfter, Exception innerException)
-            : base("Rate limited by the server.", innerException)
+    public class HTTPRateLimitedException : RateLimitException {
+        public HTTPRateLimitedException(string host, TimeSpan? retryAfter, Exception innerException)
+            : base(host, "Rate limited by " + host + ".", innerException)
         {
             RetryAfter = retryAfter;
         }
@@ -132,6 +146,9 @@ namespace JDP {
         internal static int MaxConnectionsPerHost { get; set; } = DefaultMaxConnectionsPerHost;
         internal static int MinRequestStartIntervalMS { get; set; } = DefaultMinRequestStartIntervalMS;
 
+        // How often a download waiting for a connection checks whether it should give up
+        private const int SlotWaitPollMS = 200;
+
         // Starts the requests that have to wait for MinRequestStartIntervalMS, so no thread is
         // blocked while they wait
         private static readonly WorkScheduler _requestStartScheduler = new WorkScheduler();
@@ -167,7 +184,10 @@ namespace JDP {
         }
 
         public static ConnectionManager GetInstance(string url) {
-            string host = (new Uri(url)).Host;
+            return GetInstanceForHost((new Uri(url)).Host);
+        }
+
+        public static ConnectionManager GetInstanceForHost(string host) {
             ConnectionManager manager;
             lock (_connectionManagers) {
                 if (!_connectionManagers.TryGetValue(host, out manager)) {
@@ -216,34 +236,30 @@ namespace JDP {
             return (int)Math.Max(MinRateLimitPauseMS, Math.Min(MaxRateLimitPauseMS, pauseMS));
         }
 
-        // A download from the host succeeded, so the next pause without a wait time starts over
+        // Pauses, then logs one line with the host and the length of the pause (never a URL)
+        public void PauseAndLog(TimeSpan? retryAfter) {
+            int pauseMS = Pause(retryAfter);
+            General.LogQuietly(String.Format("Rate limited by {0}, pausing requests to it for {1} seconds{2}.",
+                _host, (pauseMS + 999) / 1000, retryAfter == null ? " (no Retry-After given)" : String.Empty));
+        }
+
+        // Throws RateLimitException, without sending anything, while requests to the host are paused
+        public void ThrowIfPaused() {
+            if (IsPaused) throw new RateLimitException(_host);
+        }
+
+        // The host answered a file request normally, so the next pause without a wait time starts over
         public void ResetRateLimitBackoff() {
             lock (_pauseSync) {
                 _rateLimitBackoffLevel = 0;
             }
         }
 
-        // Ends every pause, backoff and reserved request start, so that one test's rate limit or
-        // request interval does not affect the next
+        // Forgets every host, with its pause, backoff, reserved request starts and connection
+        // slots, so that one test's rate limit, request interval or leaked slot does not affect the next
         internal static void ResetForTesting() {
             lock (_connectionManagers) {
-                foreach (ConnectionManager manager in _connectionManagers.Values) {
-                    manager.ResetRateLimit();
-                    manager.ResetRequestStarts();
-                }
-            }
-        }
-
-        private void ResetRateLimit() {
-            lock (_pauseSync) {
-                _pausedUntilTicks = 0;
-                _rateLimitBackoffLevel = 0;
-            }
-        }
-
-        private void ResetRequestStarts() {
-            lock (_requestStartSync) {
-                _lastRequestStartTicks = Int64.MinValue / 2;
+                _connectionManagers.Clear();
             }
         }
 
@@ -266,8 +282,10 @@ namespace JDP {
             }
         }
 
-        public string ObtainConnectionGroupName() {
-            _semaphore.WaitOne();
+        // Waits for a free connection to the host. Returns null, without taking one, if
+        // isCanceled returns true while waiting; it is called every SlotWaitPollMS.
+        public string ObtainConnectionGroupName(Func<bool> isCanceled) {
+            if (!_semaphore.WaitOne(SlotWaitPollMS, isCanceled)) return null;
             return GetConnectionGroupName();
         }
 
@@ -317,18 +335,48 @@ namespace JDP {
             WaitOne(Timeout.Infinite);
         }
 
-        public bool WaitOne(int timeout) {
-            QueueSync queueSync;
+        // Waits until signaled, checking isCanceled every pollMS (outside of any lock). Returns
+        // false, keeping no count and giving up its place in the queue, once isCanceled returns true.
+        public bool WaitOne(int pollMS, Func<bool> isCanceled) {
+            QueueSync queueSync = TakeOrEnqueue();
+            if (queueSync == null) return true;
+            while (!WaitSignaled(queueSync, pollMS)) {
+                if (isCanceled()) return !Abandon(queueSync);
+            }
+            return true;
+        }
+
+        private static bool WaitSignaled(QueueSync queueSync, int timeout) {
+            lock (queueSync) {
+                return queueSync.IsSignaled || Monitor.Wait(queueSync, timeout) || queueSync.IsSignaled;
+            }
+        }
+
+        // Returns false if the wait was signaled before it could be abandoned
+        private static bool Abandon(QueueSync queueSync) {
+            lock (queueSync) {
+                if (queueSync.IsSignaled) return false;
+                queueSync.IsAbandoned = true;
+                return true;
+            }
+        }
+
+        // Takes a count and returns null, or queues a new waiter and returns it
+        private QueueSync TakeOrEnqueue() {
             lock (_mainSync) {
                 if (_currentCount > 0) {
                     _currentCount--;
-                    return true;
+                    return null;
                 }
-                else {
-                    queueSync = new QueueSync();
-                    _queueSyncs.Enqueue(queueSync);
-                }
+                QueueSync queueSync = new QueueSync();
+                _queueSyncs.Enqueue(queueSync);
+                return queueSync;
             }
+        }
+
+        public bool WaitOne(int timeout) {
+            QueueSync queueSync = TakeOrEnqueue();
+            if (queueSync == null) return true;
             lock (queueSync) {
                 if (queueSync.IsSignaled || Monitor.Wait(queueSync, timeout)) {
                     return true;
@@ -657,7 +705,7 @@ namespace JDP {
                     Action workItem = DequeueWorkItem();
                     if (workItem != null) {
                         Thread.MemoryBarrier();
-                        workItem();
+                        RunWorkItem(workItem);
                         Thread.MemoryBarrier();
                     }
                 }
@@ -668,6 +716,16 @@ namespace JDP {
 
             // Returns the next work item, or null (and resets the new work item
             // signal) if the queue is empty.
+            // An exception escaping a work item would end the process, so it is logged instead
+            private static void RunWorkItem(Action workItem) {
+                try {
+                    workItem();
+                }
+                catch (Exception ex) {
+                    General.LogQuietly("Unhandled exception in a background work item:" + Environment.NewLine + ex);
+                }
+            }
+
             private Action DequeueWorkItem() {
                 Action workItem = null;
                 lock (_sync) {

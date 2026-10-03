@@ -78,6 +78,29 @@ namespace JDP.Tests {
             Assert.IsTrue(manager.IsPaused);
         }
 
+        // A waiter that gives up keeps no count and is skipped by the next release
+        [TestMethod]
+        public void SemaphoreWaitCanBeCanceled() {
+            var semaphore = new FIFOSemaphore(0, 1);
+
+            var wait = System.Threading.Tasks.Task.Run(() => semaphore.WaitOne(10, () => true));
+
+            Assert.IsTrue(wait.Wait(TimeSpan.FromSeconds(5)), "The canceled wait did not return");
+            Assert.IsFalse(wait.Result);
+            semaphore.Release();
+            Assert.IsTrue(semaphore.WaitOne(0));
+        }
+
+        // Resetting forgets the hosts, so a connection slot a test leaked is free again
+        [TestMethod]
+        public void ResetForTestingFreesConnectionSlots() {
+            Assert.IsNotNull(Manager("slots").ObtainConnectionGroupName(() => true));
+
+            ConnectionManager.ResetForTesting();
+
+            Assert.IsNotNull(Manager("slots").ObtainConnectionGroupName(() => true));
+        }
+
         [TestMethod]
         public void WaitStatusShowsTheRateLimit() {
             CultureInfo culture = Thread.CurrentThread.CurrentCulture;

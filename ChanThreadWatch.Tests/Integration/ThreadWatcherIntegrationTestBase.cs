@@ -37,6 +37,7 @@ namespace JDP.Tests.Integration {
             ThreadWatcher.MaxFileBytes = ThreadWatcher.DefaultMaxFileBytes;
             ThreadWatcher.MaxDescendantThreads = ThreadWatcher.DefaultMaxDescendantThreads;
             ThreadWatcher.PageParserFactory = _defaultPageParserFactory;
+            ThreadWatcher.BeforeRequestStart = url => { };
             SiteHelpers.UnregisterHostForTesting(PageHost);
             foreach (LoopbackHttpServer server in _servers) server.Dispose();
             _servers.Clear();

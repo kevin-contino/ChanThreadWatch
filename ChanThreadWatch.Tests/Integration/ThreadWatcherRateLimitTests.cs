@@ -35,10 +35,15 @@ namespace JDP.Tests.Integration {
             watcher.WaitStatus += (s, e) => {
                 failedCounts.Add(watcher.FailedFileCount);
                 rateLimitedHosts.Add(watcher.RateLimitedHost);
-                statuses.Add(frmChanThreadWatch.FormatWaitStatus(60, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitedHost, watcher.RateLimitResumeTime));
+                statuses.Add(frmChanThreadWatch.FormatWaitStatus(60, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitPausedHost, watcher.RateLimitResumeTime));
             };
 
-            RunChecks(watcher, 2, check => WaitForPauseToEnd(server.URL(FirstImage, MediaHost)));
+            RunChecks(watcher, 2, check => {
+                WaitForPauseToEnd(server.URL(FirstImage, MediaHost));
+                // Once the pause is over, the status no longer shows it, though the file waits for the next check
+                Assert.AreEqual(MediaHost, watcher.RateLimitedHost);
+                Assert.IsNull(watcher.RateLimitPausedHost);
+            });
 
             CollectionAssert.AreEqual(new[] { 0, 0 }, failedCounts);
             CollectionAssert.AreEqual(new[] { MediaHost, null }, rateLimitedHosts);
@@ -169,6 +174,155 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(StopReason.DownloadComplete, reason);
             Assert.IsNull(watcher.RateLimitedHost);
             Assert.IsTrue(File.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "1700000000001.jpg")));
+        }
+
+        // A page that keeps loading does not reset the backoff of a host whose file keeps getting
+        // 429 without Retry-After, so the pause grows from check to check
+        [TestMethod]
+        public void BackoffGrowsWhileOnlyThePageLoads() {
+            ConnectionManager.UnspecifiedRateLimitPauseMS = 400;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            server.Route(FirstImage, TooManyRequests());
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            var pauses = new List<long>();
+            watcher.WaitStatus += (s, e) => pauses.Add(ConnectionManager.GetInstance(server.URL(FirstImage)).PausedUntilTicks - TickCount.Now);
+
+            RunChecks(watcher, 3, check => WaitForPauseToEnd(server.URL(FirstImage)));
+
+            Assert.HasCount(3, server.RequestsTo(FourChanThreadFixture.ThreadPath));
+            Assert.HasCount(3, server.RequestsTo(FirstImage));
+            Assert.IsLessThanOrEqualTo(400, pauses[0]);
+            Assert.IsGreaterThan(500, pauses[1], "second pause");
+            Assert.IsGreaterThan(1000, pauses[2], "third pause");
+        }
+
+        // A watcher waiting for the host's only connection, held by another watcher, stops
+        // promptly instead of waiting for the connection
+        [TestMethod]
+        public void WatcherWaitingForAConnectionStopsPromptly() {
+            LoopbackHttpServer server = StartServer();
+            var release = new ManualResetEvent(false);
+            server.Route(FourChanThreadFixture.ThreadPath, LoopbackResponse.RawThenStall("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n<html>", release));
+            ThreadWatcher holder = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            ThreadWatcher waiter = CreateWatcher(server.URL("/wg/thread/101"));
+            waiter.ThreadDownloadDirectory = Path.Combine(DownloadDir, "waiter");
+            var stopped = new ManualResetEvent(false);
+            waiter.StopStatus += (s, e) => stopped.Set();
+            try {
+                holder.Start();
+                WaitUntil(() => server.RequestsTo(FourChanThreadFixture.ThreadPath).Count == 1);
+                waiter.Start();
+                Thread.Sleep(500);
+
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                waiter.Stop(StopReason.UserRequest);
+
+                Assert.IsTrue(stopped.WaitOne(TimeSpan.FromSeconds(3)), "The waiting watcher did not stop promptly");
+                Assert.IsLessThan(2000, clock.ElapsedMilliseconds);
+                Assert.IsEmpty(server.RequestsTo("/wg/thread/101"));
+            }
+            finally {
+                release.Set();
+                holder.Stop(StopReason.UserRequest);
+                holder.WaitUntilStopped((int)RunTimeout.TotalMilliseconds);
+                waiter.WaitUntilStopped((int)RunTimeout.TotalMilliseconds);
+            }
+        }
+
+        // An unexpected failure when a delayed request starts (on a scheduler thread) is reported
+        // and still ends the download, so its connection is released and the other files load
+        [TestMethod]
+        public void FailureStartingADelayedRequestStillEndsTheDownload() {
+            ConnectionManager.MinRequestStartIntervalMS = 50;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            string failingURL = server.URL(FirstImage);
+            string marker = "injected start failure " + Guid.NewGuid().ToString("N");
+            ThreadWatcher.BeforeRequestStart = url => {
+                if (url == failingURL) throw new InvalidOperationException(marker);
+            };
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            StopReason reason = RunToStop(watcher);
+
+            Assert.AreEqual(StopReason.DownloadComplete, reason);
+            Assert.AreEqual(1, watcher.FailedFileCount);
+            Assert.IsEmpty(server.RequestsTo(FirstImage));
+            Assert.HasCount(3, Directory.GetFiles(watcher.ThreadDownloadDirectory, "1700000000*.*"));
+            StringAssert.Contains(ReadLog(), marker);
+        }
+
+        // A synchronous page download (used for 4chan thread names) sends nothing to a paused
+        // host, and a 429 to it pauses the host
+        [TestMethod]
+        public void DownloadPageToStringHonorsAndSetsThePause() {
+            LoopbackHttpServer server = StartServer();
+            server.Route("/page", TooManyRequests().WithHeader("Retry-After", "30"));
+            string url = server.URL("/page", MediaHost);
+
+            Assert.ThrowsExactly<HTTPRateLimitedException>(() => General.DownloadPageToString(url));
+            Assert.IsTrue(ConnectionManager.GetInstance(url).IsPaused);
+            Assert.ThrowsExactly<RateLimitException>(() => General.DownloadPageToString(url));
+            Assert.HasCount(1, server.RequestsTo("/page"));
+        }
+
+        // A meta refresh to a paused host is not followed
+        [TestMethod]
+        public void MetaRefreshToAPausedHostIsNotFollowed() {
+            LoopbackHttpServer server = StartServer();
+            server.Route(FourChanThreadFixture.ThreadPath, MetaRefresh(server.URL("/target", MediaHost)));
+            server.Route("/target", LoopbackResponse.Html("<html></html>"));
+            ConnectionManager.GetInstanceForHost(MediaHost).Pause(TimeSpan.FromSeconds(30));
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunChecks(watcher, 1);
+
+            Assert.IsEmpty(server.RequestsTo("/target"));
+            Assert.AreEqual(MediaHost, watcher.RateLimitedHost);
+            Assert.IsNull(watcher.CheckError);
+        }
+
+        // A 429 from a meta refresh target pauses that host, not the host of the page
+        [TestMethod]
+        public void RateLimitFromAMetaRefreshTargetPausesThatHost() {
+            LoopbackHttpServer server = StartServer();
+            server.Route(FourChanThreadFixture.ThreadPath, MetaRefresh(server.URL("/target", MediaHost)));
+            server.Route("/target", TooManyRequests().WithHeader("Retry-After", "30"));
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunChecks(watcher, 1);
+
+            Assert.IsTrue(ConnectionManager.GetInstanceForHost(MediaHost).IsPaused);
+            Assert.IsFalse(ConnectionManager.GetInstanceForHost(PageHost).IsPaused);
+            Assert.AreEqual(MediaHost, watcher.RateLimitedHost);
+            Assert.HasCount(1, server.RequestsTo("/target"));
+        }
+
+        // An exception in a background work item is logged instead of ending the process
+        [TestMethod]
+        public void ExceptionInABackgroundWorkItemIsLogged() {
+            var ran = new ManualResetEvent(false);
+            string marker = "injected work item failure " + Guid.NewGuid().ToString("N");
+            ThreadPoolManager.QueueWorkItem("rate limit test", () => { throw new InvalidOperationException(marker); });
+            ThreadPoolManager.QueueWorkItem("rate limit test", () => ran.Set());
+
+            Assert.IsTrue(ran.WaitOne(RunTimeout));
+            WaitUntil(() => ReadLog().Contains(marker));
+        }
+
+        private static LoopbackResponse MetaRefresh(string url) {
+            return LoopbackResponse.Html("<html><head><meta http-equiv=\"refresh\" content=\"0; URL=" + url + "\"></head></html>");
+        }
+
+        private static void WaitUntil(Func<bool> condition) {
+            DateTime deadline = DateTime.UtcNow + PauseEndTimeout;
+            while (!condition()) {
+                Assert.IsTrue(DateTime.UtcNow < deadline, "Condition not met within " + PauseEndTimeout);
+                Thread.Sleep(20);
+            }
         }
 
         private static LoopbackResponse TooManyRequests() {
