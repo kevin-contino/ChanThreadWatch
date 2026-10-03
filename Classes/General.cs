@@ -968,10 +968,10 @@ namespace JDP {
                 if (!File.Exists(path)) return;
                 var backupInfo = new FileInfo(path + ".bak");
                 if (ShouldBackupThreadList(path, backupInfo, checkSize)) {
-                    string[] lines = File.ReadAllLines(path);
+                    string[] backupLines = ThreadListFile.GetBackupLines(File.ReadAllLines(path));
                     // Never replace the backup with a thread list that wouldn't load
-                    if (!ThreadListFile.IsValid(lines)) return;
-                    TextFile.WriteAllLinesAtomic(path + ".bak", lines);
+                    if (backupLines == null) return;
+                    TextFile.WriteAllLinesAtomic(path + ".bak", backupLines);
                 }
             }
             catch (Exception ex) {

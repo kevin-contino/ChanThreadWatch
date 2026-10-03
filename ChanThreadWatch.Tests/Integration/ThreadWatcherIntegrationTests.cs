@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests.Integration {
@@ -199,6 +202,30 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(PageAuth, page.RequestsTo(FourChanThreadFixture.ThreadPath)[0].BasicAuth);
             Assert.HasCount(4 + 3, media.Requests);
             foreach (RecordedRequest request in media.Requests) {
+                Assert.IsNull(request.Header("Authorization"), request.ToString());
+            }
+        }
+
+        // S6: a saved login that can't be decrypted is loaded as empty, so no request carries
+        // the stored ciphertext or any other credential
+        [TestMethod]
+        public void UndecryptableSavedLoginSendsNoCredentials() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            string url = server.URL(FourChanThreadFixture.ThreadPath);
+            byte[] blob = ProtectedData.Protect(Encoding.UTF8.GetBytes(PageAuth), Encoding.UTF8.GetBytes("some other app"), DataProtectionScope.CurrentUser);
+            string stored = StoredAuth.Prefix + Convert.ToBase64String(blob);
+            ThreadInfo thread = ThreadListFile.Parse(new[] { "4", url, stored, stored, "600", "1", "", "", "", "0", "", "", "", "0" }).Threads[0];
+            ThreadWatcher watcher = CreateWatcher(url);
+            watcher.PageAuth = thread.PageAuth;
+            watcher.ImageAuth = thread.ImageAuth;
+
+            StopReason reason = RunToStop(watcher);
+
+            Assert.AreEqual(StopReason.DownloadComplete, reason);
+            Assert.HasCount(1 + 4 + 3, server.Requests);
+            foreach (RecordedRequest request in server.Requests) {
                 Assert.IsNull(request.Header("Authorization"), request.ToString());
             }
         }

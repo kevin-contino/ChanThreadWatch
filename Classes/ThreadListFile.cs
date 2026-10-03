@@ -6,7 +6,9 @@ using System.IO;
 namespace JDP {
     // Format of the thread list file (threads.txt): the first line is the file version,
     // followed by a fixed number of lines per thread. SaveDir is kept as written in the
-    // file (relative to the download folder, or empty).
+    // file (relative to the download folder, or empty). PageAuth and ImageAuth are written
+    // encrypted (see StoredAuth); plaintext values from older versions still load, and
+    // values that can't be decrypted are kept in ExtraData and written back unchanged.
     public static class ThreadListFile {
         public const int CurrentVersion = 4;
 
@@ -47,11 +49,23 @@ namespace JDP {
             }
         }
 
+        // Returns the lines to write to the backup, or null if the file wouldn't load. The
+        // threads are written again rather than copied, so logins from a file written by an
+        // older version are encrypted in the backup too.
+        public static string[] GetBackupLines(string[] lines) {
+            try {
+                ThreadListData data = Parse(lines);
+                return data.TrailingLineCount == 0 ? Serialize(data.Threads) : null;
+            }
+            catch (Exception ex) when (ex is FormatException || ex is OverflowException) {
+                return null;
+            }
+        }
+
         private static ThreadInfo ParseThreadInfo(string[] lines, ref int i, int fileVersion) {
             ThreadInfo thread = new ThreadInfo { ExtraData = new WatcherExtraData() };
             thread.URL = lines[i++];
-            thread.PageAuth = lines[i++];
-            thread.ImageAuth = lines[i++];
+            ParseAuth(thread, lines[i++], lines[i++]);
             thread.CheckIntervalSeconds = ParseInt(lines[i++]);
             thread.OneTimeDownload = lines[i++] == "1";
             thread.SaveDir = lines[i++];
@@ -67,6 +81,14 @@ namespace JDP {
             }
             ParseVersion4Fields(thread, lines, ref i, fileVersion);
             return thread;
+        }
+
+        // A login that can't be decrypted is used as empty and kept to be written back unchanged.
+        private static void ParseAuth(ThreadInfo thread, string storedPageAuth, string storedImageAuth) {
+            thread.PageAuth = StoredAuth.Unprotect(storedPageAuth);
+            thread.ImageAuth = StoredAuth.Unprotect(storedImageAuth);
+            thread.ExtraData.UndecryptablePageAuth = StoredAuth.GetUndecryptable(storedPageAuth, thread.PageAuth);
+            thread.ExtraData.UndecryptableImageAuth = StoredAuth.GetUndecryptable(storedImageAuth, thread.ImageAuth);
         }
 
         private static void ParseStopReason(ThreadInfo thread, string stopReasonLine) {
@@ -121,8 +143,8 @@ namespace JDP {
         private static void AddThreadLines(List<string> lines, ThreadInfo thread) {
             WatcherExtraData extraData = thread.ExtraData;
             lines.Add(TextFile.ToSingleLine(thread.URL));
-            lines.Add(TextFile.ToSingleLine(thread.PageAuth));
-            lines.Add(TextFile.ToSingleLine(thread.ImageAuth));
+            lines.Add(StoredAuth.ToStored(thread.PageAuth, extraData.UndecryptablePageAuth));
+            lines.Add(StoredAuth.ToStored(thread.ImageAuth, extraData.UndecryptableImageAuth));
             lines.Add(thread.CheckIntervalSeconds.ToString(CultureInfo.InvariantCulture));
             lines.Add(FormatBool(thread.OneTimeDownload));
             lines.Add(TextFile.ToSingleLine(thread.SaveDir));

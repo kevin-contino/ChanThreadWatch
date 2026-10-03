@@ -483,11 +483,14 @@ namespace JDP {
         }
 
         private static void ApplyStoppedThreadEdit(frmThreadEdit editForm, ThreadWatcher watcher) {
+            // A login set here, even an empty one, replaces a saved login that couldn't be decrypted
             if (editForm.PageAuth.IsDirty) {
                 watcher.PageAuth = editForm.PageAuth.Value;
+                ((WatcherExtraData)watcher.Tag).UndecryptablePageAuth = null;
             }
             if (editForm.ImageAuth.IsDirty) {
                 watcher.ImageAuth = editForm.ImageAuth.Value;
+                ((WatcherExtraData)watcher.Tag).UndecryptableImageAuth = null;
             }
             if (editForm.OneTimeDownload.IsDirty) {
                 watcher.OneTimeDownload = editForm.OneTimeDownload.Value;

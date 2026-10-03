@@ -143,7 +143,14 @@ namespace JDP.Tests {
         public void Version4FileIsWrittenLineForLine() {
             List<ThreadInfo> threads = ThreadListFile.Parse(Version4Lines()).Threads;
 
-            CollectionAssert.AreEqual(Version4Lines(), ThreadListFile.Serialize(threads));
+            string[] written = ThreadListFile.Serialize(threads);
+
+            // The auth lines are written encrypted (see StoredAuthTests); compare their plaintext
+            for (int i = 1; i < written.Length; i += ThreadListFile.GetLinesPerThread(4)) {
+                written[i + 1] = StoredAuth.Unprotect(written[i + 1]);
+                written[i + 2] = StoredAuth.Unprotect(written[i + 2]);
+            }
+            CollectionAssert.AreEqual(Version4Lines(), written);
         }
 
         [TestMethod]
