@@ -36,8 +36,16 @@ namespace JDP {
                 data.Threads.Add(ParseThreadInfo(lines, ref i, fileVersion));
             }
             data.TrailingLineCount = lines.Length - i;
-            data.HasPlaintextAuth = HasPlaintextAuth(lines, linesPerThread, data.Threads.Count);
             return data;
+        }
+
+        // True if a login is stored as plaintext (written by an older version). Only the
+        // version line has to be valid, so this also checks a file that doesn't load.
+        public static bool HasPlaintextAuth(string[] lines) {
+            int fileVersion;
+            Int32.TryParse(lines.Length != 0 ? lines[0] : null, NumberStyles.Integer, CultureInfo.InvariantCulture, out fileVersion);
+            int linesPerThread = GetLinesPerThread(fileVersion);
+            return linesPerThread != 0 && HasPlaintextAuth(lines, linesPerThread, (lines.Length - 1) / linesPerThread);
         }
 
         // The two logins follow the URL at the start of each thread
@@ -65,13 +73,6 @@ namespace JDP {
         public static string[] GetBackupLines(string[] lines) {
             ThreadListData data = TryParseFully(lines);
             return data != null ? Serialize(data.Threads) : null;
-        }
-
-        // Returns the lines to rewrite a backup with so that its plaintext logins (written by
-        // an older version) are encrypted, or null if it has none or wouldn't load.
-        public static string[] GetReprotectedLines(string[] lines) {
-            ThreadListData data = TryParseFully(lines);
-            return data != null && data.HasPlaintextAuth ? Serialize(data.Threads) : null;
         }
 
         // Returns null if the lines don't form a complete thread list
@@ -201,8 +202,6 @@ namespace JDP {
         public int FileVersion { get; set; }
         public List<ThreadInfo> Threads { get; private set; }
         public int TrailingLineCount { get; set; }
-        // True if a login is stored as plaintext (written by an older version)
-        public bool HasPlaintextAuth { get; set; }
     }
 
     // Guards the thread list file against being overwritten after a failed load. Saving
@@ -250,16 +249,31 @@ namespace JDP {
         // A backup (see General.BackupThreadList) written by an older version holds plaintext
         // logins, and the periodic backup may never replace it (it can be turned off, or skip a
         // smaller list). So after the first save of the session, which writes encrypted
-        // logins, the backup is rewritten with its own threads and encrypted logins.
+        // logins, the backup is rewritten with its own threads and encrypted logins. If that
+        // fails (e.g. the file is in use), the next save tries again.
         private void ProtectBackupOnce(string backupPath) {
             if (_checkedBackup) return;
-            _checkedBackup = true;
             try {
-                string[] lines = File.Exists(backupPath) ? ThreadListFile.GetReprotectedLines(File.ReadAllLines(backupPath)) : null;
-                if (lines != null) TextFile.WriteAllLinesAtomic(backupPath, lines);
+                ProtectBackup(backupPath);
+                _checkedBackup = true;
             }
             catch (Exception ex) {
-                Logger.Log("The thread list backup could not be rewritten with encrypted logins." + Environment.NewLine + ex);
+                Logger.Log("The thread list backup could not be rewritten with encrypted logins; the next save tries again." + Environment.NewLine + ex);
+            }
+        }
+
+        // A backup that doesn't load fully is left as it is, since it can't be written again
+        // without losing what didn't load
+        private static void ProtectBackup(string backupPath) {
+            if (!File.Exists(backupPath)) return;
+            string[] lines = File.ReadAllLines(backupPath);
+            if (!ThreadListFile.HasPlaintextAuth(lines)) return;
+            string[] backupLines = ThreadListFile.GetBackupLines(lines);
+            if (backupLines != null) {
+                TextFile.WriteAllLinesAtomic(backupPath, backupLines);
+            }
+            else {
+                Logger.Log("The thread list backup holds plaintext logins and could not be re-encrypted because it does not load fully. It was left unchanged.");
             }
         }
     }
