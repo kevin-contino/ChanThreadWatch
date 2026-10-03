@@ -107,9 +107,10 @@ namespace JDP.Tests {
             Assert.AreEqual("<html>" + General.ActiveContentPolicyMeta + "<p>a</p></html>", Save("<html lang=\"en\" onclick=\"x()\"><p>a</p></html>"));
         }
 
-        // A page without a head or html start tag gets the policy before its first content, after
-        // what a browser reads before it starts the page, so the policy lands in the head the
-        // browser creates and a doctype still counts
+        // A page without a head start tag where a browser starts its head, or an html start tag
+        // where the head is implied, gets the policy before its first content, after what a
+        // browser reads before it starts the page, so the policy lands in the head the browser
+        // creates and a doctype still counts
         [TestMethod]
         [DataRow("<p>a</p>", "{P}<p>a</p>")]
         [DataRow("", "{P}")]
@@ -118,18 +119,24 @@ namespace JDP.Tests {
         [DataRow("<!-- never closed <p>", "{P}<!-- never closed <p>")]
         [DataRow("&nbsp;<p>", "{P}&nbsp;<p>")]
         [DataRow("<body onload=\"x()\"><p>a</p>", "{P}<body ><p>a</p>")]
+        [DataRow("text<html><head></head></html>", "{P}text<html><head></head></html>")]
+        [DataRow("<div>x</div><head></head>", "{P}<div>x</div><head></head>")]
+        [DataRow("<table><head></head></table>", "{P}<table><head></head></table>")]
+        [DataRow("<noscript><head></head></noscript><p>a</p>", "{P}<noscript><head></head></noscript><p>a</p>")]
+        [DataRow("<svg><head></head></svg>", "{P}<svg><head></head></svg>")]
+        [DataRow("<!---><html><head></head></html>", "<!--->{P}<html><head></head></html>")]
         public void PageWithoutAHeadGetsThePolicyBeforeItsContent(string html, string expected) {
             Assert.AreEqual(expected.Replace("{P}", General.ActiveContentPolicyMeta), Save(html));
         }
 
-        // A browser ends the svg at the div's end tag and reads the textarea as text, while
-        // HTMLParser follows no HTML element outside svg and math, stays in the svg, and sees a
-        // comment that hides this handler. Only the policy blocks it.
+        // A browser ends the svg at the div's end tag and reads the textarea as text. HTMLParser
+        // follows no HTML element outside svg and math, so it keeps the svg open; a textarea with
+        // markup read where the parser is unsure is removed, and then the handler is found.
         [TestMethod]
-        public void PolicyCoversMarkupTheParserMisreads() {
+        public void SvgThatAnHTMLEndTagMayHaveEndedStaysUncertain() {
             string saved = Save("<head></head><body><div><svg><g></div><textarea><!--</textarea><img src=x onerror=alert(1)>--></body>");
 
-            Assert.AreEqual("<head>" + General.ActiveContentPolicyMeta + "</head><body><div><svg><g></div><textarea><!--</textarea><img src=x onerror=alert(1)>--></body>", saved);
+            Assert.AreEqual("<head>" + General.ActiveContentPolicyMeta + "</head><body><div><svg><g></div><img src=\"http://a.com/b/x\" >--></body>", saved);
         }
 
         // Comments end where a browser ends them, so a script after a comment is found
@@ -153,27 +160,52 @@ namespace JDP.Tests {
             Assert.AreEqual("a" + html, SaveFragment("a" + html));
         }
 
-        // In svg and math a browser reads the tags in title, style and textarea, and in an
-        // integration point (svg foreignObject, desc, title, MathML mi and an HTML annotation-xml)
-        // it reads these elements as HTML text again, which can end before a comment does
+        // Inside svg and math (also in the HTML of their integration points) and inside a select,
+        // a browser may read the contents of title, style, textarea and the other raw text
+        // elements as markup. The parser reads them as text, and an element whose contents hold
+        // markup is removed with them, so the saved page has nothing the two readings disagree
+        // on; what follows is then read as a browser reads it.
         [TestMethod]
-        [DataRow("<svg><title><script>alert(1)</script></title></svg>", "<svg><title></title></svg>")]
-        [DataRow("<SVG><TITLE><script>alert(1)</script></TITLE></SVG>", "<SVG><TITLE></TITLE></SVG>")]
-        [DataRow("<math><title><img onerror=alert(1)></title></math>", "<math><title><img ></title></math>")]
-        [DataRow("<svg><style><script>alert(1)</script></style></svg>", "<svg><style></style></svg>")]
-        [DataRow("<svg><font><title><script>alert(1)</script></title></font></svg>", "<svg><font><title></title></font></svg>")]
-        [DataRow("<svg><g><textarea><img onerror=alert(1)></textarea></g></svg>", "<svg><g><textarea><img ></textarea></g></svg>")]
-        [DataRow("<svg><foreignObject><textarea><!--</textarea><script>alert(1)</script>--></textarea></foreignObject></svg>", "<svg><foreignObject><textarea><!--</textarea>--></textarea></foreignObject></svg>")]
-        [DataRow("<svg><desc><style><!--</style><script>alert(1)</script>--></style></desc></svg>", "<svg><desc><style><!--</style>--></style></desc></svg>")]
-        [DataRow("<math><mi><title><!--</title><script>alert(1)</script>--></title></mi></math>", "<math><mi><title><!--</title>--></title></mi></math>")]
-        [DataRow("<math><mi><mglyph><title><img onerror=alert(1)></title></mglyph></mi></math>", "<math><mi><mglyph><title><img ></title></mglyph></mi></math>")]
-        [DataRow("<math><annotation-xml encoding=\"text/html\"><textarea><!--</textarea><script>alert(1)</script>--></textarea></annotation-xml></math>", "<math><annotation-xml encoding=\"text/html\"><textarea><!--</textarea>--></textarea></annotation-xml></math>")]
-        [DataRow("<math><annotation-xml><svg><title><textarea><!--</textarea><script>alert(1)</script>--></textarea></title></svg></annotation-xml></math>", "<math><annotation-xml><svg><title><textarea><!--</textarea>--></textarea></title></svg></annotation-xml></math>")]
-        public void RemovesActiveContentInSvgAndMathText(string html, string expected) {
+        [DataRow("<svg><title><script>alert(1)</script></title></svg>", "<svg></svg>")]
+        [DataRow("<SVG><TITLE><script>alert(1)</script></TITLE></SVG>", "<SVG></SVG>")]
+        [DataRow("<math><title><img onerror=alert(1)></title></math>", "<math></math>")]
+        [DataRow("<svg><style><script>alert(1)</script></style></svg>", "<svg></svg>")]
+        [DataRow("<svg><font><title><script>alert(1)</script></title></font></svg>", "<svg><font></font></svg>")]
+        [DataRow("<svg><g><textarea><img onerror=alert(1)></textarea></g></svg>", "<svg><g></g></svg>")]
+        [DataRow("<svg><xmp><img onerror=alert(1)></xmp></svg>", "<svg></svg>")]
+        [DataRow("<svg><foreignObject><textarea><!--</textarea><script>alert(1)</script>--></textarea></foreignObject></svg>", "<svg><foreignObject>--></textarea></foreignObject></svg>")]
+        [DataRow("<svg><desc><style><!--</style><script>alert(1)</script>--></style></desc></svg>", "<svg><desc>--></style></desc></svg>")]
+        [DataRow("<math><mi><title><!--</title><script>alert(1)</script>--></title></mi></math>", "<math><mi>--></title></mi></math>")]
+        [DataRow("<math><mi><title><script>alert(1)</script></title></mi></math>", "<math><mi></mi></math>")]
+        [DataRow("<math><mi><mglyph><title><img onerror=alert(1)></title></mglyph></mi></math>", "<math><mi><mglyph></mglyph></mi></math>")]
+        [DataRow("<math><annotation-xml encoding=\"text/html\"><textarea><!--</textarea><script>alert(1)</script>--></textarea></annotation-xml></math>", "<math><annotation-xml encoding=\"text/html\">--></textarea></annotation-xml></math>")]
+        [DataRow("<math><annotation-xml encoding=\"TEXT/HTML\"><textarea><!--</textarea><script>alert(1)</script>--></textarea></annotation-xml></math>", "<math><annotation-xml encoding=\"TEXT/HTML\">--></textarea></annotation-xml></math>")]
+        [DataRow("<math><annotation-xml encoding=\"image/svg+xml\"><title><img onerror=alert(1)></title></annotation-xml></math>", "<math><annotation-xml encoding=\"image/svg+xml\"></annotation-xml></math>")]
+        [DataRow("<math><annotation-xml><svg><title><textarea><!--</textarea><script>alert(1)</script>--></textarea></title></svg></annotation-xml></math>", "<math><annotation-xml><svg></svg></annotation-xml></math>")]
+        [DataRow("<svg><foreignObject><svg></svg><title><script>alert(1)</script></title></foreignObject></svg>", "<svg><foreignObject><svg></svg></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><svg><foreignObject><textarea><!--</textarea><script>alert(1)</script>--></textarea></foreignObject></svg></foreignObject></svg>", "<svg><foreignObject><svg><foreignObject>--></textarea></foreignObject></svg></foreignObject></svg>")]
+        [DataRow("<svg><g><title><script>alert(1)</script>", "<svg><g><title>")]
+        [DataRow("<svg><g><style><img onerror=alert(1)>", "<svg><g><style><img >")]
+        [DataRow("<select><xmp><!--</xmp><script>alert(1)</script>-->", "<select>-->")]
+        [DataRow("<select><style><img onerror=alert(1)></style></select>", "<select></select>")]
+        [DataRow("<select><noscript><!--</noscript><script>alert(1)</script>--></select>", "<select>--></select>")]
+        [DataRow("<select><svg><title><script>alert(1)</script></title></svg></select>", "<select><svg></svg></select>")]
+        [DataRow("<select><plaintext><script>alert(1)</script>", "<select><plaintext>")]
+        public void RemovesRawTextElementWithMarkupWhereABrowserMayReadMarkup(string html, string expected) {
             Assert.AreEqual(expected, SaveFragment(html));
         }
 
-        // Outside svg and math, and after an HTML element ends them, title and textarea hold text
+        // Raw text without markup reads the same either way and is kept
+        [TestMethod]
+        [DataRow("<svg><title>a &lt; b</title></svg>")]
+        [DataRow("<svg><style>g > rect { fill: red }</style></svg>")]
+        [DataRow("<svg><foreignObject><textarea>x < 1</textarea></foreignObject></svg>")]
+        [DataRow("<select><title>t</title></select>")]
+        public void KeepsRawTextWithoutMarkupWhereABrowserMayReadMarkup(string html) {
+            Assert.AreEqual(html, SaveFragment(html));
+        }
+
+        // Outside svg, math and select a browser reads title, style and textarea contents as text
         [TestMethod]
         [DataRow("<title><script>alert(1)</script></title>")]
         [DataRow("<textarea><script>alert(1)</script></textarea>")]
@@ -182,37 +214,36 @@ namespace JDP.Tests {
         [DataRow("<svg/><textarea><img src=x onerror=alert(1)></textarea>")]
         [DataRow("<svg><p><title><script>alert(1)</script></title></svg>")]
         [DataRow("<svg><font color=\"red\"><title><script>alert(1)</script></title></font></svg>")]
-        [DataRow("<math><mi><title><script>alert(1)</script></title></mi></math>")]
         [DataRow("<svg><g></p><title><script>alert(1)</script></title></svg>")]
         [DataRow("<svg><g></br><title><script>alert(1)</script></title></svg>")]
         [DataRow("</svg><title><script>alert(1)</script></title>")]
         [DataRow("<svg></svg></svg><textarea><script>alert(1)</script></textarea>")]
-        [DataRow("<svg><foreignObject><svg></svg><title><script>alert(1)</script></title></foreignObject></svg>")]
-        [DataRow("<svg><foreignObject><div></svg><title><script>alert(1)</script></title></div></foreignObject></svg>")]
-        public void KeepsTitleAndTextareaTextOutsideSvgAndMath(string html) {
+        [DataRow("<select></select><style><img src=x onerror=alert(1)></style>")]
+        public void KeepsTitleAndTextareaTextOutsideSvgMathAndSelect(string html) {
             Assert.AreEqual(html, SaveFragment(html));
         }
 
         // A browser ignores the end tag of an svg or integration point while an HTML element is
         // open inside the integration point, and is in the svg again after both end. Where the
-        // HTML element may have been closed already (p, span), the parser stays in the svg.
+        // parser cannot tell if a browser closed an HTML element (implied end tags, formatting
+        // elements opened again, a form end tag), it keeps it open and stays unsure.
         [TestMethod]
-        [DataRow("<svg><foreignObject><div></svg></div></foreignObject><style><img src=x onerror=alert(1)></style></svg>", "<svg><foreignObject><div></svg></div></foreignObject><style><img src=\"http://a.com/b/x\" ></style></svg>")]
-        [DataRow("<svg><desc><div></svg></div></desc><style><img src=x onerror=alert(1)></style></svg>", "<svg><desc><div></svg></div></desc><style><img src=\"http://a.com/b/x\" ></style></svg>")]
-        [DataRow("<svg><foreignObject><section><div></svg></foreignObject></div></section></foreignObject><title><img onerror=alert(1)></title></svg>", "<svg><foreignObject><section><div></svg></foreignObject></div></section></foreignObject><title><img ></title></svg>")]
-        [DataRow("<svg><foreignObject><span></svg></span></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><span></svg></span></foreignObject><style><img ></style></svg>")]
-        [DataRow("<svg><foreignObject><p><div></div></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><p><div></div></foreignObject><style><img ></style></svg>")]
-        [DataRow("<svg><foreignObject><li><div><li></li></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><li><div><li></li></foreignObject><style><img ></style></svg>")]
-        [DataRow("<svg><foreignObject><xmp></svg></xmp></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><xmp></svg></xmp></foreignObject><style><img ></style></svg>")]
-        [DataRow("<svg><foreignObject><noembed></svg></noembed></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><noembed></svg></noembed></foreignObject><style><img ></style></svg>")]
-        [DataRow("<svg><foreignObject><noframes></svg></noframes></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><noframes></svg></noframes></foreignObject><style><img ></style></svg>")]
-        [DataRow("<svg><foreignObject><iframe></svg></iframe></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject></foreignObject><style><img ></style></svg>")]
-        [DataRow("<svg><foreignObject><svg><foreignObject><textarea><!--</textarea><script>alert(1)</script>--></textarea></foreignObject></svg></foreignObject></svg>", "<svg><foreignObject><svg><foreignObject><textarea><!--</textarea>--></textarea></foreignObject></svg></foreignObject></svg>")]
-        [DataRow("<svg><foreignObject><div></svg><textarea><!--</textarea><script>alert(1)</script>--></textarea></div></foreignObject></svg>", "<svg><foreignObject><div></svg><textarea><!--</textarea>--></textarea></div></foreignObject></svg>")]
-        [DataRow("<math><annotation-xml encoding=\"TEXT/HTML\"><textarea><!--</textarea><script>alert(1)</script>--></textarea></annotation-xml></math>", "<math><annotation-xml encoding=\"TEXT/HTML\"><textarea><!--</textarea>--></textarea></annotation-xml></math>")]
-        [DataRow("<math><annotation-xml encoding=\"image/svg+xml\"><title><img onerror=alert(1)></title></annotation-xml></math>", "<math><annotation-xml encoding=\"image/svg+xml\"><title><img ></title></annotation-xml></math>")]
-        [DataRow("<svg><g><title><script>alert(1)</script>", "<svg><g><title>")]
-        [DataRow("<svg><g><style><img onerror=alert(1)>", "<svg><g><style><img >")]
+        [DataRow("<svg><foreignObject><div></svg></div></foreignObject><style><img src=x onerror=alert(1)></style></svg>", "<svg><foreignObject><div></svg></div></foreignObject></svg>")]
+        [DataRow("<svg><desc><div></svg></div></desc><style><img src=x onerror=alert(1)></style></svg>", "<svg><desc><div></svg></div></desc></svg>")]
+        [DataRow("<svg><foreignObject><section><div></svg></foreignObject></div></section></foreignObject><title><img onerror=alert(1)></title></svg>", "<svg><foreignObject><section><div></svg></foreignObject></div></section></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><span></svg></span></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><span></svg></span></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><span></foreignObject><textarea><!--</textarea><script>alert(1)</script>--></textarea>", "<svg><foreignObject><span></foreignObject>--></textarea>")]
+        [DataRow("<svg><foreignObject><p><div></div></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><p><div></div></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><li><div><li></li></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject><li><div><li></li></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><div><b></div><span></span></foreignObject><textarea><!--</textarea><script>alert(1)</script>--></textarea>", "<svg><foreignObject><div><b></div><span></span></foreignObject>--></textarea>")]
+        [DataRow("<svg><foreignObject><div><b></div><span></span></svg></b></foreignObject><style><img onerror=alert(1)></style>", "<svg><foreignObject><div><b></div><span></span></svg></b></foreignObject>")]
+        [DataRow("<svg><foreignObject><form><span></form></svg><textarea>x</textarea></span></foreignObject><style><img onerror=alert(1)></style>", "<svg><foreignObject><form><span></form></svg><textarea>x</textarea></span></foreignObject>")]
+        [DataRow("<svg><foreignObject><xmp></svg></xmp></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><noembed></svg></noembed></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><noframes></svg></noframes></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><iframe></svg></iframe></foreignObject><style><img onerror=alert(1)></style></svg>", "<svg><foreignObject></foreignObject></svg>")]
+        [DataRow("<svg><foreignObject><plaintext></svg></plaintext></foreignObject><style><img src=x onerror=alert(1)></style>", "<svg><foreignObject><plaintext></svg></plaintext></foreignObject>")]
+        [DataRow("<svg><foreignObject><div></svg><textarea><!--</textarea><script>alert(1)</script>--></textarea></div></foreignObject></svg>", "<svg><foreignObject><div></svg>--></textarea></div></foreignObject></svg>")]
         public void RemovesActiveContentAfterHTMLInIntegrationPoints(string html, string expected) {
             Assert.AreEqual(expected, SaveFragment(html));
         }
@@ -230,18 +261,41 @@ namespace JDP.Tests {
         [DataRow("<noframes><!--</noframes><script>alert(1)</script>-->", "<noframes><!--</noframes>-->")]
         [DataRow("<noscript><!--</noscript><script>alert(1)</script>-->", "<noscript><!--</noscript>-->")]
         [DataRow("<iframe><!--</iframe><script>alert(1)</script>-->", "-->")]
-        [DataRow("<svg><xmp><img onerror=alert(1)></xmp></svg>", "<svg><xmp><img ></xmp></svg>")]
         public void RemovesScriptAfterRawTextElement(string html, string expected) {
             Assert.AreEqual(expected, SaveFragment(html));
         }
 
-        // Text to a browser: noscript contents with scripting on, and everything after plaintext
+        // An active element read as raw text is removed with all the text the parser skipped, also
+        // when its start tag is self-closing, and to the end of the page when its end tag can't be
+        // read. An active element whose raw text never ends loses its start tag, and its contents
+        // are read as markup.
         [TestMethod]
-        [DataRow("<noscript><img src=x onerror=alert(1)></noscript>")]
-        [DataRow("<plaintext><script>alert(1)</script></plaintext><img src=x onerror=alert(1)>")]
-        [DataRow("<svg><foreignObject><plaintext></svg></plaintext></foreignObject><style><img src=x onerror=alert(1)></style>")]
-        public void KeepsRawTextElementContents(string html) {
-            Assert.AreEqual(html, SaveFragment(html));
+        [DataRow("<iframe/><script>alert(1)</script></iframe><p>a</p>", "<p>a</p>")]
+        [DataRow("<iframe/src=x><script>alert(1)</script></iframe><p>a</p>", "<p>a</p>")]
+        [DataRow("<iframe src=x><script>alert(1)</script>", "")]
+        [DataRow("<iframe src=x><img src=x onerror=alert(1)>", "<img src=\"http://a.com/b/x\" >")]
+        [DataRow("<iframe>x</iframe", "x</iframe")]
+        [DataRow("<iframe>x</iframe a=\"b<script>alert(1)</script>", "")]
+        [DataRow("<script>a<img src=x onerror=alert(1)>", "a<img src=\"http://a.com/b/x\" >")]
+        public void RemovesActiveRawTextElementWithAllItsText(string html, string expected) {
+            Assert.AreEqual(expected, SaveFragment(html));
+        }
+
+        // Text to a browser: noscript contents with scripting on. The parser goes on reading the
+        // tags after it, also when no end tag ends it (then reading its contents as markup).
+        [TestMethod]
+        [DataRow("<noscript><img src=x onerror=alert(1)></noscript><a href=\"y\">", "<noscript><img src=x onerror=alert(1)></noscript><a href=\"http://a.com/b/y\">")]
+        [DataRow("<xmp><img src=x onerror=alert(1)></xmp><a href=\"y\">", "<xmp><img src=x onerror=alert(1)></xmp><a href=\"http://a.com/b/y\">")]
+        [DataRow("<noscript><img src=x onerror=alert(1)><a href=\"y\">", "<noscript><img src=\"http://a.com/b/x\" ><a href=\"http://a.com/b/y\">")]
+        [DataRow("<xmp><img src=x onerror=alert(1)><a href=\"y\">", "<xmp><img src=\"http://a.com/b/x\" ><a href=\"http://a.com/b/y\">")]
+        public void ReadsTheTagsAfterRawText(string html, string expected) {
+            Assert.AreEqual(expected, SaveFragment(html));
+        }
+
+        // Plaintext has no end tag, so its contents are read as markup; a browser reads them as text
+        [TestMethod]
+        public void ReadsPlaintextContentsAsMarkup() {
+            Assert.AreEqual("<plaintext></plaintext><img src=\"http://a.com/b/x\" >", SaveFragment("<plaintext><script>alert(1)</script></plaintext><img src=x onerror=alert(1)>"));
         }
 
         // An svg that stays open with many elements and end tags that close none of them is read
@@ -251,16 +305,17 @@ namespace JDP.Tests {
             const int count = 50000;
             string[] pages = {
                 "<svg>" + String.Concat(System.Linq.Enumerable.Repeat("<g>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</x>", count)) + "<title><script>alert(1)</script>",
-                "<svg><foreignObject>" + String.Concat(System.Linq.Enumerable.Repeat("<div>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</svg>", count)) + "<textarea><script>alert(1)</script></textarea>"
+                "<svg><foreignObject>" + String.Concat(System.Linq.Enumerable.Repeat("<div>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</svg>", count)) + "<textarea><script>alert(1)</script></textarea>",
+                "<svg><foreignObject><span>" + String.Concat(System.Linq.Enumerable.Repeat("<b>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</span>", count)) + "<textarea><script>alert(1)</script></textarea>"
             };
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-            string first = SaveFragment(pages[0]);
-            string second = SaveFragment(pages[1]);
+            string[] saved = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(pages, p => SaveFragment(p)));
 
             Assert.IsLessThan(5000L, stopwatch.ElapsedMilliseconds);
-            Assert.DoesNotContain("alert(1)", first);
-            StringAssert.EndsWith(second, "<textarea><script>alert(1)</script></textarea>");
+            foreach (string page in saved) {
+                Assert.DoesNotContain("alert(1)", page);
+            }
         }
 
         [TestMethod]

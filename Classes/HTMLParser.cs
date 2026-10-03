@@ -166,6 +166,13 @@ namespace JDP {
             return !tag.IsSelfClosing && tag.NameEquals(name);
         }
 
+        // The end of the end tag of a start tag whose contents were read as raw text, or the end
+        // of the page if that end tag could not be read
+        public int GetRawTextElementEndOffset(HTMLTag startTag) {
+            int i;
+            return _offsetToIndex.TryGetValue(startTag.RawTextEndOffset, out i) ? _tags[i].EndOffset : _preprocessedHTML.Length;
+        }
+
         public HTMLTagRange CreateTagRange(HTMLTag tag) {
             return CreateTagRange(tag, null);
         }
@@ -216,7 +223,7 @@ namespace JDP {
         // Parsing helpers below return the position to continue from, or -1 (or null)
         // when the input ends before the construct is complete, which stops parsing.
         private static IEnumerable<HTMLTag> ParseTags(string html, int htmlStart, int htmlEnd) {
-            ForeignContent foreignContent = new ForeignContent();
+            ParseContext context = new ParseContext();
             int pos;
             while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
                 htmlStart = pos + 1;
@@ -228,7 +235,7 @@ namespace JDP {
                     yield return tag;
 
                     // Skip contents of special tags whose contents are to be treated as raw text
-                    htmlStart = SkipRawTextContents(html, tag, foreignContent, htmlEnd);
+                    htmlStart = SkipRawTextContents(html, tag, context, htmlEnd);
                 }
                 else {
                     htmlStart = SkipNonTagMarkup(html, htmlStart, htmlEnd);
@@ -324,14 +331,26 @@ namespace JDP {
             return valueEnd;
         }
 
-        private static int SkipRawTextContents(string html, HTMLTag tag, ForeignContent foreignContent, int htmlEnd) {
-            int htmlStart = tag.EndOffset;
-            bool isRawText = IsRawTextStartTag(tag, foreignContent);
-            foreignContent.Update(tag);
-            if (!isRawText) return htmlStart;
-            // Nothing ends plaintext
-            if (tag.NameEquals("plaintext")) return -1;
+        // Skips the contents of an element that a browser reads as raw text, and records where
+        // they end. Where a browser may read them as markup instead (see ParseContext) and they
+        // hold markup, the element is marked to be removed with its contents, so a saved page has
+        // no markup that the two readings disagree on. Contents that no end tag ends are read as
+        // markup: a browser reads them as text, so nothing in them runs, and the parser finds
+        // more tags.
+        private static int SkipRawTextContents(string html, HTMLTag tag, ParseContext context, int htmlEnd) {
+            bool isUncertain = context.IsUncertain;
+            context.Update(tag);
+            if (!IsRawTextStartTag(tag)) return tag.EndOffset;
+            int rawTextEnd = FindRawTextEnd(html, tag, htmlEnd);
+            if (rawTextEnd == -1) return tag.EndOffset;
+            tag.RawTextEndOffset = rawTextEnd;
+            tag.ContentsMayBeMarkup = isUncertain && ContainsMarkup(html, tag.EndOffset, rawTextEnd);
+            return rawTextEnd;
+        }
+
+        private static int FindRawTextEnd(string html, HTMLTag tag, int htmlEnd) {
             string endTagText = "/" + tag.Name;
+            int htmlStart = tag.EndOffset;
             int pos;
             while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
                 htmlStart = pos + 1;
@@ -340,20 +359,30 @@ namespace JDP {
             return -1;
         }
 
+        // True if a parser reading markup would find a tag, comment, doctype or bogus comment
+        private static bool ContainsMarkup(string html, int htmlStart, int htmlEnd) {
+            int pos;
+            while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
+                htmlStart = pos + 1;
+                if (StartsWithLetter(html, htmlStart, htmlEnd) || StartsWithAny(html, htmlStart, htmlEnd, '/', '!', '?')) return true;
+            }
+            return false;
+        }
+
         // Elements whose contents a browser reads as text when it reads them as HTML. Scripting is
-        // on in the browser that opens a saved page, so noscript is one of them.
+        // on in the browser that opens a saved page, so noscript is one of them. Plaintext has no
+        // end tag, so its contents are read as markup (see SkipRawTextContents).
         private static readonly string[] _rawTextNames = {
-            "style", "title", "textarea", "xmp", "iframe", "noembed", "noframes", "noscript", "plaintext"
+            "style", "title", "textarea", "xmp", "iframe", "noembed", "noframes", "noscript"
         };
 
-        // In svg and math a browser reads the contents of these elements as markup, and a browser
-        // ignores the slash of a self-closing HTML start tag. Script contents stay text here, also
-        // in svg, and a self-closing script start tag is still read as one without contents: the
-        // removal of scripts takes the contents found with them.
-        private static bool IsRawTextStartTag(HTMLTag tag, ForeignContent foreignContent) {
+        // A browser ignores the slash of a self-closing HTML start tag. A self-closing script start
+        // tag is still read as one without contents: the removal of the script tag leaves its
+        // contents as the markup that the parser read.
+        private static bool IsRawTextStartTag(HTMLTag tag) {
             if (tag.IsEnd) return false;
             if (tag.NameEquals("script")) return !tag.IsSelfClosing;
-            return tag.NameEqualsAny(_rawTextNames) && foreignContent.IsReadAsHTML(tag);
+            return tag.NameEqualsAny(_rawTextNames);
         }
 
         private static bool StartsWithRawTextEndTag(string html, int htmlStart, int htmlEnd, string endTagText) {
@@ -500,15 +529,19 @@ namespace JDP {
             return attributeValue != null && ClassAttributeValueHas(attributeValue, targetClassName);
         }
 
-        // The svg and math elements open at a point of the page, and the HTML elements open inside
-        // their integration points, as far as a browser's tree builder uses them to decide if it
-        // reads a start tag as HTML or as foreign content. Inside an integration point (svg
-        // foreignObject, desc and title, MathML mi, mo, mn, ms, mtext, and annotation-xml for HTML)
-        // a browser reads start tags as HTML again, and ignores the end tag of a foreign element
-        // while an HTML element is open there. Where the browser may have closed an HTML element
-        // without its end tag, the choice that stays in foreign content is taken, since a parser
-        // in foreign content reads title, style and textarea contents as tags.
-        private sealed class ForeignContent {
+        // Follows where a browser may read the contents of title, style, textarea and the other
+        // raw text elements as markup: inside svg and math (also in the HTML in their integration
+        // points, svg foreignObject, desc and title, MathML mi, mo, mn, ms, mtext and annotation-xml
+        // for HTML), and inside a select, where browsers differ. The open svg and math elements and
+        // the HTML elements opened inside them are kept as a browser's tree builder keeps them, as
+        // far as that decides when the svg or math ends. Where the parser cannot tell if a browser
+        // closed an element, it keeps the element open: the parser then stays uncertain for longer,
+        // which removes more, never less.
+        private sealed class ParseContext {
+            // The most elements an end tag of an HTML element closes; beyond that it is ignored,
+            // which keeps them open
+            private const int MaxClosedHTMLElements = 100;
+
             private static readonly string[] _breakoutNames = {
                 "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt", "em", "embed",
                 "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li", "listing", "menu", "meta",
@@ -527,23 +560,41 @@ namespace JDP {
             // tag closes takes the same time however many elements are open
             private readonly Dictionary<string, Stack<int>> _indexesByName = new Dictionary<string, Stack<int>>(StringComparer.Ordinal);
 
+            // Select start tags less select end tags; a select that may have ended is kept
+            private int _selectDepth;
+
+            public bool IsUncertain {
+                get { return _openElements.Count != 0 || _selectDepth != 0; }
+            }
+
             private OpenElement Current {
                 get { return _openElements.Count != 0 ? _openElements[_openElements.Count - 1] : null; }
             }
 
-            public bool IsReadAsHTML(HTMLTag startTag) {
-                OpenElement current = Current;
-                if (current == null || !current.IsForeign || current.IsHTMLIntegrationPoint) return true;
-                return current.IsTextIntegrationPoint && !startTag.NameEqualsAny("mglyph", "malignmark");
-            }
-
             public void Update(HTMLTag tag) {
+                UpdateSelectDepth(tag);
                 if (tag.IsEnd) {
                     Close(tag);
                 }
                 else {
                     Open(tag);
                 }
+            }
+
+            private void UpdateSelectDepth(HTMLTag tag) {
+                if (!tag.NameEquals("select")) return;
+                if (!tag.IsEnd) {
+                    _selectDepth++;
+                }
+                else if (_selectDepth != 0) {
+                    _selectDepth--;
+                }
+            }
+
+            private bool IsReadAsHTML(HTMLTag startTag) {
+                OpenElement current = Current;
+                if (current == null || !current.IsForeign || current.IsHTMLIntegrationPoint) return true;
+                return current.IsTextIntegrationPoint && !startTag.NameEqualsAny("mglyph", "malignmark");
             }
 
             // An HTML element such as a div or p ends the foreign content it appears in, and is
@@ -558,14 +609,14 @@ namespace JDP {
                 }
             }
 
-            // HTML elements are followed only inside foreign content. A browser ignores the slash
-            // of a self-closing HTML start tag.
+            // HTML elements are followed only inside svg and math. A browser ignores the slash of
+            // a self-closing HTML start tag.
             private void OpenInHTML(HTMLTag tag) {
                 if (tag.NameEqualsAny("svg", "math")) {
                     if (!tag.IsSelfClosing) Push(OpenElement.CreateForeign(tag, tag.NameEquals("svg")));
                 }
                 else if (Current != null && !tag.NameEqualsAny(_voidNames)) {
-                    Push(OpenElement.CreateHTML(tag, Current));
+                    Push(OpenElement.CreateHTML(tag.Name));
                 }
             }
 
@@ -582,27 +633,44 @@ namespace JDP {
                 return tag.GetAttribute("color") != null || tag.GetAttribute("face") != null || tag.GetAttribute("size") != null;
             }
 
-            // An end tag closes the nearest open element of its name and those above it. Closing
-            // more HTML elements than the browser does is the safe side, since the end tags of
-            // foreign elements are then honored and the page is read as foreign content again.
+            // An end tag closes the nearest open element of its name, and those above it, only
+            // where a browser surely does. Otherwise the elements are kept open.
             private void Close(HTMLTag tag) {
                 if (tag.NameEqualsAny("br", "p")) CloseToHTML();
                 int index = LastIndexOf(tag.Name);
-                if (index != -1 && IsClosedByEndTag(index)) PopFrom(index);
+                if (index == -1) return;
+                if (_openElements[index].IsForeign) {
+                    CloseForeign(index);
+                }
+                else {
+                    CloseHTML(index);
+                }
             }
 
             // A browser ignores the end tag of a foreign element while an HTML element is open
-            // above it. If each such element may have been closed without its end tag, the end
-            // tag is honored only when that leaves the page in foreign content.
-            private bool IsClosedByEndTag(int index) {
-                OpenElement current = Current;
-                if (!_openElements[index].IsForeign || current.HTMLIndex < index) return true;
-                if (current.CertainIndex > index) return false;
-                return IsForeignContentAt(index - 1);
+            // above it
+            private void CloseForeign(int index) {
+                if (Current.HTMLIndex < index) PopFrom(index);
             }
 
-            private bool IsForeignContentAt(int index) {
-                return index >= 0 && _openElements[index].IsForeign && !_openElements[index].IsIntegrationPoint;
+            // A browser closes an HTML element by its end tag when no element of the special kind
+            // is open above it. Formatting elements closed with it are opened again by the browser
+            // when the next tag comes, so they are kept.
+            private void CloseHTML(int index) {
+                if (_openElements[index].IsKeptOnEndTag || Current.SpecialIndex > index || _openElements.Count - index > MaxClosedHTMLElements) return;
+                List<string> formattingNames = GetFormattingNamesAbove(index);
+                PopFrom(index);
+                foreach (string name in formattingNames) {
+                    Push(OpenElement.CreateHTML(name));
+                }
+            }
+
+            private List<string> GetFormattingNamesAbove(int index) {
+                List<string> names = new List<string>();
+                for (int i = index + 1; i < _openElements.Count; i++) {
+                    if (_openElements[i].IsFormatting) names.Add(_openElements[i].Name);
+                }
+                return names;
             }
 
             private void CloseToHTML() {
@@ -637,33 +705,53 @@ namespace JDP {
         }
 
         private sealed class OpenElement {
-            // HTML elements that only their own end tag or the end tag of an element below them
-            // closes, as long as only such elements are open between them and the integration point
-            private static readonly string[] _certainNames = {
-                "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl",
-                "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu", "nav", "ol",
-                "search", "section", "summary", "ul"
+            // HTML elements of the special kind, which stop a browser's search for the element an
+            // end tag closes
+            private static readonly string[] _specialNames = {
+                "address", "applet", "area", "article", "aside", "base", "basefont", "bgsound", "blockquote", "body",
+                "br", "button", "caption", "center", "col", "colgroup", "dd", "details", "dir", "div", "dl", "dt",
+                "embed", "fieldset", "figcaption", "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3",
+                "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "iframe", "img", "input", "keygen", "li",
+                "link", "listing", "main", "marquee", "menu", "meta", "nav", "noembed", "noframes", "noscript",
+                "object", "ol", "p", "param", "plaintext", "pre", "script", "search", "section", "select", "source",
+                "style", "summary", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "title",
+                "tr", "track", "ul", "wbr", "xmp"
+            };
+
+            // Elements whose end tag a browser may take without closing the elements above them
+            // (form), or that a browser may not have opened at all (body, html and head start tags,
+            // and table parts outside a table, are ignored in the body)
+            private static readonly string[] _keptOnEndTagNames = {
+                "form", "body", "html", "head", "caption", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"
+            };
+
+            private static readonly string[] _formattingNames = {
+                "a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"
             };
 
             // Stands below the bottom of the stack
-            public static readonly OpenElement None = new OpenElement(String.Empty) { HTMLIndex = -1, CertainIndex = -1, HTMLContextIndex = -1 };
+            public static readonly OpenElement None = new OpenElement(String.Empty) { HTMLIndex = -1, SpecialIndex = -1, HTMLContextIndex = -1 };
 
             private OpenElement(string name) {
                 Name = name;
             }
 
             public static OpenElement CreateForeign(HTMLTag tag, bool isSvg) {
-                return new OpenElement(tag.Name) {
+                OpenElement element = new OpenElement(tag.Name) {
                     IsForeign = true,
                     IsSvg = isSvg,
                     IsHTMLIntegrationPoint = isSvg ? tag.NameEqualsAny("foreignobject", "desc", "title") : IsHTMLAnnotation(tag),
                     IsTextIntegrationPoint = !isSvg && tag.NameEqualsAny("mi", "mo", "mn", "ms", "mtext")
                 };
+                element.IsSpecial = element.IsIntegrationPoint || (!isSvg && tag.NameEquals("annotation-xml"));
+                return element;
             }
 
-            public static OpenElement CreateHTML(HTMLTag tag, OpenElement parent) {
-                return new OpenElement(tag.Name) {
-                    IsCertain = tag.NameEqualsAny(_certainNames) && (parent.IsForeign || parent.IsCertain)
+            public static OpenElement CreateHTML(string name) {
+                return new OpenElement(name) {
+                    IsSpecial = Array.IndexOf(_specialNames, name) != -1,
+                    IsFormatting = Array.IndexOf(_formattingNames, name) != -1,
+                    IsKeptOnEndTag = Array.IndexOf(_keptOnEndTagNames, name) != -1
                 };
             }
 
@@ -672,21 +760,23 @@ namespace JDP {
             public bool IsSvg { get; private set; }
             public bool IsHTMLIntegrationPoint { get; private set; }
             public bool IsTextIntegrationPoint { get; private set; }
-            public bool IsCertain { get; private set; }
+            public bool IsSpecial { get; private set; }
+            public bool IsFormatting { get; private set; }
+            public bool IsKeptOnEndTag { get; private set; }
 
             public bool IsIntegrationPoint {
                 get { return IsHTMLIntegrationPoint || IsTextIntegrationPoint; }
             }
 
-            // Stack indexes of the nearest elements at or below this one: an HTML element, a
-            // certain HTML element, and an element inside which start tags are read as HTML
+            // Stack indexes of the nearest elements at or below this one: an HTML element, an
+            // element of the special kind, and an element inside which start tags are read as HTML
             public int HTMLIndex { get; private set; }
-            public int CertainIndex { get; private set; }
+            public int SpecialIndex { get; private set; }
             public int HTMLContextIndex { get; private set; }
 
             public void Link(OpenElement below, int index) {
                 HTMLIndex = IsForeign ? below.HTMLIndex : index;
-                CertainIndex = IsCertain ? index : below.CertainIndex;
+                SpecialIndex = IsSpecial ? index : below.SpecialIndex;
                 HTMLContextIndex = IsForeign && !IsIntegrationPoint ? below.HTMLContextIndex : index;
             }
 
@@ -707,10 +797,17 @@ namespace JDP {
         public List<HTMLAttribute> DuplicateAttributes { get; set; }
         public int Offset { get; set; }
         public int Length { get; set; }
+        // For a start tag whose contents the parser read as raw text, the offset of the end tag
+        // that ends them; otherwise -1
+        public int RawTextEndOffset { get; set; }
+        // True if a browser may read the raw text contents as markup and they hold markup, so the
+        // element is to be removed with its contents
+        public bool ContentsMayBeMarkup { get; set; }
 
         public HTMLTag() {
             Attributes = new List<HTMLAttribute>();
             DuplicateAttributes = new List<HTMLAttribute>();
+            RawTextEndOffset = -1;
         }
 
         public int EndOffset {

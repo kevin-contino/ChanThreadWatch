@@ -872,8 +872,7 @@ namespace JDP {
         private static readonly string[] _activeContentElements = { "script", "iframe", "frame", "object", "embed", "applet" };
 
         // Added to the saved page's head. Blocks anything the removal misses where a browser parses
-        // the markup differently from HTMLParser (for example after an svg that the end tag of an
-        // HTML element outside it closes).
+        // the markup differently from HTMLParser.
         public const string ActiveContentPolicyMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\">";
 
         // Removes scripts, embedded content, event handler attributes and script URLs, so a saved
@@ -881,8 +880,8 @@ namespace JDP {
         private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets, string offlineScriptSite) {
             AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite);
             AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
-            foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
-                replaceList.Add(CreateRemoveReplace(tag.Offset, GetActiveElementLength(htmlParser, tag)));
+            foreach (HTMLTag tag in htmlParser.Tags) {
+                if (IsRemovedElement(tag)) replaceList.Add(CreateRemoveReplace(tag.Offset, GetRemovedElementLength(htmlParser, tag)));
             }
             foreach (HTMLTag tag in htmlParser.Tags) {
                 AddActiveAttributeReplaces(tag.Attributes, replaceList, existingOffsets);
@@ -890,9 +889,18 @@ namespace JDP {
             }
         }
 
-        // Void elements have no contents; matching a stray end tag would remove everything up to it.
-        // An element without an end tag loses only its start tag.
-        private static int GetActiveElementLength(HTMLParser htmlParser, HTMLTag tag) {
+        // Active elements, and elements whose raw text contents a browser may read as markup
+        // (see HTMLTag.ContentsMayBeMarkup)
+        private static bool IsRemovedElement(HTMLTag tag) {
+            return !tag.IsEnd && (tag.ContentsMayBeMarkup || tag.NameEqualsAny(_activeContentElements));
+        }
+
+        // An element whose contents the parser read as raw text loses all of them, up to and with
+        // its end tag, so nothing the parser skipped stays. Void elements have no contents;
+        // matching a stray end tag would remove everything up to it. Any other element without an
+        // end tag loses only its start tag, and its contents are markup the parser read.
+        private static int GetRemovedElementLength(HTMLParser htmlParser, HTMLTag tag) {
+            if (tag.RawTextEndOffset != -1) return htmlParser.GetRawTextElementEndOffset(tag) - tag.Offset;
             if (tag.NameEqualsAny("embed", "frame")) return tag.Length;
             HTMLTagRange tagRange = htmlParser.CreateTagRange(tag);
             return tagRange != null ? tagRange.Length : tag.Length;
@@ -911,11 +919,13 @@ namespace JDP {
         private static readonly Regex _leadingMarkup = new Regex("^(?:[ \\t\\n\\f\\r\\uFEFF]|<!--(?:-?>|[\\s\\S]*?--!?>)|<!(?!--)[^>]*>|<\\?[^>]*>)*");
 
         // Replaces the head start tag, or the html start tag when the head is implied, so no other
-        // replacement can share its offset. A page with neither gets the policy before its first
+        // replacement can share its offset; only where a browser starts its head there (see
+        // OfflinePageScript.FindHeadAnchorIndex). Any other page gets the policy before its first
         // content, which a browser puts in the head it creates.
         private static ReplaceInfo CreateNoScriptPolicyReplace(HTMLParser htmlParser) {
-            HTMLTag tag = htmlParser.FindStartTag("head") ?? htmlParser.FindStartTag("html");
-            if (tag == null) return CreateLeadingPolicyReplace(htmlParser);
+            int anchorIndex = OfflinePageScript.FindHeadAnchorIndex(htmlParser);
+            if (anchorIndex == -1) return CreateLeadingPolicyReplace(htmlParser);
+            HTMLTag tag = htmlParser.Tags[anchorIndex];
             return new ReplaceInfo {
                 Offset = tag.Offset,
                 Length = tag.Length,

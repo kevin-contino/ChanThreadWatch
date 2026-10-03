@@ -65,7 +65,7 @@ namespace JDP {
         // implied, or -1. Only the first tags of the page count: a head start tag after other
         // content (a body start tag, text, or noscript, template, svg or any other element that
         // the browser may read as text or as foreign content) does not start the browser's head.
-        private static int FindHeadAnchorIndex(HTMLParser htmlParser) {
+        public static int FindHeadAnchorIndex(HTMLParser htmlParser) {
             if (IsLeadingStartTag(htmlParser, 0, "head")) return 0;
             if (!IsLeadingStartTag(htmlParser, 0, "html")) return -1;
             return IsLeadingStartTag(htmlParser, 1, "head") ? 1 : 0;

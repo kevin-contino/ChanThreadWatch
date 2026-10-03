@@ -274,13 +274,13 @@ namespace JDP.Tests {
             AssertHasOfflineScript(saved, "4chan");
         }
 
-        // A browser reads the tags in an svg title and runs the script, so the script is removed.
+        // A browser reads the tags in an svg title and runs the script, so the title is removed with it.
         // The policy stays as the second layer.
         [TestMethod]
         public void SvgTitleScriptIsRemoved() {
             string saved = Save("<html><head></head><body><svg><title><script>alert(1)</script></title></svg></body></html>", "4chan");
 
-            StringAssert.Contains(saved, "<svg><title></title></svg>");
+            StringAssert.Contains(saved, "<body><svg></svg></body>");
             Assert.DoesNotContain("alert(1)", saved);
             StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
             AssertHasOfflineScript(saved, "4chan");

@@ -33,7 +33,7 @@ namespace JDP.Tests {
         [DataRow("<title>a<b</TITLE ><p>", "title@0+7[] /title@10+9[] p@19+3[]")]
         [DataRow("<style>p{}</style/><p>", "style@0+7[] /style/@10+9[] p@19+3[]")]
         [DataRow("<script>x</scriptx></script>", "script@0+8[] /script@19+9[]")]
-        [DataRow("<script>no end <p>", "script@0+8[]")]
+        [DataRow("<script>no end <p>", "script@0+8[] p@15+3[]")]
         [DataRow("<script/><p>", "script/@0+9[] p@9+3[]")]
         public void TreatsRawTextElementContentsAsText(string html, string expected) {
             Assert.AreEqual(expected, Describe(html));
