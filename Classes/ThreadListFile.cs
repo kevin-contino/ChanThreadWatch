@@ -36,7 +36,17 @@ namespace JDP {
                 data.Threads.Add(ParseThreadInfo(lines, ref i, fileVersion));
             }
             data.TrailingLineCount = lines.Length - i;
+            data.HasPlaintextAuth = HasPlaintextAuth(lines, linesPerThread, data.Threads.Count);
             return data;
+        }
+
+        // The two logins follow the URL at the start of each thread
+        private static bool HasPlaintextAuth(string[] lines, int linesPerThread, int threadCount) {
+            for (int t = 0; t < threadCount; t++) {
+                int authLine = 2 + t * linesPerThread;
+                if (StoredAuth.IsPlaintext(lines[authLine]) || StoredAuth.IsPlaintext(lines[authLine + 1])) return true;
+            }
+            return false;
         }
 
         // True if the lines form a complete thread list that Parse accepts.
@@ -53,9 +63,22 @@ namespace JDP {
         // threads are written again rather than copied, so logins from a file written by an
         // older version are encrypted in the backup too.
         public static string[] GetBackupLines(string[] lines) {
+            ThreadListData data = TryParseFully(lines);
+            return data != null ? Serialize(data.Threads) : null;
+        }
+
+        // Returns the lines to rewrite a backup with so that its plaintext logins (written by
+        // an older version) are encrypted, or null if it has none or wouldn't load.
+        public static string[] GetReprotectedLines(string[] lines) {
+            ThreadListData data = TryParseFully(lines);
+            return data != null && data.HasPlaintextAuth ? Serialize(data.Threads) : null;
+        }
+
+        // Returns null if the lines don't form a complete thread list
+        private static ThreadListData TryParseFully(string[] lines) {
             try {
                 ThreadListData data = Parse(lines);
-                return data.TrailingLineCount == 0 ? Serialize(data.Threads) : null;
+                return data.TrailingLineCount == 0 ? data : null;
             }
             catch (Exception ex) when (ex is FormatException || ex is OverflowException) {
                 return null;
@@ -178,6 +201,8 @@ namespace JDP {
         public int FileVersion { get; set; }
         public List<ThreadInfo> Threads { get; private set; }
         public int TrailingLineCount { get; set; }
+        // True if a login is stored as plaintext (written by an older version)
+        public bool HasPlaintextAuth { get; set; }
     }
 
     // Guards the thread list file against being overwritten after a failed load. Saving
@@ -185,6 +210,7 @@ namespace JDP {
     // aside, and saving stays disabled for the session when that copy can't be made.
     public class ThreadListStore {
         private volatile bool _canSave;
+        private bool _checkedBackup;
 
         public bool CanSave {
             get { return _canSave; }
@@ -217,7 +243,24 @@ namespace JDP {
         public bool Save(string path, IEnumerable<ThreadInfo> threads) {
             if (!_canSave) return false;
             TextFile.WriteAllLinesAtomic(path, ThreadListFile.Serialize(threads));
+            ProtectBackupOnce(path + ".bak");
             return true;
+        }
+
+        // A backup (see General.BackupThreadList) written by an older version holds plaintext
+        // logins, and the periodic backup may never replace it (it can be turned off, or skip a
+        // smaller list). So after the first save of the session, which writes encrypted
+        // logins, the backup is rewritten with its own threads and encrypted logins.
+        private void ProtectBackupOnce(string backupPath) {
+            if (_checkedBackup) return;
+            _checkedBackup = true;
+            try {
+                string[] lines = File.Exists(backupPath) ? ThreadListFile.GetReprotectedLines(File.ReadAllLines(backupPath)) : null;
+                if (lines != null) TextFile.WriteAllLinesAtomic(backupPath, lines);
+            }
+            catch (Exception ex) {
+                Logger.Log("The thread list backup could not be rewritten with encrypted logins." + Environment.NewLine + ex);
+            }
         }
     }
 }

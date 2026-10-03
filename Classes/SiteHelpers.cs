@@ -102,11 +102,12 @@ namespace JDP {
         }
 
         // The second-level domain name (e.g. "4chan"), or the whole host if it is an IP address
+        // or a single-label name (e.g. "localhost")
         public virtual string GetSiteName() {
             Uri uri = new Uri(_url);
             if (uri.HostNameType == UriHostNameType.IPv4 || uri.HostNameType == UriHostNameType.IPv6) return uri.Host.Replace(':', '-');
             string[] hostSplit = uri.Host.Split('.');
-            return (hostSplit.Length >= 2) ? hostSplit[hostSplit.Length - 2] : String.Empty;
+            return (hostSplit.Length >= 2) ? hostSplit[hostSplit.Length - 2] : uri.Host;
         }
 
         public virtual string GetBoardName() {

@@ -703,9 +703,16 @@ namespace JDP {
         // Guards _isClosed; Dispose pulses it to end a throttle sleep early
         private readonly object _sleepSync = new object();
         private bool _isClosed;
+        private long _sleptMilliseconds;
 
         protected long CurrentMilliseconds {
             get { return Environment.TickCount; }
+        }
+
+        // Total time spent sleeping to keep under the speed limit, which a reader's time limit
+        // leaves out so that a slow but healthy throttled download is not cut off
+        public long SleptMilliseconds {
+            get { return Interlocked.Read(ref _sleptMilliseconds); }
         }
 
         public override long Position {
@@ -886,12 +893,16 @@ namespace JDP {
         // Sleeps like Thread.Sleep, but returns as soon as the stream is closed so a reader
         // blocked in Throttle does not hold up an abort
         private void SleepUnlessClosed(int milliseconds) {
+            long sleepStart = TickCount.Now;
             try {
                 lock (_sleepSync) {
                     if (!_isClosed) Monitor.Wait(_sleepSync, milliseconds);
                 }
             }
             catch (ThreadAbortException) { }
+            finally {
+                Interlocked.Add(ref _sleptMilliseconds, TickCount.Now - sleepStart);
+            }
         }
 
         private void WakeSleepers() {
