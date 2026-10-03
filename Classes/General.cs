@@ -858,13 +858,13 @@ namespace JDP {
         }
 
         // Only the replacements that keep a page from running code, for a page that is otherwise
-        // saved as downloaded
-        public static List<ReplaceInfo> GetActiveContentReplaces(HTMLParser htmlParser) {
+        // saved as downloaded, plus our offline script when offlineScriptSite is not null
+        public static List<ReplaceInfo> GetActiveContentReplaces(HTMLParser htmlParser, string offlineScriptSite) {
             List<ReplaceInfo> replaceList = new List<ReplaceInfo>();
             if (Environment.NewLine != "\n") {
                 AddNewLineReplaces(htmlParser, replaceList);
             }
-            AddActiveContentReplaces(htmlParser, replaceList, new HashSet<int>(), null);
+            AddActiveContentReplaces(htmlParser, replaceList, new HashSet<int>(), offlineScriptSite);
             return replaceList;
         }
 

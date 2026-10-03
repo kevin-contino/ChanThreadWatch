@@ -104,9 +104,10 @@ namespace JDP.Tests.Integration {
             RunToStop(watcher);
 
             string html = File.ReadAllText(SavedPagePath(watcher));
-            StringAssert.Contains(html, "<head>" + General.ActiveContentPolicyMeta + "<title>/wg/ - Fixture</title></head>");
+            StringAssert.Contains(html, "<head>" + OfflinePageScript.PolicyMeta + OfflinePageScript.CreateElement("4chan") + "<title>/wg/ - Fixture</title></head>");
             StringAssert.Contains(html, "<body >");
-            Assert.DoesNotContain("<script", html);
+            // The only script left is our own offline script
+            OfflinePageScriptTests.AssertHasOfflineScript(html, "4chan");
             Assert.DoesNotContain("var board", html);
             Assert.DoesNotContain("onload", html);
             StringAssert.Contains(html, "<img src=\"" + server.BaseURL() + "/wg/1700000000001s.jpg\"");
@@ -150,7 +151,7 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(StopReason.DownloadComplete, reason);
             string html = File.ReadAllText(SavedPagePath(watcher));
             StringAssert.Contains(html, "<img src=\"" + server.BaseURL() + "/wg/1700000000001s.jpg\"");
-            Assert.DoesNotContain("<script", html);
+            OfflinePageScriptTests.AssertHasOfflineScript(html, "4chan");
             Assert.IsEmpty(server.RequestsTo(FourChanThreadFixture.ThumbPaths[0]));
         }
 
