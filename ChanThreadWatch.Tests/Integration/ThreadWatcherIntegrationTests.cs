@@ -69,6 +69,24 @@ namespace JDP.Tests.Integration {
             Assert.IsFalse(File.Exists(SavedPagePath(watcher) + ".bak"));
         }
 
+        // S5
+        [TestMethod]
+        public void SavedPageHasNoActiveContent() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunToStop(watcher);
+
+            string html = File.ReadAllText(SavedPagePath(watcher));
+            StringAssert.Contains(html, "<head>" + General.ActiveContentPolicyMeta + "<title>/wg/ - Fixture</title></head>");
+            StringAssert.Contains(html, "<body >");
+            Assert.DoesNotContain("<script", html);
+            Assert.DoesNotContain("var board", html);
+            Assert.DoesNotContain("onload", html);
+        }
+
         [TestMethod]
         public void MissingThreadStopsWithPageNotFound() {
             LoopbackHttpServer server = StartServer();
