@@ -896,6 +896,8 @@ namespace JDP {
 
             if (!DownloadThreadPage(siteHelper, pageInfo)) return;
 
+            SaveUnprocessedPage(siteHelper.GetHTMLParser(), pageInfo);
+
             siteHelper.ResurrectDeadPosts(previousParser, pageInfo.ReplaceList);
 
             if (AutoFollow) {
@@ -925,6 +927,15 @@ namespace JDP {
             if (siteHelper.IsThreadPage()) return true;
             RejectPage(pageInfo, previousCacheTime, "not a thread page");
             return false;
+        }
+
+        // A page without a replace list (thumbnails off) is not processed after the check, so the
+        // page as downloaded is saved now with only its active content removed
+        private static void SaveUnprocessedPage(HTMLParser htmlParser, PageInfo pageInfo) {
+            if (pageInfo.ReplaceList != null) return;
+            using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
+                General.WriteReplacedString(htmlParser.PreprocessedHTML, General.GetActiveContentReplaces(htmlParser), sw);
+            }
         }
 
         private void EnqueuePageFiles(SiteHelper siteHelper, PageInfo pageInfo, string imageDir, string thumbDir, Queue<ImageInfo> pendingImages, Queue<ThumbnailInfo> pendingThumbs) {

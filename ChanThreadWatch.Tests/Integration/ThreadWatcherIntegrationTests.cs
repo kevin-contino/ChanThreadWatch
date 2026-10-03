@@ -90,6 +90,31 @@ namespace JDP.Tests.Integration {
             Assert.DoesNotContain("onload", html);
         }
 
+        // With thumbnails off the page is otherwise saved as downloaded: its file links stay live and
+        // no thumbnail is downloaded
+        [TestMethod]
+        public void SavedPageHasNoActiveContentWithThumbnailsOff() {
+            Settings.SaveThumbnails = false;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunToStop(watcher);
+
+            string html = File.ReadAllText(SavedPagePath(watcher));
+            StringAssert.Contains(html, "<head>" + General.ActiveContentPolicyMeta + "<title>/wg/ - Fixture</title></head>");
+            StringAssert.Contains(html, "<body >");
+            Assert.DoesNotContain("<script", html);
+            Assert.DoesNotContain("var board", html);
+            Assert.DoesNotContain("onload", html);
+            StringAssert.Contains(html, "<img src=\"" + server.BaseURL() + "/wg/1700000000001s.jpg\"");
+            StringAssert.Contains(html, "href=\"" + server.BaseURL() + "/wg/1700000000001.jpg\"");
+            StringAssert.Contains(html, "</html>\r\n");
+            Assert.IsEmpty(server.RequestsTo(FourChanThreadFixture.ThumbPaths[0]));
+            Assert.IsFalse(Directory.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "thumbs")));
+        }
+
         [TestMethod]
         public void MissingThreadStopsWithPageNotFound() {
             LoopbackHttpServer server = StartServer();

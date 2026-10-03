@@ -801,6 +801,17 @@ namespace JDP {
             AddURLAttributeReplaces(htmlParser, pageURL, replaceList, existingOffsets);
         }
 
+        // Only the replacements that keep a page from running code, for a page that is otherwise
+        // saved as downloaded
+        public static List<ReplaceInfo> GetActiveContentReplaces(HTMLParser htmlParser) {
+            List<ReplaceInfo> replaceList = new List<ReplaceInfo>();
+            if (Environment.NewLine != "\n") {
+                AddNewLineReplaces(htmlParser, replaceList);
+            }
+            AddActiveContentReplaces(htmlParser, replaceList, new HashSet<int>());
+            return replaceList;
+        }
+
         // Elements that are removed from saved pages together with their contents
         private static readonly string[] _activeContentElements = { "script", "iframe", "frame", "object", "embed", "applet" };
 
