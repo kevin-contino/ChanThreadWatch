@@ -1022,7 +1022,7 @@ namespace JDP {
             HTMLParser htmlParser = siteHelper.GetHTMLParser();
             List<ReplaceInfo> replaces = General.GetActiveContentReplaces(htmlParser, siteHelper.GetOfflinePageScriptSite());
             using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
-                General.WriteReplacedString(htmlParser.PreprocessedHTML, replaces, sw);
+                General.WriteSavedPage(htmlParser.PreprocessedHTML, replaces, sw);
             }
             DeleteBackupIfPageComplete(htmlParser, pageInfo.Path);
         }
@@ -1498,7 +1498,7 @@ namespace JDP {
             }
             General.AddOtherReplaces(htmlParser, pageInfo.URL, pageInfo.ReplaceList, siteHelper.GetOfflinePageScriptSite());
             using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
-                General.WriteReplacedString(htmlParser.PreprocessedHTML, pageInfo.ReplaceList, sw);
+                General.WriteSavedPage(htmlParser.PreprocessedHTML, pageInfo.ReplaceList, sw);
             }
             DeleteBackupIfPageComplete(htmlParser, pageInfo.Path);
         }

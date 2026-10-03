@@ -76,16 +76,18 @@ namespace JDP {
             return index < tags.Count && !tags[index].IsEnd && tags[index].NameEquals(name) && IsBlankBefore(htmlParser, index);
         }
 
-        // White space, a BOM, a plain doctype, and plain comments. A browser ends "<!-->" and
+        // HTML white space, a plain doctype, and plain comments. A browser ends "<!-->" and
         // "<!--->" right away and a comment at "--!>"; such comments, a comment inside a comment,
-        // and any other markup do not count as blank.
-        private static readonly Regex _blankMarkup = new Regex("^(?:\\s|\\uFEFF|<!doctype[^<>]*>|<!--(?!>|->)(?:(?!--!>|<!--|-->)[\\s\\S])*-->)*$", RegexOptions.IgnoreCase);
+        // and any other markup do not count as blank. Other white space, such as a no-break space,
+        // is text to a browser.
+        private static readonly Regex _blankMarkup = new Regex("^(?:[ \\t\\n\\f\\r]|<!doctype[^<>]*>|<!--(?!>|->)(?:(?!--!>|<!--|-->)[\\s\\S])*-->)*$", RegexOptions.IgnoreCase);
 
         // True if only white space, well-formed comments and the doctype come between the tag and
-        // the tag before it
+        // the tag before it. A BOM counts only at the start of the page.
         private static bool IsBlankBefore(HTMLParser htmlParser, int index) {
             int start = index > 0 ? htmlParser.Tags[index - 1].EndOffset : 0;
-            return _blankMarkup.IsMatch(htmlParser.PreprocessedHTML.Substring(start, htmlParser.Tags[index].Offset - start));
+            if (start == 0 && htmlParser.PreprocessedHTML.StartsWith("﻿", StringComparison.Ordinal)) start = 1;
+            return _blankMarkup.IsMatch(htmlParser.PreprocessedHTML.Substring(start, Math.Max(0, htmlParser.Tags[index].Offset - start)));
         }
 
         // Tags that keep the browser in the head

@@ -238,7 +238,7 @@ namespace JDP {
                     htmlStart = SkipRawTextContents(html, tag, context, htmlEnd);
                 }
                 else {
-                    htmlStart = SkipNonTagMarkup(html, htmlStart, htmlEnd);
+                    htmlStart = SkipNonTagMarkup(html, htmlStart, context, htmlEnd);
                 }
                 if (htmlStart == -1) yield break;
             }
@@ -341,14 +341,17 @@ namespace JDP {
             bool isUncertain = context.IsUncertain;
             context.Update(tag);
             if (!IsRawTextStartTag(tag)) return tag.EndOffset;
-            int rawTextEnd = FindRawTextEnd(html, tag, htmlEnd);
+            int rawTextEnd = FindRawTextEnd(html, tag, context, htmlEnd);
             if (rawTextEnd == -1) return tag.EndOffset;
             tag.RawTextEndOffset = rawTextEnd;
             tag.ContentsMayBeMarkup = isUncertain && ContainsMarkup(html, tag.EndOffset, rawTextEnd);
             return rawTextEnd;
         }
 
-        private static int FindRawTextEnd(string html, HTMLTag tag, int htmlEnd) {
+        // The context remembers where no end tag of a name follows, so raw text that is never
+        // ended is searched to the end of the page once per name
+        private static int FindRawTextEnd(string html, HTMLTag tag, ParseContext context, int htmlEnd) {
+            if (context.HasNoEndTagAfter(tag.Name, tag.EndOffset)) return -1;
             string endTagText = "/" + tag.Name;
             int htmlStart = tag.EndOffset;
             int pos;
@@ -356,6 +359,7 @@ namespace JDP {
                 htmlStart = pos + 1;
                 if (StartsWithRawTextEndTag(html, htmlStart, htmlEnd, endTagText)) return pos;
             }
+            context.NoteNoEndTagAfter(tag.Name, tag.EndOffset);
             return -1;
         }
 
@@ -391,7 +395,9 @@ namespace JDP {
                  StartsWithAny(html, htmlStart + endTagText.Length, htmlEnd, '/', '>'));
         }
 
-        private static int SkipNonTagMarkup(string html, int htmlStart, int htmlEnd) {
+        private static int SkipNonTagMarkup(string html, int htmlStart, ParseContext context, int htmlEnd) {
+            // In foreign content a browser ends a CDATA section at "]]>", not at the first ">"
+            if (StartsWith(html, htmlStart, htmlEnd, "![CDATA[", false)) context.NoteCDATA();
             if (StartsWithCommentStart(html, htmlStart, htmlEnd)) {
                 // Skip comment
                 return SkipComment(html, htmlStart + 3, htmlEnd);
@@ -532,8 +538,9 @@ namespace JDP {
         // Follows where a browser may read the contents of title, style, textarea and the other
         // raw text elements as markup: inside svg and math (also in the HTML in their integration
         // points, svg foreignObject, desc and title, MathML mi, mo, mn, ms, mtext and annotation-xml
-        // for HTML), and inside a select, where browsers differ. The open svg and math elements and
-        // the HTML elements opened inside them are kept as a browser's tree builder keeps them, as
+        // for HTML), and from a select, or a CDATA section in svg or math, to the end of the page.
+        // The open svg and math elements and the HTML elements opened inside them are kept as a
+        // browser's tree builder keeps them, as
         // far as that decides when the svg or math ends. Where the parser cannot tell if a browser
         // closed an element, it keeps the element open: the parser then stays uncertain for longer,
         // which removes more, never less.
@@ -560,11 +567,29 @@ namespace JDP {
             // tag closes takes the same time however many elements are open
             private readonly Dictionary<string, Stack<int>> _indexesByName = new Dictionary<string, Stack<int>>(StringComparer.Ordinal);
 
-            // Select start tags less select end tags; a select that may have ended is kept
-            private int _selectDepth;
+            // Set from the first select start tag on, since browsers differ in what ends a select
+            // (a template inside it hides its end tag), and from a CDATA section in svg or math on,
+            // which a browser ends later than the parser does
+            private bool _isUncertainToEnd;
+
+            // For each raw text element name, the offset after which no end tag of that name follows
+            private readonly Dictionary<string, int> _noEndTagAfter = new Dictionary<string, int>(StringComparer.Ordinal);
 
             public bool IsUncertain {
-                get { return _openElements.Count != 0 || _selectDepth != 0; }
+                get { return _openElements.Count != 0 || _isUncertainToEnd; }
+            }
+
+            public void NoteCDATA() {
+                if (_openElements.Count != 0) _isUncertainToEnd = true;
+            }
+
+            public bool HasNoEndTagAfter(string name, int offset) {
+                int after;
+                return _noEndTagAfter.TryGetValue(name, out after) && offset >= after;
+            }
+
+            public void NoteNoEndTagAfter(string name, int offset) {
+                _noEndTagAfter[name] = offset;
             }
 
             private OpenElement Current {
@@ -572,22 +597,12 @@ namespace JDP {
             }
 
             public void Update(HTMLTag tag) {
-                UpdateSelectDepth(tag);
+                if (tag.NameEquals("select")) _isUncertainToEnd = true;
                 if (tag.IsEnd) {
                     Close(tag);
                 }
                 else {
                     Open(tag);
-                }
-            }
-
-            private void UpdateSelectDepth(HTMLTag tag) {
-                if (!tag.NameEquals("select")) return;
-                if (!tag.IsEnd) {
-                    _selectDepth++;
-                }
-                else if (_selectDepth != 0) {
-                    _selectDepth--;
                 }
             }
 

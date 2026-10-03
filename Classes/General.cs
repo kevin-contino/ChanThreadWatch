@@ -787,6 +787,15 @@ namespace JDP {
             return result;
         }
 
+        // Writes a page as it is saved: with the replacements applied, then through the last pass
+        // of SavedPageSweep, which does not depend on how HTMLParser read the page
+        public static void WriteSavedPage(string str, List<ReplaceInfo> replaceList, TextWriter outStream) {
+            using (StringWriter replaced = new StringWriter()) {
+                WriteReplacedString(str, replaceList, replaced);
+                outStream.Write(SavedPageSweep.Sweep(replaced.ToString()));
+            }
+        }
+
         public static void WriteReplacedString(string str, List<ReplaceInfo> replaceList, TextWriter outStream) {
             int offset = 0;
             SortByOffset(replaceList);
@@ -914,9 +923,10 @@ namespace JDP {
             replaceList.Add(replace);
         }
 
-        // What a browser reads before it starts the html element: white space, a BOM, comments,
-        // the doctype and other markup it reads as a comment. A comment ends where a browser ends it.
-        private static readonly Regex _leadingMarkup = new Regex("^(?:[ \\t\\n\\f\\r\\uFEFF]|<!--(?:-?>|[\\s\\S]*?--!?>)|<!(?!--)[^>]*>|<\\?[^>]*>)*");
+        // What a browser reads before it starts the html element: a BOM at the start, HTML white
+        // space, comments, the doctype and other markup it reads as a comment. A comment ends
+        // where a browser ends it.
+        private static readonly Regex _leadingMarkup = new Regex("^\\uFEFF?(?:[ \\t\\n\\f\\r]|<!--(?:-?>|[\\s\\S]*?--!?>)|<!(?!--)[^>]*>|<\\?[^>]*>)*");
 
         // Replaces the head start tag, or the html start tag when the head is implied, so no other
         // replacement can share its offset; only where a browser starts its head there (see

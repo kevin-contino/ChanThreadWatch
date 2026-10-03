@@ -125,6 +125,9 @@ namespace JDP.Tests {
         [DataRow("<noscript><head></head></noscript><p>a</p>", "{P}<noscript><head></head></noscript><p>a</p>")]
         [DataRow("<svg><head></head></svg>", "{P}<svg><head></head></svg>")]
         [DataRow("<!---><html><head></head></html>", "<!--->{P}<html><head></head></html>")]
+        [DataRow("\u00A0<html><head></head></html>", "{P}\u00A0<html><head></head></html>")]
+        [DataRow("\v<html><head></head></html>", "{P}\v<html><head></head></html>")]
+        [DataRow("<!-- c -->\uFEFF<html><head></head></html>", "<!-- c -->{P}\uFEFF<html><head></head></html>")]
         public void PageWithoutAHeadGetsThePolicyBeforeItsContent(string html, string expected) {
             Assert.AreEqual(expected.Replace("{P}", General.ActiveContentPolicyMeta), Save(html));
         }
@@ -191,6 +194,12 @@ namespace JDP.Tests {
         [DataRow("<select><noscript><!--</noscript><script>alert(1)</script>--></select>", "<select>--></select>")]
         [DataRow("<select><svg><title><script>alert(1)</script></title></svg></select>", "<select><svg></svg></select>")]
         [DataRow("<select><plaintext><script>alert(1)</script>", "<select><plaintext>")]
+        [DataRow("<select></select><style><img src=x onerror=alert(1)></style>", "<select></select>")]
+        [DataRow("<select><template></select></template><style></select><img src=x onerror=alert(1)></style>", "<select><template></select></template>")]
+        [DataRow("<svg><![CDATA[ > </svg> ]]><textarea><img src=x onerror=alert(1)></textarea>", "<svg><![CDATA[ > </svg> ]]>")]
+        [DataRow("<svg><![CDATA[ > </svg> ]]><title><script>alert(1)</script></title>", "<svg><![CDATA[ > </svg> ]]>")]
+        [DataRow("<math><![CDATA[ > </math> ]]><style><img onerror=alert(1)></style>", "<math><![CDATA[ > </math> ]]>")]
+        [DataRow("<svg><foreignObject><![CDATA[ > </foreignObject></svg> ]]></foreignObject></svg><noscript><img onerror=alert(1)></noscript>", "<svg><foreignObject><![CDATA[ > </foreignObject></svg> ]]></foreignObject></svg>")]
         public void RemovesRawTextElementWithMarkupWhereABrowserMayReadMarkup(string html, string expected) {
             Assert.AreEqual(expected, SaveFragment(html));
         }
@@ -218,7 +227,8 @@ namespace JDP.Tests {
         [DataRow("<svg><g></br><title><script>alert(1)</script></title></svg>")]
         [DataRow("</svg><title><script>alert(1)</script></title>")]
         [DataRow("<svg></svg></svg><textarea><script>alert(1)</script></textarea>")]
-        [DataRow("<select></select><style><img src=x onerror=alert(1)></style>")]
+        [DataRow("a<![CDATA[ x ]]><textarea><img src=x onerror=alert(1)></textarea>")]
+        [DataRow("<svg></svg><![CDATA[ > ]]><textarea><img src=x onerror=alert(1)></textarea>")]
         public void KeepsTitleAndTextareaTextOutsideSvgMathAndSelect(string html) {
             Assert.AreEqual(html, SaveFragment(html));
         }
@@ -299,14 +309,15 @@ namespace JDP.Tests {
         }
 
         // An svg that stays open with many elements and end tags that close none of them is read
-        // in time linear in its length
+        // in time linear in its length, and so is raw text that no end tag ends
         [TestMethod]
         public void ManyUnmatchedEndTagsInSvgAreReadQuickly() {
             const int count = 50000;
             string[] pages = {
                 "<svg>" + String.Concat(System.Linq.Enumerable.Repeat("<g>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</x>", count)) + "<title><script>alert(1)</script>",
                 "<svg><foreignObject>" + String.Concat(System.Linq.Enumerable.Repeat("<div>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</svg>", count)) + "<textarea><script>alert(1)</script></textarea>",
-                "<svg><foreignObject><span>" + String.Concat(System.Linq.Enumerable.Repeat("<b>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</span>", count)) + "<textarea><script>alert(1)</script></textarea>"
+                "<svg><foreignObject><span>" + String.Concat(System.Linq.Enumerable.Repeat("<b>", count)) + String.Concat(System.Linq.Enumerable.Repeat("</span>", count)) + "<textarea><script>alert(1)</script></textarea>",
+                String.Concat(System.Linq.Enumerable.Repeat("<textarea><xmp><title>", count)) + "<script>alert(1)</script>"
             };
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
