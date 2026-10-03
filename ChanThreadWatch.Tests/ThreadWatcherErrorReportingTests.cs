@@ -68,6 +68,13 @@ namespace JDP.Tests {
             Assert.AreEqual("Stopped: Page not found", frmChanThreadWatch.FormatStopStatus(StopReason.PageNotFound, null, 3));
         }
 
+        [TestMethod]
+        public void StopStatusShowsTheReparseError() {
+            Assert.AreEqual("Stopped: User requested, reparse failed: Access denied", frmChanThreadWatch.AppendReparseError("Stopped: User requested", "Access denied"));
+            Assert.AreEqual("Stopped: User requested", frmChanThreadWatch.AppendReparseError("Stopped: User requested", null));
+            Assert.AreEqual("Stopped: User requested", frmChanThreadWatch.AppendReparseError("Stopped: User requested", String.Empty));
+        }
+
         // B25: a thread added by auto-follow only inherits credentials from a same-origin parent
         [TestMethod]
         public void ChildThreadOnAnotherOriginGetsNoCredentials() {

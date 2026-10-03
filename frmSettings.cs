@@ -41,7 +41,7 @@ namespace JDP {
             chkRenameDownloadFolderWithCategory.Checked = Settings.RenameDownloadFolderWithCategory ?? false;
             chkRenameDownloadFolderWithParentThreadDescription.Checked = Settings.RenameDownloadFolderWithParentThreadDescription ?? false;
             pnlParentThreadDescriptionFormat.Enabled = chkRenameDownloadFolderWithParentThreadDescription.Checked;
-            txtParentThreadDescriptionFormat.Text = Settings.ParentThreadDescriptionFormat ?? " ({Parent})";
+            txtParentThreadDescriptionFormat.Text = Settings.ParentThreadDescriptionFormat ?? Settings.DefaultParentThreadDescriptionFormat;
         }
 
         private void LoadSortAndAutoFollowSettings() {

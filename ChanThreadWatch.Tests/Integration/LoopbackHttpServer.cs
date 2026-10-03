@@ -74,6 +74,16 @@ namespace JDP.Tests.Integration {
 
         public WaitHandle StallUntil { get; set; }
 
+        // Sent verbatim, then dripSize more body bytes every dripInterval until release is set,
+        // the client closes the connection or 30 s pass
+        public static LoopbackResponse RawThenDrip(string raw, WaitHandle release, TimeSpan dripInterval, int dripSize = 1) {
+            return new LoopbackResponse { RawBytes = Encoding.ASCII.GetBytes(raw), StallUntil = release, DripInterval = dripInterval, DripSize = dripSize };
+        }
+
+        public TimeSpan? DripInterval { get; set; }
+
+        public int DripSize { get; set; } = 1;
+
         // Sends the status line, the headers (announcing the full body length) and the first
         // sentBodyLength bytes of the body, then resets the connection as a network failure would
         public static LoopbackResponse ResetAfter(byte[] body, int sentBodyLength, string contentType) {
@@ -212,7 +222,7 @@ namespace JDP.Tests.Integration {
             byte[] bytes = response.Serialize(keepAlive);
             stream.Write(bytes, 0, bytes.Length);
             stream.Flush();
-            if (response.StallUntil != null) response.StallUntil.WaitOne(TimeSpan.FromSeconds(30));
+            if (response.StallUntil != null) Stall(stream, response);
             if (response.ResetConnection) {
                 // Give the client time to read what was sent; a reset discards unread data
                 Thread.Sleep(300);
@@ -221,6 +231,20 @@ namespace JDP.Tests.Integration {
                 return false;
             }
             return keepAlive;
+        }
+
+        // Waits for StallUntil, sending DripSize more body bytes every DripInterval if it is set
+        private static void Stall(NetworkStream stream, LoopbackResponse response) {
+            if (response.DripInterval == null) {
+                response.StallUntil.WaitOne(TimeSpan.FromSeconds(30));
+                return;
+            }
+            byte[] piece = Encoding.ASCII.GetBytes(new string('a', response.DripSize));
+            DateTime end = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < end && !response.StallUntil.WaitOne(response.DripInterval.Value)) {
+                stream.Write(piece, 0, piece.Length);
+                stream.Flush();
+            }
         }
 
         // Reads one request (headers, then any Content-Length body); returns null at end of stream

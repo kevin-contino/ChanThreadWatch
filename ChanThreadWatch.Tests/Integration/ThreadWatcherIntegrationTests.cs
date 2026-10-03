@@ -22,7 +22,7 @@ namespace JDP.Tests.Integration {
 
             Assert.AreEqual(StopReason.DownloadComplete, reason);
             string threadDir = watcher.ThreadDownloadDirectory;
-            Assert.AreEqual(Path.Combine(DownloadDir, "0_wg_100"), threadDir);
+            Assert.AreEqual(Path.Combine(DownloadDir, "127.0.0.1_wg_100"), threadDir);
             foreach (KeyValuePair<string, byte[]> image in fixture.Images) {
                 CollectionAssert.AreEqual(image.Value, File.ReadAllBytes(Path.Combine(threadDir, FourChanThreadFixture.FileName(image.Key))), image.Key);
             }

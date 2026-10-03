@@ -106,6 +106,8 @@ namespace JDP {
             set { Set("ParentThreadDescriptionFormat", value); }
         }
 
+        public const string DefaultParentThreadDescriptionFormat = " ({Parent})";
+
         public static bool? ChildThreadsAreNewFormat {
             get { return GetBool("ChildThreadsAreNewFormat"); }
             set { SetBool("ChildThreadsAreNewFormat", value); }

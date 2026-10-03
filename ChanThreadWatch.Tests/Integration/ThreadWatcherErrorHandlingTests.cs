@@ -226,7 +226,7 @@ namespace JDP.Tests.Integration {
             LoopbackResponse error = LoopbackResponse.StatusOnly(500, "Internal Server Error");
             server.RouteSequence(FirstImage, error, error, error, LoopbackResponse.Bytes(fixture.Images[FirstImage], "image/jpeg"));
             ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
-            string imagePath = Path.Combine(DownloadDir, "0_wg_100", "1700000000001.jpg");
+            string imagePath = Path.Combine(DownloadDir, "127.0.0.1_wg_100", "1700000000001.jpg");
             FileStream blocker = null;
             var failedCounts = new List<int>();
             watcher.WaitStatus += (s, e) => failedCounts.Add(watcher.FailedFileCount);
@@ -392,6 +392,43 @@ namespace JDP.Tests.Integration {
             StringAssert.Contains(ReadLog(), "Reparse of " + watcher.PageURL + " failed");
         }
 
+        // A failed reparse raises the stop status again with its error, so the UI shows it
+        // instead of the reparse progress (here the thread has no download folder yet)
+        [TestMethod]
+        public void ReparseThatFailsReportsItsError() {
+            LoopbackHttpServer server = StartServer();
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            var stopped = new ManualResetEvent(false);
+            string reparseError = null;
+            watcher.StopStatus += (s, e) => { reparseError = s.ReparseError; stopped.Set(); };
+
+            watcher.BeginReparse();
+
+            Assert.IsTrue(stopped.WaitOne(10000), "No stop status after the failed reparse");
+            Assert.IsFalse(String.IsNullOrEmpty(reparseError));
+            Assert.DoesNotContain("\n", reparseError);
+        }
+
+        // A reparse that ends early (here there is no saved page) also replaces the reparse
+        // progress with the stop status, and clears the error of an earlier failed reparse
+        [TestMethod]
+        public void ReparseWithoutSavedPageRaisesStopStatusWithoutError() {
+            LoopbackHttpServer server = StartServer();
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            var stopped = new AutoResetEvent(false);
+            var reparseErrors = new List<string>();
+            watcher.StopStatus += (s, e) => { reparseErrors.Add(s.ReparseError); stopped.Set(); };
+            watcher.BeginReparse();
+            Assert.IsTrue(stopped.WaitOne(10000), "No stop status after the failed reparse");
+            watcher.ThreadDownloadDirectory = Path.Combine(DownloadDir, "empty");
+
+            watcher.BeginReparse();
+
+            Assert.IsTrue(stopped.WaitOne(10000), "No stop status after the reparse without a saved page");
+            Assert.IsNotNull(reparseErrors[0]);
+            Assert.IsNull(reparseErrors[1]);
+        }
+
         // B9: when the poster folder can't be created, the watcher stops with a disk error and
         // the image meant for that folder is not downloaded
         [TestMethod]
@@ -400,7 +437,7 @@ namespace JDP.Tests.Integration {
             LoopbackHttpServer server = StartServer();
             fixture.RouteAll(server);
             Settings.SortImagesByPoster = true;
-            string threadDir = Path.Combine(DownloadDir, "0_wg_100");
+            string threadDir = Path.Combine(DownloadDir, "127.0.0.1_wg_100");
             Directory.CreateDirectory(threadDir);
             // A file where the poster folder of "Bob!Trip" would go
             File.WriteAllText(Path.Combine(threadDir, "Bob!Trip"), "not a folder");
@@ -466,6 +503,26 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(Path.Combine(DownloadDir, "Child (Parent)"), child.ThreadDownloadDirectory);
             Assert.IsTrue(Directory.Exists(child.ThreadDownloadDirectory));
             Assert.IsFalse(Directory.Exists(childDir));
+        }
+
+        // A settings file without the parent description format (e.g. after a hand edit) uses
+        // the default format instead of failing
+        [TestMethod]
+        public void ChildThreadFolderUsesTheDefaultParentFormatWhenTheSettingIsMissing() {
+            Settings.RenameDownloadFolderWithDescription = true;
+            Settings.RenameDownloadFolderWithParentThreadDescription = true;
+            Settings.ParentThreadDescriptionFormat = null;
+            ThreadWatcher parent = new ThreadWatcher("http://127.0.0.1:1/wg/thread/100");
+            parent.Description = "Parent";
+            ThreadWatcher child = new ThreadWatcher("http://127.0.0.1:1/wg/thread/200") { ParentThread = parent };
+            string childDir = Path.Combine(DownloadDir, "Child");
+            Directory.CreateDirectory(childDir);
+            child.ThreadDownloadDirectory = childDir;
+
+            child.Description = "Child";
+
+            Assert.AreEqual(" (Parent)", child.ParentThreadFormattedDescription);
+            Assert.AreEqual(Path.Combine(DownloadDir, "Child (Parent)"), child.ThreadDownloadDirectory);
         }
 
         // B29: a cross-link that is not a valid URL is skipped; the valid ones are still followed
@@ -655,7 +712,7 @@ namespace JDP.Tests.Integration {
                 RawBytes = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: " + announced + "\r\nConnection: close\r\n\r\nshort body")
             });
             ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
-            string path = Path.Combine(DownloadDir, "0_wg_100", "1700000000001.jpg");
+            string path = Path.Combine(DownloadDir, "127.0.0.1_wg_100", "1700000000001.jpg");
             long largestPreallocation = 0;
             var sync = new object();
             watcher.DownloadStart += (s, e) => {

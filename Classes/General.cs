@@ -23,11 +23,15 @@ namespace JDP {
         internal static int RequestTimeoutMS { get; set; } = DefaultRequestTimeoutMS;
         internal static int ReadTimeoutMS { get; set; } = DefaultReadTimeoutMS;
         internal static int MaxPageBytes { get; set; } = DefaultMaxPageBytes;
+        internal static int MaxPageReadMS { get; set; } = DefaultMaxPageReadMS;
 
         internal const int DefaultRequestTimeoutMS = 60000;
         internal const int DefaultReadTimeoutMS = 60000;
         // Largest page (HTML, JSON) that is buffered in memory; real thread pages are a few MB at most
         internal const int DefaultMaxPageBytes = 32 * 1024 * 1024;
+        // Longest time spent reading a page that is buffered in memory. Each read is also limited
+        // by ReadTimeoutMS, but a server sending a byte now and then would never reach that.
+        internal const int DefaultMaxPageReadMS = 5 * 60 * 1000;
 
         public const string DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
@@ -219,8 +223,10 @@ namespace JDP {
         }
 
         // Reads the stream to its end and closes it. Throws PageTooLargeException as soon as the
-        // data grows past MaxPageBytes, so an oversized page never gets buffered in full.
+        // data grows past MaxPageBytes, so an oversized page never gets buffered in full, and
+        // times out once reading has taken longer than MaxPageReadMS (unless speed is limited).
         internal static byte[] ReadPageBytes(Stream stream) {
+            long deadlineTicks = TickCount.Now + MaxPageReadMS;
             using (stream)
             using (MemoryStream memoryStream = new MemoryStream()) {
                 byte[] data = new byte[8192];
@@ -229,10 +235,19 @@ namespace JDP {
                     if (memoryStream.Length + dataLen > MaxPageBytes) {
                         throw new PageTooLargeException(MaxPageBytes);
                     }
+                    if (IsPastPageReadDeadline(deadlineTicks)) {
+                        throw new Exception("Timed out while reading response.");
+                    }
                     memoryStream.Write(data, 0, dataLen);
                 }
                 return memoryStream.ToArray();
             }
+        }
+
+        // A speed limit (shared by all downloads) can make a healthy page take longer than
+        // MaxPageReadMS, so the deadline only applies without one
+        private static bool IsPastPageReadDeadline(long deadlineTicks) {
+            return TickCount.Now > deadlineTicks && (Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite) == ThrottledStream.Infinite;
         }
 
         public static DateTime? GetResponseLastModifiedTime(HttpWebResponse response) {

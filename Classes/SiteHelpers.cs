@@ -101,8 +101,11 @@ namespace JDP {
             return url.Substring(pos + 3).Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
+        // The second-level domain name (e.g. "4chan"), or the whole host if it is an IP address
         public virtual string GetSiteName() {
-            string[] hostSplit = (new Uri(_url)).Host.Split('.');
+            Uri uri = new Uri(_url);
+            if (uri.HostNameType == UriHostNameType.IPv4 || uri.HostNameType == UriHostNameType.IPv6) return uri.Host.Replace(':', '-');
+            string[] hostSplit = uri.Host.Split('.');
             return (hostSplit.Length >= 2) ? hostSplit[hostSplit.Length - 2] : String.Empty;
         }
 
@@ -315,6 +318,13 @@ namespace JDP {
             return id != null && resurrectedTagRanges.ContainsKey(id);
         }
 
+        // Returns where the "[Deleted]" marker goes in the HTML of a dead post: after the post's
+        // checkbox, or after the post's start tag if it has no checkbox.
+        protected static int GetDeletedMarkerOffset(HTMLParser parser, HTMLTagRange postTagRange) {
+            HTMLTag markerAfterTag = parser.FindStartTag(postTagRange, "input") ?? postTagRange.StartTag;
+            return markerAfterTag.EndOffset - postTagRange.Offset;
+        }
+
         // Returns an href attribute with the absolute URL of the link, so that a quote link to a
         // thread that is not followed still points at the live page in the saved copy.
         protected string GetLiveLinkHrefAttribute(string href) {
@@ -447,6 +457,8 @@ namespace JDP {
 
         public override string GetThreadID() {
             string[] urlSplit = SplitURL();
+            // A URL without "://" (e.g. a saved page path) has no segments
+            if (urlSplit.Length == 0) return String.Empty;
             return HasSlug() ? urlSplit[urlSplit.Length - 2] : urlSplit[urlSplit.Length - 1];
         }
 
@@ -563,10 +575,9 @@ namespace JDP {
 
         private ReplaceInfo CreateDeadPostReplace(HTMLParser previousParser, HTMLTagRange previousPostContainerTagRange, HTMLTagRange lastExistingPostContainerTagRange) {
             int offset = lastExistingPostContainerTagRange != null ? lastExistingPostContainerTagRange.EndOffset : FindThreadDivStartTag().EndOffset;
-            HTMLTag inputTag = previousParser.FindTag(false, previousPostContainerTagRange, "input");
             string value = previousParser.GetHTML(previousPostContainerTagRange);
             if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong>")) {
-                value = value.Insert(inputTag.EndOffset - previousPostContainerTagRange.Offset, "<strong style=\"color: #FF0000\">[Deleted]</strong>");
+                value = value.Insert(GetDeletedMarkerOffset(previousParser, previousPostContainerTagRange), "<strong style=\"color: #FF0000\">[Deleted]</strong>");
             }
             return new ReplaceInfo {
                 Offset = offset,
@@ -897,10 +908,9 @@ namespace JDP {
 
         private ReplaceInfo CreateDeadPostReplace(HTMLParser previousParser, HTMLTagRange previousPostTagRange, HTMLTagRange lastExistingPostTagRange) {
             int offset = lastExistingPostTagRange != null ? lastExistingPostTagRange.EndOffset : FindThreadDivStartTag().EndOffset;
-            HTMLTag inputTag = previousParser.FindStartTag(previousPostTagRange, "input");
             string value = previousParser.GetHTML(previousPostTagRange);
             if (!value.Contains("<strong style=\"color: #FF0000\">[Deleted]</strong> ")) {
-                value = value.Insert(inputTag.EndOffset - previousPostTagRange.Offset, "<strong style=\"color: #FF0000\">[Deleted]</strong> ");
+                value = value.Insert(GetDeletedMarkerOffset(previousParser, previousPostTagRange), "<strong style=\"color: #FF0000\">[Deleted]</strong> ");
             }
             return new ReplaceInfo {
                 Offset = offset,
@@ -943,9 +953,11 @@ namespace JDP {
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
 
-            foreach (HTMLTagRange postTagRange in Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("td", "div"),
-                t => new Regex("^p\\d+$").IsMatch(t.GetAttributeValueOrEmpty("id"))), t => _htmlParser.CreateTagRange(t)), r => r != null))
+            // A post can be a td with a div of the same id inside it; only the td is used
+            foreach (KeyValuePair<string, HTMLTagRange> post in GetTagRangesWithUniqueID(Enumerable.Where(Enumerable.Select(Enumerable.Where(_htmlParser.FindStartTags("td", "div"),
+                t => new Regex("^p\\d+$").IsMatch(t.GetAttributeValueOrEmpty("id"))), t => _htmlParser.CreateTagRange(t)), r => r != null)))
             {
+                HTMLTagRange postTagRange = post.Value;
                 HTMLTagRange labelTagRange = _htmlParser.CreateTagRange(_htmlParser.FindStartTag(postTagRange, "label"));
                 if (labelTagRange == null) continue;
 

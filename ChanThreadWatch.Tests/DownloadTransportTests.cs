@@ -30,6 +30,7 @@ namespace JDP.Tests {
             General.RequestTimeoutMS = General.DefaultRequestTimeoutMS;
             General.ReadTimeoutMS = General.DefaultReadTimeoutMS;
             General.MaxPageBytes = General.DefaultMaxPageBytes;
+            General.MaxPageReadMS = General.DefaultMaxPageReadMS;
             Settings.MaximumBytesPerSecond = null;
         }
 
@@ -257,6 +258,53 @@ namespace JDP.Tests {
 
                     probe.AssertEndsOnce(ShortTimeoutBound);
                     Assert.AreEqual(1, probe.Exceptions);
+                }
+                finally {
+                    release.Set();
+                }
+            }
+        }
+
+        // Each read gets a byte well within the read timeout, so only the deadline for the whole
+        // page ends this download
+        [TestMethod]
+        public void DripFedHtmlBodyTimesOut() {
+            General.MaxPageReadMS = ShortTimeoutMS;
+            using (var release = new ManualResetEvent(false))
+            using (var server = new LoopbackHttpServer()) {
+                try {
+                    server.Route("/start", LoopbackResponse.RawThenDrip(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n<html><head>", release, TimeSpan.FromMilliseconds(100)));
+
+                    DownloadProbe probe = DownloadProbe.Start(server.URL("/start"));
+
+                    probe.AssertEndsOnce(ShortTimeoutBound);
+                    Assert.AreEqual("Timed out while reading response.", probe.Error.Message);
+                }
+                finally {
+                    release.Set();
+                }
+            }
+        }
+
+        // The speed limit makes this page take about 4 s, longer than the deadline, which then
+        // does not apply. The page arrives in pieces so that the throttle sleeps between reads.
+        [TestMethod]
+        public void SpeedLimitedHtmlPageIsNotCutOffByTheDeadline() {
+            const int pageBytes = 200 * 1024;
+            General.MaxPageReadMS = ShortTimeoutMS;
+            Settings.MaximumBytesPerSecond = 50 * 1024;
+            using (var release = new ManualResetEvent(false))
+            using (var server = new LoopbackHttpServer()) {
+                try {
+                    server.Route("/page", LoopbackResponse.RawThenDrip(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: " + pageBytes + "\r\nConnection: close\r\n\r\n",
+                        release, TimeSpan.FromMilliseconds(20), 8 * 1024));
+
+                    DownloadProbe probe = DownloadProbe.Start(server.URL("/page"));
+
+                    probe.AssertEndsOnce(Promptly);
+                    Assert.AreEqual(new string('a', pageBytes), probe.BodyText);
                 }
                 finally {
                     release.Set();
