@@ -28,6 +28,8 @@ namespace JDP.Tests.Integration {
             Settings.DownloadFolder = DownloadDir;
             Settings.DownloadFolderIsRelative = false;
             SiteHelpers.RegisterHostForTesting(PageHost, typeof(FourChanSiteHelper));
+            // Requests are not spaced out unless a test is about that, so the tests stay fast
+            ConnectionManager.MinRequestStartIntervalMS = 0;
         }
 
         [TestCleanup]
@@ -35,9 +37,17 @@ namespace JDP.Tests.Integration {
             ThreadWatcher.MaxFileBytes = ThreadWatcher.DefaultMaxFileBytes;
             ThreadWatcher.MaxDescendantThreads = ThreadWatcher.DefaultMaxDescendantThreads;
             ThreadWatcher.PageParserFactory = _defaultPageParserFactory;
+            ThreadWatcher.BeforeRequestStart = url => { };
             SiteHelpers.UnregisterHostForTesting(PageHost);
             foreach (LoopbackHttpServer server in _servers) server.Dispose();
             _servers.Clear();
+            // Rate limit pauses and request starts are per host and process-global, so one test's
+            // pause or request interval must not hold back the next test's downloads
+            ConnectionManager.MinRateLimitPauseMS = ConnectionManager.DefaultMinRateLimitPauseMS;
+            ConnectionManager.MaxRateLimitPauseMS = ConnectionManager.DefaultMaxRateLimitPauseMS;
+            ConnectionManager.UnspecifiedRateLimitPauseMS = ConnectionManager.DefaultUnspecifiedRateLimitPauseMS;
+            ConnectionManager.ResetForTesting();
+            ConnectionManager.MinRequestStartIntervalMS = ConnectionManager.DefaultMinRequestStartIntervalMS;
             Settings.Load();
             DeleteDirectory(DownloadDir);
         }

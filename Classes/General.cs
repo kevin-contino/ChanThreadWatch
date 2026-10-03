@@ -65,26 +65,59 @@ namespace JDP {
             return new ThrottledStream(stream, Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite);
         }
 
-        // Maps 404 and 304 protocol errors to their own exception types. Never throws.
+        // Maps 404, 304 and rate limit (429, or 503 with Retry-After) protocol errors to their own
+        // exception types. Closes the error response so its connection is released. Never throws.
         internal static Exception TranslateWebException(Exception ex) {
-            HttpStatusCode? code = TakeProtocolErrorStatus(ex as WebException);
-            if (code == HttpStatusCode.NotFound) return new HTTP404Exception();
-            if (code == HttpStatusCode.NotModified) return new HTTP304Exception();
-            return ex;
-        }
-
-        // Returns the status code of a protocol error, or null for any other failure or when the
-        // error has no HTTP response. Closes the error response so its connection is released.
-        private static HttpStatusCode? TakeProtocolErrorStatus(WebException webEx) {
-            if (webEx == null || webEx.Status != WebExceptionStatus.ProtocolError) return null;
-            HttpWebResponse response = webEx.Response as HttpWebResponse;
-            if (response == null) return null;
+            HttpWebResponse response = GetProtocolErrorResponse(ex as WebException);
+            if (response == null) return ex;
             try {
-                return response.StatusCode;
+                return TranslateProtocolError(response, ex);
+            }
+            catch {
+                return ex;
             }
             finally {
                 CloseQuietly(response);
             }
+        }
+
+        // Returns null for any failure other than a protocol error, or when the error has no HTTP response
+        private static HttpWebResponse GetProtocolErrorResponse(WebException webEx) {
+            if (webEx == null || webEx.Status != WebExceptionStatus.ProtocolError) return null;
+            return webEx.Response as HttpWebResponse;
+        }
+
+        private static Exception TranslateProtocolError(HttpWebResponse response, Exception ex) {
+            if (response.StatusCode == HttpStatusCode.NotFound) return new HTTP404Exception();
+            if (response.StatusCode == HttpStatusCode.NotModified) return new HTTP304Exception();
+            string retryAfter = response.Headers["Retry-After"];
+            if (IsRateLimitStatus(response.StatusCode, retryAfter != null)) return new HTTPRateLimitedException(response.ResponseUri.Host, ParseRetryAfter(retryAfter, DateTime.UtcNow), ex);
+            return ex;
+        }
+
+        private static bool IsRateLimitStatus(HttpStatusCode code, bool hasRetryAfter) {
+            return (int)code == 429 || (code == HttpStatusCode.ServiceUnavailable && hasRetryAfter);
+        }
+
+        // Parses a Retry-After value, either a number of seconds or an HTTP date. Returns null if
+        // the value is missing or invalid; a date in the past gives a zero wait.
+        internal static TimeSpan? ParseRetryAfter(string value, DateTime utcNow) {
+            if (value == null) return null;
+            value = value.Trim();
+            decimal seconds;
+            if (Decimal.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out seconds)) {
+                return TimeSpan.FromSeconds((double)Math.Min(seconds, Int32.MaxValue));
+            }
+            DateTime date;
+            if (!TryParseHTTPDate(value, out date)) return null;
+            return date > utcNow ? date - utcNow : TimeSpan.Zero;
+        }
+
+        // The three date formats HTTP allows (RFC 9110 section 5.6.7), as UTC
+        private static bool TryParseHTTPDate(string value, out DateTime date) {
+            return DateTime.TryParseExact(value,
+                new[] { "r", "dddd, dd-MMM-yy HH:mm:ss G\\MT", "ddd MMM d HH:mm:ss yyyy" },
+                CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out date);
         }
 
         // For failure paths: Logger's type initializer can itself throw, and these callers must not
@@ -188,7 +221,24 @@ namespace JDP {
             return redirectUrl;
         }
 
+        // Sends nothing (throws RateLimitException) while the host is paused by a rate limit, and
+        // pauses the host if it answers with one (throws HTTPRateLimitedException). Not paced by
+        // MinRequestStartIntervalMS: callers (e.g. a new watcher's constructor) run on the UI thread.
         public static string DownloadPageToString(string url) {
+            ConnectionManager connectionManager = ConnectionManager.GetInstance(url);
+            connectionManager.ThrowIfPaused();
+            try {
+                return DownloadPageToStringUnchecked(url);
+            }
+            catch (WebException ex) {
+                HTTPRateLimitedException rateLimited = TranslateWebException(ex) as HTTPRateLimitedException;
+                if (rateLimited == null) throw;
+                connectionManager.PauseAndLog(rateLimited.RetryAfter);
+                throw rateLimited;
+            }
+        }
+
+        private static string DownloadPageToStringUnchecked(string url) {
             HttpWebRequest request = BuildWebRequest(url: url);
             HttpWebResponse response = null;
             try {
@@ -1235,6 +1285,8 @@ namespace JDP {
             // The redirect request is published in _request before GetResponse blocks, so
             // AbortInternal can abort it. Request.Timeout bounds the wait otherwise.
             private Stream FollowMetaRefresh(string redirectUrl) {
+                // Sends nothing to a host that is paused by a rate limit
+                ConnectionManager.GetInstance(redirectUrl).ThrowIfPaused();
                 HttpWebRequest redirectionRequest = BuildWebRequest(url: redirectUrl, auth: GetAuthForURL(_auth, _url, redirectUrl), connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime);
                 ReplaceRequest(redirectionRequest);
                 HttpWebResponse redirectionResponse = (HttpWebResponse)redirectionRequest.GetResponse();

@@ -82,6 +82,32 @@ namespace JDP {
 
     public class HTTP304Exception : Exception { }
 
+    // A request was not sent because requests to Host are paused by a rate limit
+    public class RateLimitException : Exception {
+        public RateLimitException(string host)
+            : this(host, "Requests to " + host + " are paused by a rate limit.", null) { }
+
+        protected RateLimitException(string host, string message, Exception innerException)
+            : base(message, innerException)
+        {
+            Host = host;
+        }
+
+        public string Host { get; private set; }
+    }
+
+    // HTTP 429, or 503 with Retry-After: Host asks the client to wait before sending more
+    // requests. RetryAfter is the wait the server gave, or null if it gave none (or an invalid one).
+    public class HTTPRateLimitedException : RateLimitException {
+        public HTTPRateLimitedException(string host, TimeSpan? retryAfter, Exception innerException)
+            : base(host, "Rate limited by " + host + ".", innerException)
+        {
+            RetryAfter = retryAfter;
+        }
+
+        public TimeSpan? RetryAfter { get; private set; }
+    }
+
     public class PageTooLargeException : Exception {
         public PageTooLargeException(int maxBytes)
             : base("The page is larger than the maximum of " + maxBytes + " bytes.") { }
@@ -106,28 +132,160 @@ namespace JDP {
         }
     }
 
+    // One per host, shared by every watcher: limits the connections to the host, spaces out the
+    // requests sent to it, and pauses all requests to it while it rate limits this client (a
+    // limit applies to the client as a whole)
     public class ConnectionManager {
-        private const int _maxConnectionsPerHost = 4;
+        // Downloads from one host that may be in progress at the same time, across all watchers
+        internal const int DefaultMaxConnectionsPerHost = 1;
+        // Shortest time between the starts of two requests to one host, retries included
+        internal const int DefaultMinRequestStartIntervalMS = 1000;
+
+        // Settable so tests can use other limits. Production code never changes them. A change of
+        // MaxConnectionsPerHost only applies to hosts that no download has used yet.
+        internal static int MaxConnectionsPerHost { get; set; } = DefaultMaxConnectionsPerHost;
+        internal static int MinRequestStartIntervalMS { get; set; } = DefaultMinRequestStartIntervalMS;
+
+        // How often a download waiting for a connection checks whether it should give up
+        private const int SlotWaitPollMS = 200;
+
+        // Starts the requests that have to wait for MinRequestStartIntervalMS, so no thread is
+        // blocked while they wait
+        private static readonly WorkScheduler _requestStartScheduler = new WorkScheduler();
+        private const string _requestStartThreadGroup = "ConnectionManager request starts";
+
+        // A rate limit pause lasts at least MinRateLimitPauseMS and at most MaxRateLimitPauseMS,
+        // whatever the server asks. When the server gives no usable wait time, the first pause
+        // lasts UnspecifiedRateLimitPauseMS and each later one twice as long as the one before,
+        // until a download from the host succeeds.
+        internal const int DefaultMinRateLimitPauseMS = 5 * 1000;
+        internal const int DefaultMaxRateLimitPauseMS = 2 * 60 * 60 * 1000;
+        internal const int DefaultUnspecifiedRateLimitPauseMS = 60 * 1000;
+        private const int _maxRateLimitBackoffDoublings = 16;
+
+        // Settable so tests can use short pauses. Production code never changes them.
+        internal static int MinRateLimitPauseMS { get; set; } = DefaultMinRateLimitPauseMS;
+        internal static int MaxRateLimitPauseMS { get; set; } = DefaultMaxRateLimitPauseMS;
+        internal static int UnspecifiedRateLimitPauseMS { get; set; } = DefaultUnspecifiedRateLimitPauseMS;
 
         private static Dictionary<string, ConnectionManager> _connectionManagers = new Dictionary<string, ConnectionManager>(StringComparer.OrdinalIgnoreCase);
 
-        private FIFOSemaphore _semaphore = new FIFOSemaphore(_maxConnectionsPerHost, _maxConnectionsPerHost);
+        private FIFOSemaphore _semaphore = new FIFOSemaphore(MaxConnectionsPerHost, MaxConnectionsPerHost);
         private Stack<string> _groupNames = new Stack<string>();
+        private readonly string _host;
+        private readonly object _pauseSync = new object();
+        private long _pausedUntilTicks;
+        private int _rateLimitBackoffLevel;
+        private readonly object _requestStartSync = new object();
+        private long _lastRequestStartTicks = Int64.MinValue / 2;
+
+        private ConnectionManager(string host) {
+            _host = host;
+        }
 
         public static ConnectionManager GetInstance(string url) {
-            string host = (new Uri(url)).Host;
+            return GetInstanceForHost((new Uri(url)).Host);
+        }
+
+        public static ConnectionManager GetInstanceForHost(string host) {
             ConnectionManager manager;
             lock (_connectionManagers) {
                 if (!_connectionManagers.TryGetValue(host, out manager)) {
-                    manager = new ConnectionManager();
+                    manager = new ConnectionManager(host);
                     _connectionManagers[host] = manager;
                 }
             }
             return manager;
         }
 
-        public string ObtainConnectionGroupName() {
-            _semaphore.WaitOne();
+        public string Host {
+            get { return _host; }
+        }
+
+        // Whether requests to the host are paused because it rate limited this client
+        public bool IsPaused {
+            get { lock (_pauseSync) { return TickCount.Now < _pausedUntilTicks; } }
+        }
+
+        // The TickCount time at which the last pause ends (or ended)
+        public long PausedUntilTicks {
+            get { lock (_pauseSync) { return _pausedUntilTicks; } }
+        }
+
+        // Pauses all requests to the host after it answered with a rate limit, and returns how
+        // many milliseconds the pause lasts from now. A pause is only ever extended, never cut
+        // short, by a later answer.
+        public int Pause(TimeSpan? retryAfter) {
+            lock (_pauseSync) {
+                long now = TickCount.Now;
+                int pauseMS = ChoosePauseMS(retryAfter, now < _pausedUntilTicks);
+                _pausedUntilTicks = Math.Max(_pausedUntilTicks, now + pauseMS);
+                return (int)(_pausedUntilTicks - now);
+            }
+        }
+
+        // Must be called while holding _pauseSync. An answer to a request that was sent before
+        // the pause began does not raise the backoff again.
+        private int ChoosePauseMS(TimeSpan? retryAfter, bool alreadyPaused) {
+            if (retryAfter != null) return ClampPauseMS(retryAfter.Value.TotalMilliseconds);
+            if (!alreadyPaused && _rateLimitBackoffLevel < _maxRateLimitBackoffDoublings) _rateLimitBackoffLevel++;
+            return ClampPauseMS(UnspecifiedRateLimitPauseMS * Math.Pow(2, Math.Max(_rateLimitBackoffLevel - 1, 0)));
+        }
+
+        private static int ClampPauseMS(double pauseMS) {
+            return (int)Math.Max(MinRateLimitPauseMS, Math.Min(MaxRateLimitPauseMS, pauseMS));
+        }
+
+        // Pauses, then logs one line with the host and the length of the pause (never a URL)
+        public void PauseAndLog(TimeSpan? retryAfter) {
+            int pauseMS = Pause(retryAfter);
+            General.LogQuietly(String.Format("Rate limited by {0}, pausing requests to it for {1} seconds{2}.",
+                _host, (pauseMS + 999) / 1000, retryAfter == null ? " (no Retry-After given)" : String.Empty));
+        }
+
+        // Throws RateLimitException, without sending anything, while requests to the host are paused
+        public void ThrowIfPaused() {
+            if (IsPaused) throw new RateLimitException(_host);
+        }
+
+        // The host answered a file request normally, so the next pause without a wait time starts over
+        public void ResetRateLimitBackoff() {
+            lock (_pauseSync) {
+                _rateLimitBackoffLevel = 0;
+            }
+        }
+
+        // Forgets every host, with its pause, backoff, reserved request starts and connection
+        // slots, so that one test's rate limit, request interval or leaked slot does not affect the next
+        internal static void ResetForTesting() {
+            lock (_connectionManagers) {
+                _connectionManagers.Clear();
+            }
+        }
+
+        // Runs start (which sends a request to the host) right away, or later on a scheduler
+        // thread if the previous request to the host started less than MinRequestStartIntervalMS
+        // ago. Each call reserves its own start time, so requests that wait start in call order.
+        public void StartRequest(Action start) {
+            long startTicks = ReserveRequestStart();
+            if (startTicks <= TickCount.Now) {
+                start();
+                return;
+            }
+            _requestStartScheduler.AddItem(startTicks, start, _requestStartThreadGroup);
+        }
+
+        private long ReserveRequestStart() {
+            lock (_requestStartSync) {
+                _lastRequestStartTicks = Math.Max(TickCount.Now, _lastRequestStartTicks + MinRequestStartIntervalMS);
+                return _lastRequestStartTicks;
+            }
+        }
+
+        // Waits for a free connection to the host. Returns null, without taking one, if
+        // isCanceled returns true while waiting; it is called every SlotWaitPollMS.
+        public string ObtainConnectionGroupName(Func<bool> isCanceled) {
+            if (!_semaphore.WaitOne(SlotWaitPollMS, isCanceled)) return null;
             return GetConnectionGroupName();
         }
 
@@ -177,18 +335,48 @@ namespace JDP {
             WaitOne(Timeout.Infinite);
         }
 
-        public bool WaitOne(int timeout) {
-            QueueSync queueSync;
+        // Waits until signaled, checking isCanceled every pollMS (outside of any lock). Returns
+        // false, keeping no count and giving up its place in the queue, once isCanceled returns true.
+        public bool WaitOne(int pollMS, Func<bool> isCanceled) {
+            QueueSync queueSync = TakeOrEnqueue();
+            if (queueSync == null) return true;
+            while (!WaitSignaled(queueSync, pollMS)) {
+                if (isCanceled()) return !Abandon(queueSync);
+            }
+            return true;
+        }
+
+        private static bool WaitSignaled(QueueSync queueSync, int timeout) {
+            lock (queueSync) {
+                return queueSync.IsSignaled || Monitor.Wait(queueSync, timeout) || queueSync.IsSignaled;
+            }
+        }
+
+        // Returns false if the wait was signaled before it could be abandoned
+        private static bool Abandon(QueueSync queueSync) {
+            lock (queueSync) {
+                if (queueSync.IsSignaled) return false;
+                queueSync.IsAbandoned = true;
+                return true;
+            }
+        }
+
+        // Takes a count and returns null, or queues a new waiter and returns it
+        private QueueSync TakeOrEnqueue() {
             lock (_mainSync) {
                 if (_currentCount > 0) {
                     _currentCount--;
-                    return true;
+                    return null;
                 }
-                else {
-                    queueSync = new QueueSync();
-                    _queueSyncs.Enqueue(queueSync);
-                }
+                QueueSync queueSync = new QueueSync();
+                _queueSyncs.Enqueue(queueSync);
+                return queueSync;
             }
+        }
+
+        public bool WaitOne(int timeout) {
+            QueueSync queueSync = TakeOrEnqueue();
+            if (queueSync == null) return true;
             lock (queueSync) {
                 if (queueSync.IsSignaled || Monitor.Wait(queueSync, timeout)) {
                     return true;
@@ -517,7 +705,7 @@ namespace JDP {
                     Action workItem = DequeueWorkItem();
                     if (workItem != null) {
                         Thread.MemoryBarrier();
-                        workItem();
+                        RunWorkItem(workItem);
                         Thread.MemoryBarrier();
                     }
                 }
@@ -528,6 +716,16 @@ namespace JDP {
 
             // Returns the next work item, or null (and resets the new work item
             // signal) if the queue is empty.
+            // An exception escaping a work item would end the process, so it is logged instead
+            private static void RunWorkItem(Action workItem) {
+                try {
+                    workItem();
+                }
+                catch (Exception ex) {
+                    General.LogQuietly("Unhandled exception in a background work item:" + Environment.NewLine + ex);
+                }
+            }
+
             private Action DequeueWorkItem() {
                 Action workItem = null;
                 lock (_sync) {
@@ -1106,7 +1304,9 @@ namespace JDP {
     public enum DownloadResult {
         Completed = 1,
         Skipped = 2,
-        RetryLater = 3
+        RetryLater = 3,
+        // Not sent, or answered with a rate limit: retried once the host's pause is over
+        RateLimited = 4
     }
 
     public enum StopReason {
