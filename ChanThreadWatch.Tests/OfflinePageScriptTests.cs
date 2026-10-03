@@ -26,6 +26,17 @@ namespace JDP.Tests {
             }
         }
 
+        // Saved as ThreadWatcher saves it, through the last sweep (SavedPageSweep)
+        private static string SaveThroughSweep(string html, string site) {
+            var replaces = new List<ReplaceInfo>();
+            var htmlParser = new HTMLParser(html);
+            General.AddOtherReplaces(htmlParser, Page, replaces, site);
+            using (var writer = new StringWriter()) {
+                General.WriteSavedPage(htmlParser.PreprocessedHTML, replaces, writer);
+                return writer.ToString();
+            }
+        }
+
         // The overload that existing callers use
         private static string SaveWithoutSite(string html) {
             var replaces = new List<ReplaceInfo>();
@@ -179,11 +190,14 @@ namespace JDP.Tests {
             const string sitePolicy = "<meta http-equiv=\"Content-Security-Policy\" content=\"img-src 'self'\">";
             const string otherHash = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'sha256-abc='; object-src 'none'; frame-src 'none'; connect-src 'none'\">";
 
-            string saved = Save("<html><head>" + sitePolicy + otherHash + "</head><body></body></html>", "4chan");
+            const string html = "<html><head>" + sitePolicy + otherHash + "</head><body></body></html>";
 
-            StringAssert.Contains(saved, sitePolicy);
-            StringAssert.Contains(saved, otherHash);
-            Assert.AreEqual(3, CountPolicies(saved));
+            foreach (string saved in new[] { Save(html, "4chan"), SaveThroughSweep(html, "4chan") }) {
+                StringAssert.Contains(saved, sitePolicy);
+                StringAssert.Contains(saved, otherHash);
+                Assert.AreEqual(3, CountPolicies(saved));
+                AssertHasOfflineScript(saved, "4chan");
+            }
         }
 
         // A page opened from disk has no HTTP charset, and the browser only looks for a charset

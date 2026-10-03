@@ -38,7 +38,6 @@ namespace JDP.Tests {
         [DataRow("<svg><a xlink:href=\"javascript:alert(1)\"><text>x</text></a></svg>", "<svg><a data-ctw-removed-xlink:href=\"javascript:alert(1)\"><text>x</text></a></svg>")]
         [DataRow("<meta http-equiv=\"refresh\" content=\"0;url=javascript:alert(1)\">", "<meta data-ctw-removed-http-equiv=\"refresh\" content=\"0;url=javascript:alert(1)\">")]
         [DataRow("<META HTTP-EQUIV=\"Set-Cookie\" CONTENT=\"a=b\">", "<META data-ctw-removed-HTTP-EQUIV=\"Set-Cookie\" CONTENT=\"a=b\">")]
-        [DataRow("<meta http-equiv=\"Content-Security-Policy\" content=\"img-src 'self'\">", "<meta data-ctw-removed-http-equiv=\"Content-Security-Policy\" content=\"img-src 'self'\">")]
         [DataRow("<svg><animate attributeName=\"href\" to=\"javascript:alert(1)\"/></svg>", "<svg>&lt;animate attributeName=\"href\" data-ctw-removed-to=\"javascript:alert(1)\"/></svg>")]
         [DataRow("<svg><set attributeName=xlink:href values=\"x;javascript:alert(1)\"><a>x</a></svg>", "<svg>&lt;set attributeName=xlink:href values=\"x;javascript:alert(1)\"><a>x</a></svg>")]
         [DataRow("<img/onerror=alert(1) src=x>", "<img/data-ctw-removed-onerror=alert(1) src=x>")]
@@ -68,6 +67,14 @@ namespace JDP.Tests {
         [DataRow("<!-- <a title=\"x --><p>a</p><p title=\"y\">b</p>", "<!-- <a title=\"x -->&lt;p>a&lt;/p>&lt;p title=\"y\">b</p>")]
         public void ChangesTagLikeTextAnywhere(string html, string expected) {
             Assert.AreEqual(expected, SavedPageSweep.Sweep(html));
+        }
+
+        // A policy can only restrict the page, so one the site wrote is kept
+        [TestMethod]
+        [DataRow("<meta http-equiv=\"Content-Security-Policy\" content=\"img-src 'self'\">")]
+        [DataRow("<META HTTP-EQUIV=\"content-security-policy\" CONTENT=\"default-src 'self'\">")]
+        public void KeepsSitePolicies(string html) {
+            Assert.AreSame(html, SavedPageSweep.Sweep(html));
         }
 
         [TestMethod]

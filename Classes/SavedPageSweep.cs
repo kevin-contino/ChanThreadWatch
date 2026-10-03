@@ -14,8 +14,9 @@ namespace JDP {
     // - A tag that can run code or load a page (script, iframe, frame, frameset, object, embed,
     //   applet, base, an svg animation of href) is made text by writing its "<" as "&lt;".
     // - An event handler attribute, an attribute whose value is a script URL, and the http-equiv
-    //   of a meta refresh, set-cookie or policy other than ours are renamed with
-    //   RemovedAttributePrefix, which keeps the value and drops the effect.
+    //   of a meta refresh or set-cookie are renamed with RemovedAttributePrefix, which keeps the
+    //   value and drops the effect. A policy meta is kept: it can only restrict the page, and a
+    //   policy the site wrote stays as the site wrote it.
     // The pass only replaces "<" and adds letters and hyphens, so it makes no new markup, and a
     // second pass changes nothing. Our script element and policies are kept as they are.
     public static class SavedPageSweep {
@@ -29,7 +30,7 @@ namespace JDP {
 
         private static readonly string[] _animationNames = { "animate", "set", "animatemotion", "animatetransform" };
 
-        private static readonly string[] _removedHttpEquivs = { "refresh", "set-cookie", "content-security-policy" };
+        private static readonly string[] _removedHttpEquivs = { "refresh", "set-cookie" };
 
         public static string Sweep(string html) {
             return new Sweeper(html).Run();
@@ -225,7 +226,6 @@ namespace JDP {
             return false;
         }
 
-        // Our policies were passed before the tag was read, so a policy here is another
         private static bool IsRemovedHttpEquiv(TagSpan span, TagAttribute attribute) {
             if (span.Name != "meta" || attribute.Name != "http-equiv") return false;
             return Array.IndexOf(_removedHttpEquivs, attribute.Value.Trim().ToLowerInvariant()) != -1;
