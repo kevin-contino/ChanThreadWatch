@@ -166,6 +166,13 @@ namespace JDP {
             return !tag.IsSelfClosing && tag.NameEquals(name);
         }
 
+        // The end of the end tag of a start tag whose contents were read as raw text, or the end
+        // of the page if that end tag could not be read
+        public int GetRawTextElementEndOffset(HTMLTag startTag) {
+            int i;
+            return _offsetToIndex.TryGetValue(startTag.RawTextEndOffset, out i) ? _tags[i].EndOffset : _preprocessedHTML.Length;
+        }
+
         public HTMLTagRange CreateTagRange(HTMLTag tag) {
             return CreateTagRange(tag, null);
         }
@@ -216,6 +223,7 @@ namespace JDP {
         // Parsing helpers below return the position to continue from, or -1 (or null)
         // when the input ends before the construct is complete, which stops parsing.
         private static IEnumerable<HTMLTag> ParseTags(string html, int htmlStart, int htmlEnd) {
+            ParseContext context = new ParseContext();
             int pos;
             while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
                 htmlStart = pos + 1;
@@ -227,10 +235,10 @@ namespace JDP {
                     yield return tag;
 
                     // Skip contents of special tags whose contents are to be treated as raw text
-                    htmlStart = SkipRawTextContents(html, tag, htmlEnd);
+                    htmlStart = SkipRawTextContents(html, tag, context, htmlEnd);
                 }
                 else {
-                    htmlStart = SkipNonTagMarkup(html, htmlStart, htmlEnd);
+                    htmlStart = SkipNonTagMarkup(html, htmlStart, context, htmlEnd);
                 }
                 if (htmlStart == -1) yield break;
             }
@@ -323,20 +331,62 @@ namespace JDP {
             return valueEnd;
         }
 
-        private static int SkipRawTextContents(string html, HTMLTag tag, int htmlEnd) {
-            int htmlStart = tag.EndOffset;
-            if (!IsRawTextStartTag(tag)) return htmlStart;
+        // Skips the contents of an element that a browser reads as raw text, and records where
+        // they end. Where a browser may read them as markup instead (see ParseContext) and they
+        // hold markup, the element is marked to be removed with its contents, so a saved page has
+        // no markup that the two readings disagree on. Contents that no end tag ends are read as
+        // markup: a browser reads them as text, so nothing in them runs, and the parser finds
+        // more tags.
+        private static int SkipRawTextContents(string html, HTMLTag tag, ParseContext context, int htmlEnd) {
+            bool isUncertain = context.IsUncertain;
+            context.Update(tag);
+            if (!IsRawTextStartTag(tag)) return tag.EndOffset;
+            int rawTextEnd = FindRawTextEnd(html, tag, context, htmlEnd);
+            if (rawTextEnd == -1) return tag.EndOffset;
+            tag.RawTextEndOffset = rawTextEnd;
+            tag.ContentsMayBeMarkup = isUncertain && ContainsMarkup(html, tag.EndOffset, rawTextEnd);
+            return rawTextEnd;
+        }
+
+        // The context remembers where no end tag of a name follows, so raw text that is never
+        // ended is searched to the end of the page once per name
+        private static int FindRawTextEnd(string html, HTMLTag tag, ParseContext context, int htmlEnd) {
+            if (context.HasNoEndTagAfter(tag.Name, tag.EndOffset)) return -1;
             string endTagText = "/" + tag.Name;
+            int htmlStart = tag.EndOffset;
             int pos;
             while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
                 htmlStart = pos + 1;
                 if (StartsWithRawTextEndTag(html, htmlStart, htmlEnd, endTagText)) return pos;
             }
+            context.NoteNoEndTagAfter(tag.Name, tag.EndOffset);
             return -1;
         }
 
+        // True if a parser reading markup would find a tag, comment, doctype or bogus comment
+        private static bool ContainsMarkup(string html, int htmlStart, int htmlEnd) {
+            int pos;
+            while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
+                htmlStart = pos + 1;
+                if (StartsWithLetter(html, htmlStart, htmlEnd) || StartsWithAny(html, htmlStart, htmlEnd, '/', '!', '?')) return true;
+            }
+            return false;
+        }
+
+        // Elements whose contents a browser reads as text when it reads them as HTML. Scripting is
+        // on in the browser that opens a saved page, so noscript is one of them. Plaintext has no
+        // end tag, so its contents are read as markup (see SkipRawTextContents).
+        private static readonly string[] _rawTextNames = {
+            "style", "title", "textarea", "xmp", "iframe", "noembed", "noframes", "noscript"
+        };
+
+        // A browser ignores the slash of a self-closing HTML start tag. A self-closing script start
+        // tag is still read as one without contents: the removal of the script tag leaves its
+        // contents as the markup that the parser read.
         private static bool IsRawTextStartTag(HTMLTag tag) {
-            return !tag.IsEnd && !tag.IsSelfClosing && tag.NameEqualsAny("script", "style", "title", "textarea");
+            if (tag.IsEnd) return false;
+            if (tag.NameEquals("script")) return !tag.IsSelfClosing;
+            return tag.NameEqualsAny(_rawTextNames);
         }
 
         private static bool StartsWithRawTextEndTag(string html, int htmlStart, int htmlEnd, string endTagText) {
@@ -345,7 +395,9 @@ namespace JDP {
                  StartsWithAny(html, htmlStart + endTagText.Length, htmlEnd, '/', '>'));
         }
 
-        private static int SkipNonTagMarkup(string html, int htmlStart, int htmlEnd) {
+        private static int SkipNonTagMarkup(string html, int htmlStart, ParseContext context, int htmlEnd) {
+            // In foreign content a browser ends a CDATA section at "]]>", not at the first ">"
+            if (StartsWith(html, htmlStart, htmlEnd, "![CDATA[", false)) context.NoteCDATA();
             if (StartsWithCommentStart(html, htmlStart, htmlEnd)) {
                 // Skip comment
                 return SkipComment(html, htmlStart + 3, htmlEnd);
@@ -359,8 +411,10 @@ namespace JDP {
             return htmlStart;
         }
 
+        // Browsers end "<!-->" and "<!--->" at once, as the bogus comment rule ends them
         private static bool StartsWithCommentStart(string html, int htmlStart, int htmlEnd) {
-            return StartsWith(html, htmlStart, htmlEnd, "!--", false) && !StartsWith(html, htmlStart + 3, htmlEnd, '>');
+            return StartsWith(html, htmlStart, htmlEnd, "!--", false) && !StartsWith(html, htmlStart + 3, htmlEnd, '>') &&
+                !StartsWith(html, htmlStart + 3, htmlEnd, "->", false);
         }
 
         private static int SkipComment(string html, int htmlStart, int htmlEnd) {
@@ -480,6 +534,273 @@ namespace JDP {
             string attributeValue = tag.GetAttributeValue("class");
             return attributeValue != null && ClassAttributeValueHas(attributeValue, targetClassName);
         }
+
+        // Follows where a browser may read the contents of title, style, textarea and the other
+        // raw text elements as markup: inside svg and math (also in the HTML in their integration
+        // points, svg foreignObject, desc and title, MathML mi, mo, mn, ms, mtext and annotation-xml
+        // for HTML), and from a select, or a CDATA section in svg or math, to the end of the page.
+        // The open svg and math elements and the HTML elements opened inside them are kept as a
+        // browser's tree builder keeps them, as
+        // far as that decides when the svg or math ends. Where the parser cannot tell if a browser
+        // closed an element, it keeps the element open: the parser then stays uncertain for longer,
+        // which removes more, never less.
+        private sealed class ParseContext {
+            // The most elements an end tag of an HTML element closes; beyond that it is ignored,
+            // which keeps them open
+            private const int MaxClosedHTMLElements = 100;
+
+            private static readonly string[] _breakoutNames = {
+                "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt", "em", "embed",
+                "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li", "listing", "menu", "meta",
+                "nobr", "ol", "p", "pre", "ruby", "s", "small", "span", "strong", "strike", "sub", "sup", "table",
+                "tt", "u", "ul", "var"
+            };
+
+            private static readonly string[] _voidNames = {
+                "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "image", "img", "input",
+                "keygen", "link", "meta", "param", "source", "track", "wbr"
+            };
+
+            private readonly List<OpenElement> _openElements = new List<OpenElement>();
+
+            // The stack indexes of the open elements of each name, so finding the element an end
+            // tag closes takes the same time however many elements are open
+            private readonly Dictionary<string, Stack<int>> _indexesByName = new Dictionary<string, Stack<int>>(StringComparer.Ordinal);
+
+            // Set from the first select start tag on, since browsers differ in what ends a select
+            // (a template inside it hides its end tag), and from a CDATA section in svg or math on,
+            // which a browser ends later than the parser does
+            private bool _isUncertainToEnd;
+
+            // For each raw text element name, the offset after which no end tag of that name follows
+            private readonly Dictionary<string, int> _noEndTagAfter = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            public bool IsUncertain {
+                get { return _openElements.Count != 0 || _isUncertainToEnd; }
+            }
+
+            public void NoteCDATA() {
+                if (_openElements.Count != 0) _isUncertainToEnd = true;
+            }
+
+            public bool HasNoEndTagAfter(string name, int offset) {
+                int after;
+                return _noEndTagAfter.TryGetValue(name, out after) && offset >= after;
+            }
+
+            public void NoteNoEndTagAfter(string name, int offset) {
+                _noEndTagAfter[name] = offset;
+            }
+
+            private OpenElement Current {
+                get { return _openElements.Count != 0 ? _openElements[_openElements.Count - 1] : null; }
+            }
+
+            public void Update(HTMLTag tag) {
+                if (tag.NameEquals("select")) _isUncertainToEnd = true;
+                if (tag.IsEnd) {
+                    Close(tag);
+                }
+                else {
+                    Open(tag);
+                }
+            }
+
+            private bool IsReadAsHTML(HTMLTag startTag) {
+                OpenElement current = Current;
+                if (current == null || !current.IsForeign || current.IsHTMLIntegrationPoint) return true;
+                return current.IsTextIntegrationPoint && !startTag.NameEqualsAny("mglyph", "malignmark");
+            }
+
+            // An HTML element such as a div or p ends the foreign content it appears in, and is
+            // then read as HTML
+            private void Open(HTMLTag tag) {
+                if (!IsReadAsHTML(tag) && IsBreakoutTag(tag)) CloseToHTML();
+                if (IsReadAsHTML(tag)) {
+                    OpenInHTML(tag);
+                }
+                else if (!tag.IsSelfClosing) {
+                    Push(OpenElement.CreateForeign(tag, IsSvgChild(tag)));
+                }
+            }
+
+            // HTML elements are followed only inside svg and math. A browser ignores the slash of
+            // a self-closing HTML start tag.
+            private void OpenInHTML(HTMLTag tag) {
+                if (tag.NameEqualsAny("svg", "math")) {
+                    if (!tag.IsSelfClosing) Push(OpenElement.CreateForeign(tag, tag.NameEquals("svg")));
+                }
+                else if (Current != null && !tag.NameEqualsAny(_voidNames)) {
+                    Push(OpenElement.CreateHTML(tag.Name));
+                }
+            }
+
+            private bool IsSvgChild(HTMLTag tag) {
+                OpenElement current = Current;
+                return current.IsSvg || (tag.NameEquals("svg") && current.Name == "annotation-xml");
+            }
+
+            private static bool IsBreakoutTag(HTMLTag tag) {
+                return tag.NameEqualsAny(_breakoutNames) || (tag.NameEquals("font") && IsBreakoutFont(tag));
+            }
+
+            private static bool IsBreakoutFont(HTMLTag tag) {
+                return tag.GetAttribute("color") != null || tag.GetAttribute("face") != null || tag.GetAttribute("size") != null;
+            }
+
+            // An end tag closes the nearest open element of its name, and those above it, only
+            // where a browser surely does. Otherwise the elements are kept open.
+            private void Close(HTMLTag tag) {
+                if (tag.NameEqualsAny("br", "p")) CloseToHTML();
+                int index = LastIndexOf(tag.Name);
+                if (index == -1) return;
+                if (_openElements[index].IsForeign) {
+                    CloseForeign(index);
+                }
+                else {
+                    CloseHTML(index);
+                }
+            }
+
+            // A browser ignores the end tag of a foreign element while an HTML element is open
+            // above it
+            private void CloseForeign(int index) {
+                if (Current.HTMLIndex < index) PopFrom(index);
+            }
+
+            // A browser closes an HTML element by its end tag when no element of the special kind
+            // is open above it. Formatting elements closed with it are opened again by the browser
+            // when the next tag comes, so they are kept.
+            private void CloseHTML(int index) {
+                if (_openElements[index].IsKeptOnEndTag || Current.SpecialIndex > index || _openElements.Count - index > MaxClosedHTMLElements) return;
+                List<string> formattingNames = GetFormattingNamesAbove(index);
+                PopFrom(index);
+                foreach (string name in formattingNames) {
+                    Push(OpenElement.CreateHTML(name));
+                }
+            }
+
+            private List<string> GetFormattingNamesAbove(int index) {
+                List<string> names = new List<string>();
+                for (int i = index + 1; i < _openElements.Count; i++) {
+                    if (_openElements[i].IsFormatting) names.Add(_openElements[i].Name);
+                }
+                return names;
+            }
+
+            private void CloseToHTML() {
+                OpenElement current = Current;
+                if (current != null) PopFrom(current.HTMLContextIndex + 1);
+            }
+
+            private int LastIndexOf(string name) {
+                Stack<int> indexes;
+                return _indexesByName.TryGetValue(name, out indexes) && indexes.Count != 0 ? indexes.Peek() : -1;
+            }
+
+            private void Push(OpenElement element) {
+                int index = _openElements.Count;
+                element.Link(Current ?? OpenElement.None, index);
+                _openElements.Add(element);
+                Stack<int> indexes;
+                if (!_indexesByName.TryGetValue(element.Name, out indexes)) {
+                    indexes = new Stack<int>();
+                    _indexesByName.Add(element.Name, indexes);
+                }
+                indexes.Push(index);
+            }
+
+            private void PopFrom(int index) {
+                while (_openElements.Count > index) {
+                    OpenElement element = Current;
+                    _openElements.RemoveAt(_openElements.Count - 1);
+                    _indexesByName[element.Name].Pop();
+                }
+            }
+        }
+
+        private sealed class OpenElement {
+            // HTML elements of the special kind, which stop a browser's search for the element an
+            // end tag closes
+            private static readonly string[] _specialNames = {
+                "address", "applet", "area", "article", "aside", "base", "basefont", "bgsound", "blockquote", "body",
+                "br", "button", "caption", "center", "col", "colgroup", "dd", "details", "dir", "div", "dl", "dt",
+                "embed", "fieldset", "figcaption", "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3",
+                "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "iframe", "img", "input", "keygen", "li",
+                "link", "listing", "main", "marquee", "menu", "meta", "nav", "noembed", "noframes", "noscript",
+                "object", "ol", "p", "param", "plaintext", "pre", "script", "search", "section", "select", "source",
+                "style", "summary", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "title",
+                "tr", "track", "ul", "wbr", "xmp"
+            };
+
+            // Elements whose end tag a browser may take without closing the elements above them
+            // (form), or that a browser may not have opened at all (body, html and head start tags,
+            // and table parts outside a table, are ignored in the body)
+            private static readonly string[] _keptOnEndTagNames = {
+                "form", "body", "html", "head", "caption", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"
+            };
+
+            private static readonly string[] _formattingNames = {
+                "a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"
+            };
+
+            // Stands below the bottom of the stack
+            public static readonly OpenElement None = new OpenElement(String.Empty) { HTMLIndex = -1, SpecialIndex = -1, HTMLContextIndex = -1 };
+
+            private OpenElement(string name) {
+                Name = name;
+            }
+
+            public static OpenElement CreateForeign(HTMLTag tag, bool isSvg) {
+                OpenElement element = new OpenElement(tag.Name) {
+                    IsForeign = true,
+                    IsSvg = isSvg,
+                    IsHTMLIntegrationPoint = isSvg ? tag.NameEqualsAny("foreignobject", "desc", "title") : IsHTMLAnnotation(tag),
+                    IsTextIntegrationPoint = !isSvg && tag.NameEqualsAny("mi", "mo", "mn", "ms", "mtext")
+                };
+                element.IsSpecial = element.IsIntegrationPoint || (!isSvg && tag.NameEquals("annotation-xml"));
+                return element;
+            }
+
+            public static OpenElement CreateHTML(string name) {
+                return new OpenElement(name) {
+                    IsSpecial = Array.IndexOf(_specialNames, name) != -1,
+                    IsFormatting = Array.IndexOf(_formattingNames, name) != -1,
+                    IsKeptOnEndTag = Array.IndexOf(_keptOnEndTagNames, name) != -1
+                };
+            }
+
+            public string Name { get; private set; }
+            public bool IsForeign { get; private set; }
+            public bool IsSvg { get; private set; }
+            public bool IsHTMLIntegrationPoint { get; private set; }
+            public bool IsTextIntegrationPoint { get; private set; }
+            public bool IsSpecial { get; private set; }
+            public bool IsFormatting { get; private set; }
+            public bool IsKeptOnEndTag { get; private set; }
+
+            public bool IsIntegrationPoint {
+                get { return IsHTMLIntegrationPoint || IsTextIntegrationPoint; }
+            }
+
+            // Stack indexes of the nearest elements at or below this one: an HTML element, an
+            // element of the special kind, and an element inside which start tags are read as HTML
+            public int HTMLIndex { get; private set; }
+            public int SpecialIndex { get; private set; }
+            public int HTMLContextIndex { get; private set; }
+
+            public void Link(OpenElement below, int index) {
+                HTMLIndex = IsForeign ? below.HTMLIndex : index;
+                SpecialIndex = IsSpecial ? index : below.SpecialIndex;
+                HTMLContextIndex = IsForeign && !IsIntegrationPoint ? below.HTMLContextIndex : index;
+            }
+
+            private static bool IsHTMLAnnotation(HTMLTag tag) {
+                string encoding = tag.GetAttributeValueOrEmpty("encoding");
+                return tag.NameEquals("annotation-xml") &&
+                    (encoding.Equals("text/html", StringComparison.OrdinalIgnoreCase) || encoding.Equals("application/xhtml+xml", StringComparison.OrdinalIgnoreCase));
+            }
+        }
     }
 
     public class HTMLTag {
@@ -491,10 +812,17 @@ namespace JDP {
         public List<HTMLAttribute> DuplicateAttributes { get; set; }
         public int Offset { get; set; }
         public int Length { get; set; }
+        // For a start tag whose contents the parser read as raw text, the offset of the end tag
+        // that ends them; otherwise -1
+        public int RawTextEndOffset { get; set; }
+        // True if a browser may read the raw text contents as markup and they hold markup, so the
+        // element is to be removed with its contents
+        public bool ContentsMayBeMarkup { get; set; }
 
         public HTMLTag() {
             Attributes = new List<HTMLAttribute>();
             DuplicateAttributes = new List<HTMLAttribute>();
+            RawTextEndOffset = -1;
         }
 
         public int EndOffset {

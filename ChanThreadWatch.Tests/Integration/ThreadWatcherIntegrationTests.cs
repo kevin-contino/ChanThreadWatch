@@ -72,6 +72,21 @@ namespace JDP.Tests.Integration {
             Assert.IsFalse(File.Exists(SavedPagePath(watcher) + ".bak"));
         }
 
+        // A browser decodes the saved file by its byte order mark, so it reads the text that the
+        // removal and SavedPageSweep checked, whatever charset the page declares
+        [TestMethod]
+        public void SavedPageIsUTF8WithAByteOrderMark() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunToStop(watcher);
+
+            byte[] bytes = File.ReadAllBytes(SavedPagePath(watcher));
+            CollectionAssert.AreEqual(new byte[] { 0xEF, 0xBB, 0xBF }, new[] { bytes[0], bytes[1], bytes[2] });
+        }
+
         // S5
         [TestMethod]
         public void SavedPageHasNoActiveContent() {

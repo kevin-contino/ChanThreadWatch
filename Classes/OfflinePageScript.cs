@@ -65,7 +65,7 @@ namespace JDP {
         // implied, or -1. Only the first tags of the page count: a head start tag after other
         // content (a body start tag, text, or noscript, template, svg or any other element that
         // the browser may read as text or as foreign content) does not start the browser's head.
-        private static int FindHeadAnchorIndex(HTMLParser htmlParser) {
+        public static int FindHeadAnchorIndex(HTMLParser htmlParser) {
             if (IsLeadingStartTag(htmlParser, 0, "head")) return 0;
             if (!IsLeadingStartTag(htmlParser, 0, "html")) return -1;
             return IsLeadingStartTag(htmlParser, 1, "head") ? 1 : 0;
@@ -76,17 +76,18 @@ namespace JDP {
             return index < tags.Count && !tags[index].IsEnd && tags[index].NameEquals(name) && IsBlankBefore(htmlParser, index);
         }
 
-        // White space, a BOM, a plain doctype, and comments that end where both HTMLParser and a
-        // browser end them. A browser ends "<!-->" and "<!--->" right away and a comment at "--!>",
-        // where HTMLParser may read on to a later "-->" and miss the tags in between, so such
-        // comments, a comment inside a comment, and any other markup do not count as blank.
-        private static readonly Regex _blankMarkup = new Regex("^(?:\\s|\\uFEFF|<!doctype[^<>]*>|<!--(?!>|->)(?:(?!--!>|<!--|-->)[\\s\\S])*-->)*$", RegexOptions.IgnoreCase);
+        // HTML white space, a plain doctype, and plain comments. A browser ends "<!-->" and
+        // "<!--->" right away and a comment at "--!>"; such comments, a comment inside a comment,
+        // and any other markup do not count as blank. Other white space, such as a no-break space,
+        // is text to a browser.
+        private static readonly Regex _blankMarkup = new Regex("^(?:[ \\t\\n\\f\\r]|<!doctype[^<>]*>|<!--(?!>|->)(?:(?!--!>|<!--|-->)[\\s\\S])*-->)*$", RegexOptions.IgnoreCase);
 
         // True if only white space, well-formed comments and the doctype come between the tag and
-        // the tag before it
+        // the tag before it. A BOM counts only at the start of the page.
         private static bool IsBlankBefore(HTMLParser htmlParser, int index) {
             int start = index > 0 ? htmlParser.Tags[index - 1].EndOffset : 0;
-            return _blankMarkup.IsMatch(htmlParser.PreprocessedHTML.Substring(start, htmlParser.Tags[index].Offset - start));
+            if (start == 0 && htmlParser.PreprocessedHTML.StartsWith("﻿", StringComparison.Ordinal)) start = 1;
+            return _blankMarkup.IsMatch(htmlParser.PreprocessedHTML.Substring(start, Math.Max(0, htmlParser.Tags[index].Offset - start)));
         }
 
         // Tags that keep the browser in the head

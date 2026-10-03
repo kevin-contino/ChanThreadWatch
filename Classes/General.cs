@@ -787,6 +787,21 @@ namespace JDP {
             return result;
         }
 
+        // Saved pages are written as UTF-8 with a byte order mark. A browser that opens the file
+        // decodes it by the mark before any charset the page declares, so it reads the same text
+        // that SavedPageSweep checked.
+        public static readonly Encoding SavedPageEncoding = new UTF8Encoding(true);
+
+        // Writes a page as it is saved: with the replacements applied, then through the last pass
+        // of SavedPageSweep, which does not depend on how HTMLParser read the page
+        public static void WriteSavedPage(string str, List<ReplaceInfo> replaceList, TextWriter outStream) {
+            using (StringWriter replaced = new StringWriter()) {
+                WriteReplacedString(str, replaceList, replaced);
+                // A byte order mark from the download is dropped; the writer adds its own
+                outStream.Write(SavedPageSweep.Sweep(replaced.ToString().TrimStart('\uFEFF')));
+            }
+        }
+
         public static void WriteReplacedString(string str, List<ReplaceInfo> replaceList, TextWriter outStream) {
             int offset = 0;
             SortByOffset(replaceList);
@@ -872,18 +887,16 @@ namespace JDP {
         private static readonly string[] _activeContentElements = { "script", "iframe", "frame", "object", "embed", "applet" };
 
         // Added to the saved page's head. Blocks anything the removal misses where a browser parses
-        // the markup differently from HTMLParser (for example inside noembed, xmp or svg title).
+        // the markup differently from HTMLParser.
         public const string ActiveContentPolicyMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\">";
 
         // Removes scripts, embedded content, event handler attributes and script URLs, so a saved
         // page can't run code when it is opened from disk
         private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets, string offlineScriptSite) {
-            // A page that gets no new policy keeps the one it has
-            if (AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite)) {
-                AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
-            }
-            foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
-                replaceList.Add(CreateRemoveReplace(tag.Offset, GetActiveElementLength(htmlParser, tag)));
+            AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite);
+            AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
+            foreach (HTMLTag tag in htmlParser.Tags) {
+                if (IsRemovedElement(tag)) replaceList.Add(CreateRemoveReplace(tag.Offset, GetRemovedElementLength(htmlParser, tag)));
             }
             foreach (HTMLTag tag in htmlParser.Tags) {
                 AddActiveAttributeReplaces(tag.Attributes, replaceList, existingOffsets);
@@ -891,9 +904,18 @@ namespace JDP {
             }
         }
 
-        // Void elements have no contents; matching a stray end tag would remove everything up to it.
-        // An element without an end tag loses only its start tag.
-        private static int GetActiveElementLength(HTMLParser htmlParser, HTMLTag tag) {
+        // Active elements, and elements whose raw text contents a browser may read as markup
+        // (see HTMLTag.ContentsMayBeMarkup)
+        private static bool IsRemovedElement(HTMLTag tag) {
+            return !tag.IsEnd && (tag.ContentsMayBeMarkup || tag.NameEqualsAny(_activeContentElements));
+        }
+
+        // An element whose contents the parser read as raw text loses all of them, up to and with
+        // its end tag, so nothing the parser skipped stays. Void elements have no contents;
+        // matching a stray end tag would remove everything up to it. Any other element without an
+        // end tag loses only its start tag, and its contents are markup the parser read.
+        private static int GetRemovedElementLength(HTMLParser htmlParser, HTMLTag tag) {
+            if (tag.RawTextEndOffset != -1) return htmlParser.GetRawTextElementEndOffset(tag) - tag.Offset;
             if (tag.NameEqualsAny("embed", "frame")) return tag.Length;
             HTMLTagRange tagRange = htmlParser.CreateTagRange(tag);
             return tagRange != null ? tagRange.Length : tag.Length;
@@ -901,25 +923,39 @@ namespace JDP {
 
         // Adds our script and the policy that allows it where the browser reads them in the head
         // (see OfflinePageScript.CreateHeadReplace). A page without a script, or without a head
-        // the browser would see as such, gets the policy that allows no script instead. Returns
-        // false if the page got no policy.
-        private static bool AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
+        // the browser would see as such, gets the policy that allows no script instead.
+        private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
             ReplaceInfo replace = (offlineScriptSite != null ? OfflinePageScript.CreateHeadReplace(htmlParser, offlineScriptSite) : null) ?? CreateNoScriptPolicyReplace(htmlParser);
-            if (replace == null) return false;
             replaceList.Add(replace);
-            return true;
         }
 
+        // What a browser reads before it starts the html element: a BOM at the start, HTML white
+        // space, comments, the doctype and other markup it reads as a comment. A comment ends
+        // where a browser ends it.
+        private static readonly Regex _leadingMarkup = new Regex("^\\uFEFF?(?:[ \\t\\n\\f\\r]|<!--(?:-?>|[\\s\\S]*?--!?>)|<!(?!--)[^>]*>|<\\?[^>]*>)*");
+
         // Replaces the head start tag, or the html start tag when the head is implied, so no other
-        // replacement can share its offset. A page with neither gets no policy.
+        // replacement can share its offset; only where a browser starts its head there (see
+        // OfflinePageScript.FindHeadAnchorIndex). Any other page gets the policy before its first
+        // content, which a browser puts in the head it creates.
         private static ReplaceInfo CreateNoScriptPolicyReplace(HTMLParser htmlParser) {
-            HTMLTag tag = htmlParser.FindStartTag("head") ?? htmlParser.FindStartTag("html");
-            if (tag == null) return null;
+            int anchorIndex = OfflinePageScript.FindHeadAnchorIndex(htmlParser);
+            if (anchorIndex == -1) return CreateLeadingPolicyReplace(htmlParser);
+            HTMLTag tag = htmlParser.Tags[anchorIndex];
             return new ReplaceInfo {
                 Offset = tag.Offset,
                 Length = tag.Length,
                 Type = ReplaceType.Other,
                 Value = "<" + tag.Name + ">" + ActiveContentPolicyMeta
+            };
+        }
+
+        private static ReplaceInfo CreateLeadingPolicyReplace(HTMLParser htmlParser) {
+            return new ReplaceInfo {
+                Offset = _leadingMarkup.Match(htmlParser.PreprocessedHTML).Length,
+                Length = 0,
+                Type = ReplaceType.Other,
+                Value = ActiveContentPolicyMeta
             };
         }
 
@@ -967,14 +1003,20 @@ namespace JDP {
         // character references. HttpUtility doesn't know the HTML5-only names used here, and leaves
         // numeric references without a semicolon undecoded, which browsers decode.
         public static bool IsScriptURL(string value) {
-            string terminated = Regex.Replace(value, "&#([0-9]+|[xX][0-9a-fA-F]+);?", "&#$1;");
-            string decoded = HttpUtility.HtmlDecode(terminated.Replace("&Tab;", "\t").Replace("&NewLine;", "\n").Replace("&colon;", ":"));
+            string decoded = DecodeAttributeValue(value);
             StringBuilder url = new StringBuilder(decoded.Length);
             foreach (char c in decoded) {
                 if (c > ' ') url.Append(Char.ToLowerInvariant(c));
             }
             string scheme = url.ToString();
             return scheme.StartsWith("javascript:", StringComparison.Ordinal) || scheme.StartsWith("vbscript:", StringComparison.Ordinal);
+        }
+
+        // Decodes character references the way a browser does in an attribute value, including
+        // numeric references without a semicolon and the named references for tab, newline and colon
+        public static string DecodeAttributeValue(string value) {
+            string terminated = Regex.Replace(value, "&#([0-9]+|[xX][0-9a-fA-F]+);?", "&#$1;");
+            return HttpUtility.HtmlDecode(terminated.Replace("&Tab;", "\t").Replace("&NewLine;", "\n").Replace("&colon;", ":"));
         }
 
         private static void AddNewLineReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {

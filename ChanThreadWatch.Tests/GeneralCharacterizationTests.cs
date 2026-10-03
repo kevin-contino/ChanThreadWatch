@@ -139,7 +139,18 @@ namespace JDP.Tests {
         private static List<ReplaceInfo> OtherReplaces(string html, string pageURL, params int[] existingOffsets) {
             var replaces = existingOffsets.Select(o => new ReplaceInfo { Offset = o, Length = 1, Value = "existing" }).ToList();
             General.AddOtherReplaces(new HTMLParser(html), pageURL, replaces);
-            return replaces.Skip(existingOffsets.Length).ToList();
+            return replaces.Skip(existingOffsets.Length).Where(r => r.Value != General.ActiveContentPolicyMeta).ToList();
+        }
+
+        // A page without a head or html start tag gets the policy inserted before its first content
+        [TestMethod]
+        public void AddOtherReplacesInsertsThePolicyIntoAPageWithoutAHead() {
+            var replaces = new List<ReplaceInfo>();
+            General.AddOtherReplaces(new HTMLParser("<!DOCTYPE html><p>a</p>"), Page, replaces);
+
+            ReplaceInfo policy = replaces.Single(r => r.Value == General.ActiveContentPolicyMeta);
+            Assert.AreEqual(15, policy.Offset);
+            Assert.AreEqual(0, policy.Length);
         }
 
         [TestMethod]

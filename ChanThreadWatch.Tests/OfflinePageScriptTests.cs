@@ -26,6 +26,17 @@ namespace JDP.Tests {
             }
         }
 
+        // Saved as ThreadWatcher saves it, through the last sweep (SavedPageSweep)
+        private static string SaveThroughSweep(string html, string site) {
+            var replaces = new List<ReplaceInfo>();
+            var htmlParser = new HTMLParser(html);
+            General.AddOtherReplaces(htmlParser, Page, replaces, site);
+            using (var writer = new StringWriter()) {
+                General.WriteSavedPage(htmlParser.PreprocessedHTML, replaces, writer);
+                return writer.ToString();
+            }
+        }
+
         // The overload that existing callers use
         private static string SaveWithoutSite(string html) {
             var replaces = new List<ReplaceInfo>();
@@ -105,8 +116,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        public void FragmentGetsNoScript() {
-            Assert.AreEqual("<p>a</p>", Save("<p>a</p>", "4chan"));
+        public void FragmentGetsNoScriptButThePolicyThatAllowsNone() {
+            Assert.AreEqual(General.ActiveContentPolicyMeta + "<p>a</p>", Save("<p>a</p>", "4chan"));
         }
 
         [TestMethod]
@@ -163,8 +174,10 @@ namespace JDP.Tests {
             AssertHasOfflineScript(saved, "fuuka");
         }
 
+        // A page without a head or html start tag gets the policy before its first content, in place
+        // of the earlier one, so saving it again changes nothing
         [TestMethod]
-        public void PageThatGetsNoNewPolicyKeepsItsEarlierOne() {
+        public void PageWithoutAHeadKeepsOnePolicy() {
             const string html = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\"><p>a</p>";
 
             foreach (string site in new[] { null, "4chan" }) {
@@ -177,11 +190,14 @@ namespace JDP.Tests {
             const string sitePolicy = "<meta http-equiv=\"Content-Security-Policy\" content=\"img-src 'self'\">";
             const string otherHash = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'sha256-abc='; object-src 'none'; frame-src 'none'; connect-src 'none'\">";
 
-            string saved = Save("<html><head>" + sitePolicy + otherHash + "</head><body></body></html>", "4chan");
+            const string html = "<html><head>" + sitePolicy + otherHash + "</head><body></body></html>";
 
-            StringAssert.Contains(saved, sitePolicy);
-            StringAssert.Contains(saved, otherHash);
-            Assert.AreEqual(3, CountPolicies(saved));
+            foreach (string saved in new[] { Save(html, "4chan"), SaveThroughSweep(html, "4chan") }) {
+                StringAssert.Contains(saved, sitePolicy);
+                StringAssert.Contains(saved, otherHash);
+                Assert.AreEqual(3, CountPolicies(saved));
+                AssertHasOfflineScript(saved, "4chan");
+            }
         }
 
         // A page opened from disk has no HTTP charset, and the browser only looks for a charset
@@ -231,7 +247,7 @@ namespace JDP.Tests {
         [DataRow("text<html><head></head></html>")]
         [DataRow("<p>a</p><html><head></head></html>")]
         [DataRow("<!-- <head> --><p>a</p>")]
-        // A browser ends these comments earlier than HTMLParser does
+        // A browser ends these comments early, so they do not count as blank before the head
         [DataRow("<!---><html><head></head></html>")]
         [DataRow("<!--><html><head></head></html>")]
         [DataRow("<!-- a --!> <html><head></head></html>")]
@@ -260,25 +276,28 @@ namespace JDP.Tests {
             AssertHasOfflineScript(saved, "4chan");
         }
 
-        // HTMLParser reads "<!--->" as the start of a comment that ends at the next "-->", where a
-        // browser ends it at once and runs the script. Only the policy keeps it from running; this
-        // documents HTMLParser's behavior, which a separate change is to fix.
+        // A browser ends "<!--->" at once and runs the script after it, so the script is removed.
+        // The policy stays as the second layer.
         [TestMethod]
-        public void CommentThatABrowserEndsEarlyHidesAScriptFromTheRemoval() {
+        public void CommentThatABrowserEndsEarlyDoesNotHideAScriptFromTheRemoval() {
             string saved = Save("<html><head></head><body><!---><script>alert(1)</script>--></body></html>", "4chan");
 
-            StringAssert.Contains(saved, "<!---><script>alert(1)</script>-->");
+            StringAssert.Contains(saved, "<body><!--->--></body>");
+            Assert.DoesNotContain("alert(1)", saved);
             StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
+            AssertHasOfflineScript(saved, "4chan");
         }
 
-        // HTMLParser reads an svg title as text, so it finds no script tag there; a browser runs the
-        // svg script. Only the policy, which allows no script but ours, keeps it from running.
+        // A browser reads the tags in an svg title and runs the script, so the title is removed with it.
+        // The policy stays as the second layer.
         [TestMethod]
-        public void SvgTitleScriptIsNotRemovedButThePolicyBlocksIt() {
+        public void SvgTitleScriptIsRemoved() {
             string saved = Save("<html><head></head><body><svg><title><script>alert(1)</script></title></svg></body></html>", "4chan");
 
-            StringAssert.Contains(saved, "<svg><title><script>alert(1)</script></title></svg>");
+            StringAssert.Contains(saved, "<body><svg></svg></body>");
+            Assert.DoesNotContain("alert(1)", saved);
             StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
+            AssertHasOfflineScript(saved, "4chan");
         }
 
         [TestMethod]
