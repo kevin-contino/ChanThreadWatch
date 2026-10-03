@@ -6,7 +6,8 @@ using System.IO;
 namespace JDP {
     // Format of the thread list file (threads.txt): the first line is the file version,
     // followed by a fixed number of lines per thread. SaveDir is kept as written in the
-    // file (relative to the download folder, or empty).
+    // file (relative to the download folder, or empty). PageAuth and ImageAuth are written
+    // encrypted (see StoredAuth); plaintext values from older versions still load.
     public static class ThreadListFile {
         public const int CurrentVersion = 4;
 
@@ -47,11 +48,24 @@ namespace JDP {
             }
         }
 
+        // Returns the lines to write to the backup, or null if the file wouldn't load. The
+        // threads are written again rather than copied, so logins from a file written by an
+        // older version are encrypted in the backup too.
+        public static string[] GetBackupLines(string[] lines) {
+            try {
+                ThreadListData data = Parse(lines);
+                return data.TrailingLineCount == 0 ? Serialize(data.Threads) : null;
+            }
+            catch (Exception ex) when (ex is FormatException || ex is OverflowException) {
+                return null;
+            }
+        }
+
         private static ThreadInfo ParseThreadInfo(string[] lines, ref int i, int fileVersion) {
             ThreadInfo thread = new ThreadInfo { ExtraData = new WatcherExtraData() };
             thread.URL = lines[i++];
-            thread.PageAuth = lines[i++];
-            thread.ImageAuth = lines[i++];
+            thread.PageAuth = StoredAuth.Unprotect(lines[i++]);
+            thread.ImageAuth = StoredAuth.Unprotect(lines[i++]);
             thread.CheckIntervalSeconds = ParseInt(lines[i++]);
             thread.OneTimeDownload = lines[i++] == "1";
             thread.SaveDir = lines[i++];
@@ -121,8 +135,8 @@ namespace JDP {
         private static void AddThreadLines(List<string> lines, ThreadInfo thread) {
             WatcherExtraData extraData = thread.ExtraData;
             lines.Add(TextFile.ToSingleLine(thread.URL));
-            lines.Add(TextFile.ToSingleLine(thread.PageAuth));
-            lines.Add(TextFile.ToSingleLine(thread.ImageAuth));
+            lines.Add(StoredAuth.Protect(thread.PageAuth));
+            lines.Add(StoredAuth.Protect(thread.ImageAuth));
             lines.Add(thread.CheckIntervalSeconds.ToString(CultureInfo.InvariantCulture));
             lines.Add(FormatBool(thread.OneTimeDownload));
             lines.Add(TextFile.ToSingleLine(thread.SaveDir));

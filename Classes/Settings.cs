@@ -10,6 +10,7 @@ namespace JDP {
         private static readonly object _sync = new object();
         private static Dictionary<string, string> _settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static bool _saveBlocked;
+        private static readonly string[] _authSettingNames = { "PageAuth", "ImageAuth" };
 
         public static string ApplicationName {
             get { return "Chan Thread Watch"; }
@@ -31,8 +32,8 @@ namespace JDP {
         }
 
         public static string PageAuth {
-            get { return Get("PageAuth"); }
-            set { Set("PageAuth", value); }
+            get { return GetAuth("PageAuth"); }
+            set { SetAuth("PageAuth", value); }
         }
 
         public static bool? UseImageAuth {
@@ -41,8 +42,8 @@ namespace JDP {
         }
 
         public static string ImageAuth {
-            get { return Get("ImageAuth"); }
-            set { Set("ImageAuth", value); }
+            get { return GetAuth("ImageAuth"); }
+            set { SetAuth("ImageAuth", value); }
         }
 
         public static bool? OneTimeDownload {
@@ -350,6 +351,12 @@ namespace JDP {
             }
         }
 
+        // Logins are kept in their on-disk form (see StoredAuth) and decrypted when read.
+        private static string GetAuth(string name) {
+            string value = Get(name);
+            return value != null ? StoredAuth.Unprotect(value) : null;
+        }
+
         private static bool? GetBool(string name) {
             string value = Get(name);
             if (value == null) return null;
@@ -400,6 +407,10 @@ namespace JDP {
                     _settings[name] = TextFile.ToSingleLine(value);
                 }
             }
+        }
+
+        private static void SetAuth(string name, string value) {
+            Set(name, value != null ? StoredAuth.Protect(value) : null);
         }
 
         private static void SetBool(string name, bool? value) {
@@ -505,9 +516,16 @@ namespace JDP {
         private static List<string> GetSettingLines() {
             List<string> lines = new List<string>();
             foreach (KeyValuePair<string, string> kvp in _settings) {
-                lines.Add(kvp.Key + "=" + kvp.Value);
+                lines.Add(kvp.Key + "=" + ToStoredValue(kvp.Key, kvp.Value));
             }
             return lines;
+        }
+
+        // Plaintext logins loaded from a file written by an older version are encrypted
+        // when the settings are written back.
+        private static string ToStoredValue(string name, string value) {
+            bool isAuth = Array.Exists(_authSettingNames, authName => String.Equals(authName, name, StringComparison.OrdinalIgnoreCase));
+            return isAuth && !StoredAuth.IsProtected(value) ? StoredAuth.Protect(value) : value;
         }
     }
 }
