@@ -10,7 +10,34 @@ namespace JDP {
     public class ThreadWatcher {
         private const int _maxDownloadTries = 3;
 
+        // Checks in a row that download the whole page again to retry a file that failed
+        private const int _maxRefetchesForFailedFile = 3;
+
+        // A download's file is preallocated to the size the server announces, which reduces
+        // fragmentation; announced sizes above this are only partly preallocated, so a wrong or
+        // hostile Content-Length cannot reserve a large amount of disk space up front.
+        private const long _maxPreallocateBytes = 64L * 1024 * 1024;
+
+        // Files larger than this are not saved. Image boards limit uploads to tens of megabytes
+        // (4chan: 4 MB images, 6 MB webm), so 512 MB leaves room for video archives while a broken
+        // or hostile server cannot fill the disk with one endless response.
+        internal const long DefaultMaxFileBytes = 512L * 1024 * 1024;
+
+        // Auto-follow adds the threads that a thread links to, and those threads can add more.
+        // This caps the threads one root watcher can add, so a chain of cross-links cannot keep
+        // adding watchers without limit.
+        internal const int DefaultMaxDescendantThreads = 100;
+
         private static WorkScheduler _workScheduler = new WorkScheduler();
+
+        // Settable by tests only
+        internal static long MaxFileBytes { get; set; } = DefaultMaxFileBytes;
+
+        // Settable by tests only
+        internal static int MaxDescendantThreads { get; set; } = DefaultMaxDescendantThreads;
+
+        // Parses downloaded thread pages; replaceable by tests only
+        internal static Func<string, HTMLParser> PageParserFactory { get; set; } = html => new HTMLParser(html);
 
         private WorkScheduler.WorkItem _nextCheckWorkItem;
         private object _settingsSync = new object();
@@ -38,6 +65,17 @@ namespace JDP {
         private string _pageID;
         private string _category = String.Empty;
         private bool _autoFollow;
+        private string _checkError;
+        private int _failedFileCount;
+        private bool _hasFilesToRetry;
+        private bool _loggedDescendantLimit;
+        // Separate from _settingsSync: counting descendants takes their locks, and a child can
+        // take its parent's _settingsSync while holding its own
+        private readonly object _descendantSlotSync = new object();
+        private int _reservedDescendantSlots;
+        private string _stopError;
+        // Checks in a row that each file (by URL) failed in; guarded by itself
+        private readonly Dictionary<string, int> _fileFailureCheckCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
         static ThreadWatcher() {
             // HttpWebRequest uses ThreadPool for asynchronous calls
@@ -132,7 +170,7 @@ namespace JDP {
                     return !String.IsNullOrEmpty(_threadDownloadDirectory) &&
                            Settings.RenameDownloadFolderWithDescription == true &&
                            !String.IsNullOrEmpty(_description) &&
-                           !String.Equals(General.GetLastDirectory(_threadDownloadDirectory), General.CleanFileName(_description), StringComparison.Ordinal);
+                           !String.Equals(General.GetLastDirectory(_threadDownloadDirectory), General.CleanFileName(_description + ParentThreadFormattedDescription), StringComparison.Ordinal);
                 }
             }
         }
@@ -200,8 +238,74 @@ namespace JDP {
             set { lock (_settingsSync) { _tag = value; } }
         }
 
+        // A snapshot, so callers can enumerate it while other threads add children
         public Dictionary<string, ThreadWatcher> ChildThreads {
-            get { lock (_settingsSync) { return _childThreads; } }
+            get { lock (_settingsSync) { return new Dictionary<string, ThreadWatcher>(_childThreads); } }
+        }
+
+        // Replaces a child with the same page ID, as the thread list does when it registers a
+        // new watcher for a page. Returns false if a child with that page ID was replaced.
+        public bool AddChildThread(ThreadWatcher childThread) {
+            lock (_settingsSync) {
+                bool isNew = !_childThreads.ContainsKey(childThread.PageID);
+                _childThreads[childThread.PageID] = childThread;
+                return isNew;
+            }
+        }
+
+        // Reserves room for one thread that auto-follow is about to add under this root
+        // watcher. Threads are added later on the UI thread, so the reservations that have not
+        // been released yet count against the limit too. Returns false if the limit is reached.
+        public bool TryReserveDescendantSlot() {
+            lock (_descendantSlotSync) {
+                if (DescendantThreads.Count + _reservedDescendantSlots >= MaxDescendantThreads) return false;
+                _reservedDescendantSlots++;
+                return true;
+            }
+        }
+
+        // Releases a reservation once the thread has been added (or rejected)
+        public void ReleaseDescendantSlot() {
+            lock (_descendantSlotSync) {
+                if (_reservedDescendantSlots > 0) _reservedDescendantSlots--;
+            }
+        }
+
+        // The settings of a thread that auto-follow adds from this one. Credentials are only
+        // passed on to a thread with the same origin as this one.
+        public ThreadInfo CreateChildThreadInfo(string childURL, DateTime addedOn, bool autoFollow) {
+            return new ThreadInfo {
+                URL = childURL,
+                PageAuth = General.GetAuthForURL(PageAuth, PageURL, childURL),
+                ImageAuth = General.GetAuthForURL(ImageAuth, PageURL, childURL),
+                CheckIntervalSeconds = CheckIntervalSeconds,
+                OneTimeDownload = OneTimeDownload,
+                SaveDir = null,
+                Description = String.Empty,
+                StopReason = null,
+                ExtraData = new WatcherExtraData {
+                    AddedOn = addedOn,
+                    AddedFrom = PageID
+                },
+                Category = Category,
+                AutoFollow = autoFollow
+            };
+        }
+
+        // The error of the last check (e.g. "HTTP 403 Forbidden"), or null if the check went fine
+        public string CheckError {
+            get { lock (_settingsSync) { return _checkError; } }
+        }
+
+        // The error that caused the watcher to stop (e.g. a one-time download whose page failed),
+        // or null if it stopped for another reason
+        public string StopError {
+            get { lock (_settingsSync) { return _stopError; } }
+        }
+
+        // The images and thumbnails that failed in the last check
+        public int FailedFileCount {
+            get { lock (_settingsSync) { return _failedFileCount; } }
         }
 
         public Dictionary<string, ThreadWatcher> DescendantThreads {
@@ -266,6 +370,7 @@ namespace JDP {
                 }
                 _isStopping = false;
                 _stopReason = StopReason.Other;
+                _stopError = null;
                 _hasRun = true;
                 _hasInitialized = false;
                 _nextCheckWorkItem = _workScheduler.AddItem(TickCount.Now, Check, PageHost);
@@ -273,12 +378,18 @@ namespace JDP {
         }
 
         public void Stop(StopReason reason) {
+            Stop(reason, null);
+        }
+
+        // stopError is the error that caused the stop, shown with it; null for other stops
+        private void Stop(StopReason reason, string stopError) {
             bool stoppingNow = false;
             bool checkFinished = false;
             List<Action> downloadAborters = null;
             lock (_settingsSync) {
                 if (!IsStopping) {
                     stoppingNow = true;
+                    _stopError = stopError;
                     checkFinished = BeginStopping(reason, out downloadAborters);
                 }
             }
@@ -328,7 +439,21 @@ namespace JDP {
             lock (_settingsSync) {
                 _reparseFinishedEvent.Reset();
             }
+            try {
+                ReparsePages();
+            }
+            catch (Exception ex) {
+                Logger.Log("Reparse of " + _pageURL + " failed:" + Environment.NewLine + ex);
+            }
+            finally {
+                // Always set, or shutdown would wait for the reparse forever
+                lock (_settingsSync) {
+                    _reparseFinishedEvent.Set();
+                }
+            }
+        }
 
+        private void ReparsePages() {
             List<PageInfo> pageList = new List<PageInfo> {
                 new PageInfo {
                     URL = _pageURL
@@ -341,10 +466,6 @@ namespace JDP {
 
             for (int pageIndex = 0; pageIndex < pageList.Count; pageIndex++) {
                 ReparsePage(pageList, pageIndex, threadDir, imageDir, thumbDir);
-            }
-
-            lock (_settingsSync) {
-                _reparseFinishedEvent.Set();
             }
         }
 
@@ -388,7 +509,7 @@ namespace JDP {
                 ReparseImage(image, imageDir, maxFileNameLengthBaseDir, completedImages, images.Count);
             }
             siteHelper.SetURL(pageInfo.URL);
-            Process(pageInfo, siteHelper, threadDir, imageDir, thumbDir, completedImages, completedThumbs);
+            Process(pageInfo, siteHelper, threadDir, imageDir, thumbDir, completedImages, completedThumbs, null);
             OnStopStatus(new StopStatusEventArgs(StopReason));
         }
 
@@ -629,8 +750,10 @@ namespace JDP {
                     ProcessFreshPages(siteHelper, threadDir, imageDir, thumbDir);
                 }
 
+                RefetchPagesIfFilesFailed();
+
                 if (OneTimeDownload) {
-                    Stop(StopReason.DownloadComplete);
+                    StopOneTimeDownload();
                 }
             }
             catch (Exception ex) {
@@ -641,12 +764,33 @@ namespace JDP {
             EndCheck();
         }
 
+        // A one-time download whose page could not be downloaded did not complete
+        private void StopOneTimeDownload() {
+            string checkError = CheckError;
+            Stop(checkError != null ? StopReason.Other : StopReason.DownloadComplete, checkError);
+        }
+
+        // Pages are normally requested with If-Modified-Since, and an unchanged page (304) queues
+        // no files. Dropping the cache time makes the next check download the pages again, so
+        // that it retries the files that failed and links them in the saved page.
+        private void RefetchPagesIfFilesFailed() {
+            lock (_settingsSync) {
+                if (!_hasFilesToRetry) return;
+            }
+            foreach (PageInfo pageInfo in _pageList) {
+                pageInfo.CacheTime = null;
+            }
+        }
+
         private void BeginCheck(SiteHelper siteHelper) {
             try {
                 lock (_settingsSync) {
                     _nextCheckWorkItem = null;
                     _checkFinishedEvent.Reset();
                     _isWaiting = false;
+                    _checkError = null;
+                    _failedFileCount = 0;
+                    _hasFilesToRetry = false;
 
                     if (!_hasInitialized) {
                         InitializeCheckState(siteHelper);
@@ -725,17 +869,40 @@ namespace JDP {
                 previousParser = TryLoadHTMLParser(pageInfo.Path);
             }
 
-            HTMLParser pageParser = DownloadPage(pageInfo);
-            if (pageParser == null) return;
+            if (!DownloadThreadPage(siteHelper, pageInfo)) return;
 
-            siteHelper.SetURL(pageInfo.URL);
-            siteHelper.SetHTMLParser(pageParser);
             siteHelper.ResurrectDeadPosts(previousParser, pageInfo.ReplaceList);
 
             if (AutoFollow) {
                 AddCrossLinkedThreads(siteHelper, pageInfo);
             }
 
+            EnqueuePageFiles(siteHelper, pageInfo, imageDir, thumbDir, pendingImages, pendingThumbs);
+
+            UpdateNextPage(siteHelper.GetNextPageURL(), pageIndex);
+        }
+
+        // Downloads the page and hands it to the site helper. Returns false if no thread page
+        // was downloaded (an error, an unchanged page, or a page that is not a thread).
+        private bool DownloadThreadPage(SiteHelper siteHelper, PageInfo pageInfo) {
+            DateTime? previousCacheTime = pageInfo.CacheTime;
+            DownloadedPage page = DownloadPage(pageInfo);
+            if (page == null) return false;
+
+            HTMLParser pageParser = TryParsePage(page.Content, pageInfo.URL);
+            if (pageParser == null) {
+                RejectPage(pageInfo, previousCacheTime, "page could not be read");
+                return false;
+            }
+            ApplyDownloadedPage(pageInfo, page);
+            siteHelper.SetURL(pageInfo.URL);
+            siteHelper.SetHTMLParser(pageParser);
+            if (siteHelper.IsThreadPage()) return true;
+            RejectPage(pageInfo, previousCacheTime, "not a thread page");
+            return false;
+        }
+
+        private void EnqueuePageFiles(SiteHelper siteHelper, PageInfo pageInfo, string imageDir, string thumbDir, Queue<ImageInfo> pendingImages, Queue<ThumbnailInfo> pendingThumbs) {
             List<ThumbnailInfo> thumbs = new List<ThumbnailInfo>();
             List<ImageInfo> images = siteHelper.GetImages(pageInfo.ReplaceList, thumbs);
             if (_completedImages.Count == 0) {
@@ -744,37 +911,96 @@ namespace JDP {
             }
             EnqueuePendingImages(images, pendingImages);
             EnqueuePendingThumbnails(thumbs, pendingThumbs);
-
-            UpdateNextPage(siteHelper.GetNextPageURL(), pageIndex);
         }
 
-        // Blocks until the download ends; returns null if the page wasn't downloaded
-        private HTMLParser DownloadPage(PageInfo pageInfo) {
-            HTMLParser pageParser = null;
+        // Blocks until the download ends; returns null if the page wasn't downloaded. The page is
+        // parsed afterwards on the check thread, not in the download callback, so that a parse
+        // error cannot keep the end event from being set.
+        private DownloadedPage DownloadPage(PageInfo pageInfo) {
+            DownloadedPage page = null;
             ManualResetEvent downloadEndEvent = new ManualResetEvent(false);
             DownloadPageEndCallback downloadEnd = (result, content, lastModifiedTime, encoding) => {
-                if (result == DownloadResult.Completed) {
-                    pageInfo.IsFresh = true;
-                    pageParser = new HTMLParser(content);
-                    pageInfo.CacheTime = lastModifiedTime;
-                    pageInfo.Encoding = encoding;
-                    pageInfo.ReplaceList = (Settings.SaveThumbnails != false) ? new List<ReplaceInfo>() : null;
+                try {
+                    if (result == DownloadResult.Completed) {
+                        page = new DownloadedPage { Content = content, LastModifiedTime = lastModifiedTime, Encoding = encoding };
+                    }
                 }
-                downloadEndEvent.Set();
+                finally {
+                    downloadEndEvent.Set();
+                }
             };
             DownloadPageAsync(pageInfo.Path, pageInfo.URL, PageAuth, pageInfo.CacheTime, downloadEnd);
             downloadEndEvent.WaitOne();
             downloadEndEvent.Close();
-            return pageParser;
+            return page;
         }
 
+        // Returns null (and logs the exception) if the page could not be parsed
+        private static HTMLParser TryParsePage(string content, string url) {
+            try {
+                return PageParserFactory(content);
+            }
+            catch (Exception ex) {
+                Logger.Log("Error parsing page " + url + ":" + Environment.NewLine + ex);
+                return null;
+            }
+        }
+
+        private static void ApplyDownloadedPage(PageInfo pageInfo, DownloadedPage page) {
+            pageInfo.IsFresh = true;
+            pageInfo.CacheTime = page.LastModifiedTime;
+            pageInfo.Encoding = page.Encoding;
+            pageInfo.ReplaceList = (Settings.SaveThumbnails != false) ? new List<ReplaceInfo>() : null;
+        }
+
+        // A page that can't be used (an error, ban or captcha page served with 200 OK, or one
+        // that can't be parsed): keep the saved copy of the thread and its cache time, and
+        // report the problem
+        private void RejectPage(PageInfo pageInfo, DateTime? previousCacheTime, string description) {
+            pageInfo.IsFresh = false;
+            pageInfo.CacheTime = previousCacheTime;
+            RestorePageBackup(pageInfo.Path, pageInfo.Path + ".bak");
+            SetCheckError(description, pageInfo.URL, null);
+        }
+
+        // Each AddThread event holds a reservation on the root watcher (TryReserveDescendantSlot)
+        // that the handler must release with ReleaseDescendantSlot once it has added or rejected
+        // the thread
         private void AddCrossLinkedThreads(SiteHelper siteHelper, PageInfo pageInfo) {
+            Dictionary<string, ThreadWatcher> descendantThreads = RootThread.DescendantThreads;
             foreach (string crossLink in siteHelper.GetCrossLinks(pageInfo.ReplaceList, Settings.InterBoardAutoFollow != false)) {
+                if (!IsNewCrossLink(TryGetCrossLinkPageID(crossLink), descendantThreads)) continue;
+                if (!RootThread.TryReserveDescendantSlot()) {
+                    LogDescendantLimitReached();
+                    return;
+                }
+                OnAddThread(new AddThreadEventArgs(crossLink));
+            }
+        }
+
+        private bool IsNewCrossLink(string crossLinkID, Dictionary<string, ThreadWatcher> descendantThreads) {
+            return crossLinkID != null && !descendantThreads.ContainsKey(crossLinkID) && RootThread.PageID != crossLinkID;
+        }
+
+        // Returns null if the link is not a valid absolute URL of a thread
+        private static string TryGetCrossLinkPageID(string crossLink) {
+            try {
                 SiteHelper crossLinkSiteHelper = SiteHelpers.GetInstance((new Uri(crossLink)).Host);
                 crossLinkSiteHelper.SetURL(crossLink);
-                string crossLinkID = crossLinkSiteHelper.GetPageID();
-                if (!RootThread.DescendantThreads.ContainsKey(crossLinkID) && RootThread.PageID != crossLinkID) OnAddThread(new AddThreadEventArgs(crossLink));
+                return crossLinkSiteHelper.GetPageID();
             }
+            catch (Exception ex) {
+                Logger.Log("Skipped invalid cross-link " + crossLink + ": " + ex.Message);
+                return null;
+            }
+        }
+
+        private void LogDescendantLimitReached() {
+            lock (_settingsSync) {
+                if (_loggedDescendantLimit) return;
+                _loggedDescendantLimit = true;
+            }
+            Logger.Log(String.Format("Auto-follow limit of {0} threads reached for {1}; further cross-linked threads are not added.", MaxDescendantThreads, RootThread.PageURL));
         }
 
         private void AddExistingImages(List<ImageInfo> images, string imageDir) {
@@ -811,9 +1037,10 @@ namespace JDP {
             }
         }
 
+        // Files without a usable file name (e.g. a URL ending in "/..") are never saved
         private void EnqueuePendingImages(List<ImageInfo> images, Queue<ImageInfo> pendingImages) {
             foreach (ImageInfo image in images) {
-                if (!_completedImages.ContainsKey(image.FileName)) {
+                if (image.FileName.Length != 0 && !_completedImages.ContainsKey(image.FileName)) {
                     pendingImages.Enqueue(image);
                 }
             }
@@ -821,7 +1048,7 @@ namespace JDP {
 
         private void EnqueuePendingThumbnails(List<ThumbnailInfo> thumbs, Queue<ThumbnailInfo> pendingThumbs) {
             foreach (ThumbnailInfo thumb in thumbs) {
-                if (!_completedThumbs.ContainsKey(thumb.FileName)) {
+                if (thumb.FileName.Length != 0 && !_completedThumbs.ContainsKey(thumb.FileName)) {
                     pendingThumbs.Enqueue(thumb);
                 }
             }
@@ -865,6 +1092,15 @@ namespace JDP {
                 StartImageDownload(pendingImages.Dequeue(), imageDir, counts, downloadEndEvents);
             }
             WaitForDownloadEnds(downloadEndEvents);
+            ReleaseUnwrittenFileNames(counts.UnwrittenFileNames);
+        }
+
+        // Frees the names reserved for files that were not written, so that a later try saves
+        // the file under its own name rather than a numbered one
+        private void ReleaseUnwrittenFileNames(List<string> fileNames) {
+            foreach (string fileName in fileNames) {
+                _imageDiskFileNames.Remove(fileName);
+            }
         }
 
         private void InitializeMaxFileNameLengthBaseDir(string imageDir) {
@@ -875,23 +1111,23 @@ namespace JDP {
 
         private void StartImageDownload(ImageInfo image, string imageDir, DownloadProgressCounts counts, List<ManualResetEvent> downloadEndEvents) {
             string savePath = GetImageSavePath(image, imageDir);
-            string saveFileName = Path.GetFileName(savePath);
+            string saveFileName = Path.GetFileName(savePath ?? String.Empty);
+            if (saveFileName.Length == 0) return;
             _imageDiskFileNames.Add(saveFileName);
 
             HashType hashType = (Settings.VerifyImageHashes != false) ? image.HashType : HashType.None;
             ManualResetEvent downloadEndEvent = new ManualResetEvent(false);
             DownloadFileEndCallback onDownloadEnd = (result) => {
-                if (IsCompletedOrSkipped(result)) {
-                    RecordCompletedImage(image, saveFileName, result, counts);
-                }
+                RecordImageResult(image, saveFileName, result, counts);
                 downloadEndEvent.Set();
             };
             downloadEndEvents.Add(downloadEndEvent);
             DownloadFileAsync(savePath, image.URL, ImageAuth, image.Referer, hashType, image.Hash, onDownloadEnd);
         }
 
+        // Returns null if the poster folder could not be created
         private string GetImageSavePath(ImageInfo image, string imageDir) {
-            UpdateMaxFileNameLength(image, imageDir);
+            if (!UpdateMaxFileNameLength(image, imageDir)) return null;
             string savePath = GetUnusedImageSavePath(image, imageDir, false);
             if (Path.GetFileName(savePath).Length > _maxFileNameLength) {
                 // Path too long, fall back to the URL file name
@@ -900,10 +1136,11 @@ namespace JDP {
             return savePath;
         }
 
-        private void UpdateMaxFileNameLength(ImageInfo image, string imageDir) {
+        // Returns false (and stops the watcher) if the poster folder could not be created
+        private bool UpdateMaxFileNameLength(ImageInfo image, string imageDir) {
             if (!ShouldSortIntoPosterFolder(image)) {
                 _maxFileNameLength = _maxFileNameLengthBaseDir;
-                return;
+                return true;
             }
             try {
                 Directory.CreateDirectory(Path.Combine(imageDir, image.Poster));
@@ -911,8 +1148,10 @@ namespace JDP {
             catch (Exception ex) {
                 Stop(StopReason.IOError);
                 Logger.Log(ex.ToString());
+                return false;
             }
             _maxFileNameLength = General.GetMaximumFileNameLength(Path.Combine(imageDir, image.Poster));
+            return true;
         }
 
         private string GetUnusedImageSavePath(ImageInfo image, string imageDir, bool pathTooLong) {
@@ -929,15 +1168,57 @@ namespace JDP {
             return savePath;
         }
 
-        private void RecordCompletedImage(ImageInfo image, string saveFileName, DownloadResult result, DownloadProgressCounts counts) {
+        private void RecordImageResult(ImageInfo image, string saveFileName, DownloadResult result, DownloadProgressCounts counts) {
             lock (_completedImages) {
-                _completedImages[image.FileName] = new DownloadInfo {
-                    Folder = GetImageFolder(image),
-                    FileName = saveFileName,
-                    Skipped = (result == DownloadResult.Skipped)
-                };
-                counts.Record(result);
-                OnDownloadStatus(new DownloadStatusEventArgs(DownloadType.Image, counts.Completed, counts.Total));
+                if (result != DownloadResult.Completed) {
+                    counts.UnwrittenFileNames.Add(saveFileName);
+                }
+                if (IsCompletedOrSkipped(result)) {
+                    RecordCompletedImage(image, saveFileName, result, counts);
+                }
+                RecordFileRetryState(image.URL, result);
+            }
+        }
+
+        // Must be called while holding the _completedImages lock
+        private void RecordCompletedImage(ImageInfo image, string saveFileName, DownloadResult result, DownloadProgressCounts counts) {
+            _completedImages[image.FileName] = new DownloadInfo {
+                Folder = GetImageFolder(image),
+                FileName = saveFileName,
+                Skipped = (result == DownloadResult.Skipped)
+            };
+            counts.Record(result);
+            OnDownloadStatus(new DownloadStatusEventArgs(DownloadType.Image, counts.Completed, counts.Total));
+        }
+
+        // A file that did not finish makes the next check download the page again so that the
+        // file is retried, but only for a few checks in a row; after that it is retried only when
+        // the page changes, so a file that always fails doesn't turn off If-Modified-Since.
+        private void RecordFileRetryState(string url, DownloadResult result) {
+            if (result != DownloadResult.RetryLater) {
+                lock (_fileFailureCheckCounts) _fileFailureCheckCounts.Remove(url);
+                return;
+            }
+            if (CountFailedCheck(url) <= _maxRefetchesForFailedFile) {
+                MarkFilesToRetry();
+            }
+        }
+
+        private int CountFailedCheck(string url) {
+            int count;
+            lock (_fileFailureCheckCounts) {
+                _fileFailureCheckCounts.TryGetValue(url, out count);
+                _fileFailureCheckCounts[url] = ++count;
+            }
+            if (count == _maxRefetchesForFailedFile + 1) {
+                Logger.Log("Giving up retrying " + url + " until the page changes.");
+            }
+            return count;
+        }
+
+        private void MarkFilesToRetry() {
+            lock (_settingsSync) {
+                _hasFilesToRetry = true;
             }
         }
 
@@ -978,6 +1259,7 @@ namespace JDP {
                 if (IsCompletedOrSkipped(result)) {
                     RecordCompletedThumbnail(thumb, result, counts);
                 }
+                RecordFileRetryState(thumb.URL, result);
                 downloadEndEvent.Set();
             };
             downloadEndEvents.Add(downloadEndEvent);
@@ -999,9 +1281,57 @@ namespace JDP {
             if (IsStopping && StopReason == StopReason.IOError) return;
             foreach (PageInfo pageInfo in _pageList) {
                 if (pageInfo.IsFresh) {
-                    Process(pageInfo, siteHelper, threadDir, imageDir, thumbDir, _completedImages, _completedThumbs);
+                    Process(pageInfo, siteHelper, threadDir, imageDir, thumbDir, _completedImages, _completedThumbs, pageInfo.URL);
                 }
             }
+        }
+
+        // Records a problem with the thread page; the first one in a check is the one shown
+        private void SetCheckError(string description, string url, Exception ex) {
+            lock (_settingsSync) {
+                if (_checkError == null) _checkError = description;
+            }
+            Logger.Log("Error downloading page " + url + ": " + description + (ex != null ? Environment.NewLine + ex : String.Empty));
+        }
+
+        private void ReportPageFailure(string url, Exception ex) {
+            SetCheckError(DescribeDownloadError(ex, url), url, ex);
+        }
+
+        private void ReportFileFailure(string url, Exception ex) {
+            lock (_settingsSync) {
+                _failedFileCount++;
+            }
+            Logger.Log("Error downloading file " + url + ": " + DescribeDownloadError(ex, url) + Environment.NewLine + ex);
+        }
+
+        private static readonly Dictionary<WebExceptionStatus, string> _webExceptionStatusTexts = new Dictionary<WebExceptionStatus, string> {
+            { WebExceptionStatus.TrustFailure, "certificate not trusted for {0}" },
+            { WebExceptionStatus.SecureChannelFailure, "secure connection failed for {0}" },
+            { WebExceptionStatus.NameResolutionFailure, "host not found: {0}" },
+            { WebExceptionStatus.ConnectFailure, "cannot connect to {0}" },
+            { WebExceptionStatus.Timeout, "timed out connecting to {0}" }
+        };
+
+        // A short, plain description of why a download failed, e.g. "HTTP 403 Forbidden"
+        internal static string DescribeDownloadError(Exception ex, string url) {
+            WebException webEx = ex as WebException;
+            if (webEx == null) return DescribeNonWebError(ex);
+            if (webEx.Status == WebExceptionStatus.ProtocolError) return DescribeHTTPError(webEx);
+            string format;
+            if (_webExceptionStatusTexts.TryGetValue(webEx.Status, out format)) return String.Format(format, new Uri(url).Host);
+            return webEx.Message;
+        }
+
+        private static string DescribeNonWebError(Exception ex) {
+            if (ex is IOException) return "connection lost";
+            return ex.Message.TrimEnd('.');
+        }
+
+        private static string DescribeHTTPError(WebException webEx) {
+            HttpWebResponse response = webEx.Response as HttpWebResponse;
+            if (response == null) return webEx.Message;
+            return String.Format("HTTP {0} {1}", (int)response.StatusCode, response.StatusDescription).TrimEnd();
         }
 
         private void EndCheck() {
@@ -1027,11 +1357,14 @@ namespace JDP {
             }
         }
 
-        private void Process(PageInfo pageInfo, SiteHelper siteHelper, string threadDir, string imageDir, string thumbDir, Dictionary<string, DownloadInfo> completedImages, Dictionary<string, DownloadInfo> completedThumbs) {
+        // liveLinkBaseURL is the URL that relative links to files not on disk are resolved
+        // against, or null to keep such links as they are in the page
+        private void Process(PageInfo pageInfo, SiteHelper siteHelper, string threadDir, string imageDir, string thumbDir, Dictionary<string, DownloadInfo> completedImages, Dictionary<string, DownloadInfo> completedThumbs, string liveLinkBaseURL) {
             HTMLParser htmlParser = siteHelper.GetHTMLParser();
             for (int i = 0; i < pageInfo.ReplaceList.Count; i++) {
                 ReplaceInfo replace = pageInfo.ReplaceList[i];
                 ApplyDownloadPathReplace(replace, threadDir, imageDir, thumbDir, completedImages, completedThumbs);
+                ApplyMissingFileReplace(replace, htmlParser.PreprocessedHTML, liveLinkBaseURL);
                 if (!ApplyThreadLinkReplace(replace, siteHelper)) {
                     pageInfo.ReplaceList.RemoveAt(i--);
                 }
@@ -1045,12 +1378,41 @@ namespace JDP {
 
         private static void ApplyDownloadPathReplace(ReplaceInfo replace, string threadDir, string imageDir, string thumbDir, Dictionary<string, DownloadInfo> completedImages, Dictionary<string, DownloadInfo> completedThumbs) {
             DownloadInfo downloadInfo;
-            if (replace.Type == ReplaceType.ImageLinkHref && completedImages.TryGetValue(replace.Tag, out downloadInfo)) {
+            if (replace.Type == ReplaceType.ImageLinkHref && TryGetSavedFile(completedImages, replace.Tag, out downloadInfo)) {
                 replace.Value = "href=\"" + General.HtmlAttributeEncode(GetRelativeDownloadPath(downloadInfo, imageDir, threadDir), false) + "\"";
             }
-            if (replace.Type == ReplaceType.ImageSrc && completedThumbs.TryGetValue(replace.Tag, out downloadInfo)) {
+            if (replace.Type == ReplaceType.ImageSrc && TryGetSavedFile(completedThumbs, replace.Tag, out downloadInfo)) {
                 replace.Value = "src=\"" + General.HtmlAttributeEncode(GetRelativeDownloadPath(downloadInfo, thumbDir, threadDir), false) + "\"";
             }
+        }
+
+        // Skipped downloads (e.g. 404) are not on disk, so they are not linked locally
+        private static bool TryGetSavedFile(Dictionary<string, DownloadInfo> completedFiles, string fileName, out DownloadInfo downloadInfo) {
+            return completedFiles.TryGetValue(fileName, out downloadInfo) && !downloadInfo.Skipped;
+        }
+
+        // A file link with no replacement value would lose its attribute when the page is
+        // written, so a file that is not on disk keeps a link to where it is online
+        private static void ApplyMissingFileReplace(ReplaceInfo replace, string html, string liveLinkBaseURL) {
+            if (replace.Value != null || !IsFileLinkReplace(replace)) return;
+            replace.Value = GetLiveFileAttribute(html.Substring(replace.Offset, replace.Length), liveLinkBaseURL);
+        }
+
+        private static bool IsFileLinkReplace(ReplaceInfo replace) {
+            return replace.Type == ReplaceType.ImageLinkHref || replace.Type == ReplaceType.ImageSrc;
+        }
+
+        // Returns the attribute with its URL made absolute, or unchanged if it can't be resolved
+        internal static string GetLiveFileAttribute(string attributeHTML, string baseURL) {
+            HTMLAttribute attribute = ParseSingleAttribute(attributeHTML);
+            string url = (attribute != null && baseURL != null) ? General.GetAbsoluteURL(baseURL, HttpUtility.HtmlDecode(attribute.Value)) : null;
+            if (url == null) return attributeHTML;
+            return attribute.Name + "=\"" + HttpUtility.HtmlAttributeEncode(url) + "\"";
+        }
+
+        private static HTMLAttribute ParseSingleAttribute(string attributeHTML) {
+            HTMLTag tag = new HTMLParser("<a " + attributeHTML + ">").FindStartTag("a");
+            return (tag != null && tag.Attributes.Count == 1) ? tag.Attributes[0] : null;
         }
 
         private static string GetRelativeDownloadPath(DownloadInfo downloadInfo, string fileDownloadDir, string threadDir) {
@@ -1302,14 +1664,59 @@ namespace JDP {
 
         // A hash mismatch only counts as incorrect if it differs from the previous try's hash
         private static bool IsIncorrectHash(HashType hashType, byte[] hash, byte[] correctHash, byte[] prevHash) {
-            return hashType != HashType.None && !General.ArraysAreEqual(hash, correctHash) &&
+            return IsHashMismatch(hashType, hash, correctHash) &&
                    (prevHash == null || !General.ArraysAreEqual(hash, prevHash));
+        }
+
+        private static bool IsHashMismatch(HashType hashType, byte[] hash, byte[] correctHash) {
+            return hashType != HashType.None && !General.ArraysAreEqual(hash, correctHash);
+        }
+
+        // General.DownloadAsync throws PageTooLargeException for an HTML page over its size limit.
+        // Matched by name so that this compiles whether or not that type exists yet.
+        private static bool IsPageTooLarge(Exception ex) {
+            return ex is PageTooLargeException;
+        }
+
+        // Moves the copy of the page saved before the download back in place
+        private static void RestorePageBackup(string path, string backupPath) {
+            TryDeleteFile(path);
+            if (File.Exists(backupPath)) {
+                TryMoveFile(backupPath, path);
+            }
+        }
+
+        // Runs a local file operation, wrapping any IO failure in a LocalFileException so that it
+        // is not mistaken for a network failure (which can also surface as an IOException)
+        private static void RunFileOperation(Action operation) {
+            try {
+                operation();
+            }
+            catch (Exception ex) {
+                if (IsFatalIOException(ex)) throw new LocalFileException(ex);
+                throw;
+            }
+        }
+
+        // Preallocates at most _maxPreallocateBytes, whatever size the server announces
+        private static void PreallocateFile(FileStream fileStream, long? totalFileSize) {
+            if (totalFileSize == null) return;
+            fileStream.SetLength(Math.Min(totalFileSize.Value, _maxPreallocateBytes));
+        }
+
+        private static long? GetAnnouncedSize(HttpWebResponse response) {
+            return response.ContentLength != -1 ? response.ContentLength : (long?)null;
+        }
+
+        private static void ThrowIfTooLarge(long? fileSize) {
+            if (fileSize > MaxFileBytes) throw new FileTooLargeException();
         }
 
         // Shared between a download's completion callbacks; guarded by the caller's lock
         private sealed class DownloadProgressCounts {
             public int Completed;
             public int Total;
+            public readonly List<string> UnwrittenFileNames = new List<string>();
 
             public void Record(DownloadResult result) {
                 if (result != DownloadResult.Skipped) {
@@ -1318,6 +1725,27 @@ namespace JDP {
                 else {
                     Total--;
                 }
+            }
+        }
+
+        private sealed class DownloadedPage {
+            public string Content;
+            public DateTime? LastModifiedTime;
+            public Encoding Encoding;
+        }
+
+        // A failure to create or write a file on the local disk
+        private sealed class LocalFileException : Exception {
+            public LocalFileException(Exception innerException) :
+                base("cannot write file: " + innerException.Message, innerException)
+            {
+            }
+        }
+
+        private sealed class FileTooLargeException : Exception {
+            public FileTooLargeException() :
+                base(String.Format("file is larger than the limit of {0} bytes", MaxFileBytes))
+            {
             }
         }
 
@@ -1334,6 +1762,7 @@ namespace JDP {
             private string _connectionGroupName;
             private int _tryNumber;
             private long? _prevDownloadedFileSize;
+            private Exception _lastError;
 
             public PageDownload(ThreadWatcher watcher, string path, string url, string auth, DateTime? cacheLastModifiedTime, DownloadPageEndCallback onDownloadEnd) {
                 _watcher = watcher;
@@ -1351,13 +1780,20 @@ namespace JDP {
                 Attempt attempt = new Attempt(this);
                 _tryNumber++;
                 if (_watcher.IsStopping || _tryNumber > _maxDownloadTries) {
+                    ReportIfOutOfTries();
                     attempt.EndTryDownload(DownloadResult.RetryLater);
                     return;
                 }
                 attempt.Start();
             }
 
-            private void Retry() {
+            private void ReportIfOutOfTries() {
+                if (_watcher.IsStopping || _lastError == null) return;
+                _watcher.ReportPageFailure(_url, _lastError);
+            }
+
+            private void Retry(Exception ex) {
+                _lastError = ex;
                 _connectionGroupName = _connectionManager.SwapForFreshConnection(_connectionGroupName, _url);
                 TryDownload();
             }
@@ -1404,7 +1840,7 @@ namespace JDP {
                     CloseQuietly(_fileStream);
                     CloseQuietly(_memoryStream);
                     if (!successful && _createdFile) {
-                        RestoreBackup();
+                        RestorePageBackup(_download._path, _download._backupPath);
                     }
                     lock (_watcher._downloadAborters) {
                         _watcher._downloadAborters.Remove(_downloadID);
@@ -1412,37 +1848,33 @@ namespace JDP {
                     }
                 }
 
-                private void RestoreBackup() {
-                    TryDeleteFile(_download._path);
-                    if (File.Exists(_download._backupPath)) {
-                        TryMoveFile(_download._backupPath, _download._path);
-                    }
-                }
-
+                // A backup that already exists is the last complete copy (the saved page is only
+                // left incomplete when one exists), so it is kept and the page is overwritten.
+                // Otherwise the page is moved to the backup; if that fails, File.Move throws and
+                // the attempt fails as a local file error before the page is overwritten.
                 private void BackupExistingPage() {
-                    if (!File.Exists(_download._path)) return;
-                    if (File.Exists(_download._backupPath)) {
-                        TryDeleteFile(_download._backupPath);
-                    }
-                    TryMoveFile(_download._path, _download._backupPath);
+                    if (!File.Exists(_download._path) || File.Exists(_download._backupPath)) return;
+                    File.Move(_download._path, _download._backupPath);
                 }
 
                 private void OnResponse(HttpWebResponse response) {
-                    BackupExistingPage();
-                    _fileStream = new FileStream(_download._path, FileMode.Create, FileAccess.Write, FileShare.Read);
-                    if (response.ContentLength != -1) {
-                        _totalFileSize = response.ContentLength;
-                        _fileStream.SetLength(_totalFileSize.Value);
-                    }
-                    _createdFile = true;
+                    _totalFileSize = GetAnnouncedSize(response);
+                    RunFileOperation(CreateFile);
                     _memoryStream = new MemoryStream();
                     _httpContentType = response.ContentType;
                     _lastModifiedTime = General.GetResponseLastModifiedTime(response);
                     _watcher.OnDownloadStart(new DownloadStartEventArgs(_downloadID, _download._url, _download._tryNumber, _totalFileSize));
                 }
 
+                private void CreateFile() {
+                    BackupExistingPage();
+                    _fileStream = new FileStream(_download._path, FileMode.Create, FileAccess.Write, FileShare.Read);
+                    _createdFile = true;
+                    PreallocateFile(_fileStream, _totalFileSize);
+                }
+
                 private void OnDownloadChunk(byte[] data, int dataLength) {
-                    _fileStream.Write(data, 0, dataLength);
+                    RunFileOperation(() => _fileStream.Write(data, 0, dataLength));
                     _memoryStream.Write(data, 0, dataLength);
                     _downloadedFileSize += dataLength;
                     _watcher.OnDownloadProgress(new DownloadProgressEventArgs(_downloadID, _downloadedFileSize));
@@ -1451,7 +1883,7 @@ namespace JDP {
                 private void OnComplete() {
                     byte[] pageBytes = _memoryStream.ToArray();
                     if (IsSizeMismatch(_totalFileSize, _downloadedFileSize)) {
-                        _fileStream.SetLength(_downloadedFileSize);
+                        RunFileOperation(() => _fileStream.SetLength(_downloadedFileSize));
                     }
                     if (IsIncompleteDownload(_totalFileSize, _downloadedFileSize, _download._prevDownloadedFileSize)) {
                         // Corrupt download, retry
@@ -1477,14 +1909,20 @@ namespace JDP {
                         _watcher.Stop(StopReason.PageNotFound);
                         EndTryDownload(DownloadResult.Skipped);
                     }
-                    else if (IsFatalIOException(ex)) {
+                    else if (ex is LocalFileException) {
                         // Fatal IO error, stop
+                        Logger.Log("Error saving page " + _download._path + ":" + Environment.NewLine + ex.InnerException);
                         _watcher.Stop(StopReason.IOError);
                         EndTryDownload(DownloadResult.Skipped);
                     }
+                    else if (IsPageTooLarge(ex)) {
+                        // Another try would get the same page, so report it now
+                        _watcher.ReportPageFailure(_download._url, ex);
+                        EndTryDownload(DownloadResult.Skipped);
+                    }
                     else {
-                        // Other error, retry
-                        _download.Retry();
+                        // Other error (HTTP status, TLS, network), retry
+                        _download.Retry(ex);
                     }
                 }
             }
@@ -1505,6 +1943,7 @@ namespace JDP {
             private int _tryNumber;
             private byte[] _prevHash;
             private long? _prevDownloadedFileSize;
+            private Exception _lastError;
 
             public FileDownload(ThreadWatcher watcher, string path, string url, string auth, string referer, HashType hashType, byte[] correctHash, DownloadFileEndCallback onDownloadEnd) {
                 _watcher = watcher;
@@ -1523,13 +1962,20 @@ namespace JDP {
                 Attempt attempt = new Attempt(this);
                 _tryNumber++;
                 if (_watcher.IsStopping || _tryNumber > _maxDownloadTries) {
+                    ReportIfOutOfTries();
                     attempt.EndTryDownload(DownloadResult.RetryLater);
                     return;
                 }
                 attempt.Start();
             }
 
-            private void Retry() {
+            private void ReportIfOutOfTries() {
+                if (_watcher.IsStopping || _lastError == null) return;
+                _watcher.ReportFileFailure(_url, _lastError);
+            }
+
+            private void Retry(Exception ex) {
+                _lastError = ex;
                 _connectionGroupName = _connectionManager.SwapForFreshConnection(_connectionGroupName, _url);
                 TryDownload();
             }
@@ -1581,20 +2027,24 @@ namespace JDP {
                 }
 
                 private void OnResponse(HttpWebResponse response) {
-                    _fileStream = new FileStream(_download._path, FileMode.Create, FileAccess.Write, FileShare.Read);
-                    if (response.ContentLength != -1) {
-                        _totalFileSize = response.ContentLength;
-                        _fileStream.SetLength(_totalFileSize.Value);
-                    }
-                    _createdFile = true;
+                    _totalFileSize = GetAnnouncedSize(response);
+                    ThrowIfTooLarge(_totalFileSize);
+                    RunFileOperation(CreateFile);
                     if (_download._hashType != HashType.None) {
                         _hashStream = new HashGeneratorStream(_download._hashType);
                     }
                     _watcher.OnDownloadStart(new DownloadStartEventArgs(_downloadID, _download._url, _download._tryNumber, _totalFileSize));
                 }
 
+                private void CreateFile() {
+                    _fileStream = new FileStream(_download._path, FileMode.Create, FileAccess.Write, FileShare.Read);
+                    _createdFile = true;
+                    PreallocateFile(_fileStream, _totalFileSize);
+                }
+
                 private void OnDownloadChunk(byte[] data, int dataLength) {
-                    _fileStream.Write(data, 0, dataLength);
+                    ThrowIfTooLarge(_downloadedFileSize + dataLength);
+                    RunFileOperation(() => _fileStream.Write(data, 0, dataLength));
                     if (_hashStream != null) _hashStream.Write(data, 0, dataLength);
                     _downloadedFileSize += dataLength;
                     _watcher.OnDownloadProgress(new DownloadProgressEventArgs(_downloadID, _downloadedFileSize));
@@ -1607,7 +2057,7 @@ namespace JDP {
                 private void OnComplete() {
                     byte[] hash = GetDownloadedHash();
                     if (IsSizeMismatch(_totalFileSize, _downloadedFileSize)) {
-                        _fileStream.SetLength(_downloadedFileSize);
+                        RunFileOperation(() => _fileStream.SetLength(_downloadedFileSize));
                     }
                     bool incorrectHash = IsIncorrectHash(_download._hashType, hash, _download._correctHash, _download._prevHash);
                     bool incompleteDownload = IsIncompleteDownload(_totalFileSize, _downloadedFileSize, _download._prevDownloadedFileSize);
@@ -1617,26 +2067,53 @@ namespace JDP {
                         _download._prevDownloadedFileSize = _downloadedFileSize;
                         throw new Exception("Download is corrupt.");
                     }
+                    WarnIfHashMismatch(hash);
                     Cleanup(true);
                     _watcher.OnDownloadEnd(new DownloadEndEventArgs(_downloadID, _downloadedFileSize, true));
                     EndTryDownload(DownloadResult.Completed);
                 }
 
+                // Two tries that return the same bytes are accepted even if they don't match the
+                // hash in the page, since some sites publish wrong hashes
+                private void WarnIfHashMismatch(byte[] hash) {
+                    if (!IsHashMismatch(_download._hashType, hash, _download._correctHash)) return;
+                    Logger.Log("Warning: saved " + _download._path + " although it does not match the hash given by the page, because two downloads of " +
+                        _download._url + " returned the same data.");
+                }
+
                 private void OnException(Exception ex) {
                     Cleanup(false);
                     _watcher.OnDownloadEnd(new DownloadEndEventArgs(_downloadID, _downloadedFileSize, false));
-                    if (ex is DirectoryNotFoundException || ex is UnauthorizedAccessException) {
-                        // Fatal IO error, stop
-                        _watcher.Stop(StopReason.IOError);
+                    if (ex is LocalFileException) {
+                        HandleLocalFileError(ex);
+                    }
+                    else if (ex is HTTP404Exception) {
+                        // File deleted from the server, skip
                         EndTryDownload(DownloadResult.Skipped);
                     }
-                    else if (ex is HTTP404Exception || ex is IOException) {
-                        // Fatal problem with this file, skip
+                    else if (ex is FileTooLargeException) {
+                        _watcher.ReportFileFailure(_download._url, ex);
                         EndTryDownload(DownloadResult.Skipped);
                     }
                     else {
-                        // Other error, retry
-                        _download.Retry();
+                        // Other error (HTTP status, TLS, network, corrupt data), retry
+                        _download.Retry(ex);
+                    }
+                }
+
+                private void HandleLocalFileError(Exception ex) {
+                    Exception inner = ex.InnerException;
+                    if (inner is DirectoryNotFoundException || inner is UnauthorizedAccessException) {
+                        // Fatal IO error, stop
+                        Logger.Log("Error saving file " + _download._path + ":" + Environment.NewLine + inner);
+                        _watcher.Stop(StopReason.IOError);
+                        EndTryDownload(DownloadResult.Skipped);
+                    }
+                    else {
+                        // Problem with this one file (e.g. disk full, file in use), try it again
+                        // in a later check
+                        _watcher.ReportFileFailure(_download._url, ex);
+                        EndTryDownload(DownloadResult.RetryLater);
                     }
                 }
             }
