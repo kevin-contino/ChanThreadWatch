@@ -82,6 +82,18 @@ namespace JDP {
 
     public class HTTP304Exception : Exception { }
 
+    // HTTP 429, or 503 with Retry-After: the server asks the client to wait before sending more
+    // requests. RetryAfter is the wait the server gave, or null if it gave none (or an invalid one).
+    public class HTTPRateLimitedException : Exception {
+        public HTTPRateLimitedException(TimeSpan? retryAfter, Exception innerException)
+            : base("Rate limited by the server.", innerException)
+        {
+            RetryAfter = retryAfter;
+        }
+
+        public TimeSpan? RetryAfter { get; private set; }
+    }
+
     public class PageTooLargeException : Exception {
         public PageTooLargeException(int maxBytes)
             : base("The page is larger than the maximum of " + maxBytes + " bytes.") { }
@@ -106,24 +118,109 @@ namespace JDP {
         }
     }
 
+    // One per host, shared by every watcher: limits the connections to the host, and pauses all
+    // requests to it while it rate limits this client (a limit applies to the client as a whole)
     public class ConnectionManager {
         private const int _maxConnectionsPerHost = 4;
+
+        // A rate limit pause lasts at least MinRateLimitPauseMS and at most MaxRateLimitPauseMS,
+        // whatever the server asks. When the server gives no usable wait time, the first pause
+        // lasts UnspecifiedRateLimitPauseMS and each later one twice as long as the one before,
+        // until a download from the host succeeds.
+        internal const int DefaultMinRateLimitPauseMS = 5 * 1000;
+        internal const int DefaultMaxRateLimitPauseMS = 2 * 60 * 60 * 1000;
+        internal const int DefaultUnspecifiedRateLimitPauseMS = 60 * 1000;
+        private const int _maxRateLimitBackoffDoublings = 16;
+
+        // Settable so tests can use short pauses. Production code never changes them.
+        internal static int MinRateLimitPauseMS { get; set; } = DefaultMinRateLimitPauseMS;
+        internal static int MaxRateLimitPauseMS { get; set; } = DefaultMaxRateLimitPauseMS;
+        internal static int UnspecifiedRateLimitPauseMS { get; set; } = DefaultUnspecifiedRateLimitPauseMS;
 
         private static Dictionary<string, ConnectionManager> _connectionManagers = new Dictionary<string, ConnectionManager>(StringComparer.OrdinalIgnoreCase);
 
         private FIFOSemaphore _semaphore = new FIFOSemaphore(_maxConnectionsPerHost, _maxConnectionsPerHost);
         private Stack<string> _groupNames = new Stack<string>();
+        private readonly string _host;
+        private readonly object _pauseSync = new object();
+        private long _pausedUntilTicks;
+        private int _rateLimitBackoffLevel;
+
+        private ConnectionManager(string host) {
+            _host = host;
+        }
 
         public static ConnectionManager GetInstance(string url) {
             string host = (new Uri(url)).Host;
             ConnectionManager manager;
             lock (_connectionManagers) {
                 if (!_connectionManagers.TryGetValue(host, out manager)) {
-                    manager = new ConnectionManager();
+                    manager = new ConnectionManager(host);
                     _connectionManagers[host] = manager;
                 }
             }
             return manager;
+        }
+
+        public string Host {
+            get { return _host; }
+        }
+
+        // Whether requests to the host are paused because it rate limited this client
+        public bool IsPaused {
+            get { lock (_pauseSync) { return TickCount.Now < _pausedUntilTicks; } }
+        }
+
+        // The TickCount time at which the last pause ends (or ended)
+        public long PausedUntilTicks {
+            get { lock (_pauseSync) { return _pausedUntilTicks; } }
+        }
+
+        // Pauses all requests to the host after it answered with a rate limit, and returns how
+        // many milliseconds the pause lasts from now. A pause is only ever extended, never cut
+        // short, by a later answer.
+        public int Pause(TimeSpan? retryAfter) {
+            lock (_pauseSync) {
+                long now = TickCount.Now;
+                int pauseMS = ChoosePauseMS(retryAfter, now < _pausedUntilTicks);
+                _pausedUntilTicks = Math.Max(_pausedUntilTicks, now + pauseMS);
+                return (int)(_pausedUntilTicks - now);
+            }
+        }
+
+        // Must be called while holding _pauseSync. An answer to a request that was sent before
+        // the pause began does not raise the backoff again.
+        private int ChoosePauseMS(TimeSpan? retryAfter, bool alreadyPaused) {
+            if (retryAfter != null) return ClampPauseMS(retryAfter.Value.TotalMilliseconds);
+            if (!alreadyPaused && _rateLimitBackoffLevel < _maxRateLimitBackoffDoublings) _rateLimitBackoffLevel++;
+            return ClampPauseMS(UnspecifiedRateLimitPauseMS * Math.Pow(2, Math.Max(_rateLimitBackoffLevel - 1, 0)));
+        }
+
+        private static int ClampPauseMS(double pauseMS) {
+            return (int)Math.Max(MinRateLimitPauseMS, Math.Min(MaxRateLimitPauseMS, pauseMS));
+        }
+
+        // A download from the host succeeded, so the next pause without a wait time starts over
+        public void ResetRateLimitBackoff() {
+            lock (_pauseSync) {
+                _rateLimitBackoffLevel = 0;
+            }
+        }
+
+        // Ends every pause and backoff, so that one test's rate limit does not affect the next
+        internal static void ResetRateLimitsForTesting() {
+            lock (_connectionManagers) {
+                foreach (ConnectionManager manager in _connectionManagers.Values) {
+                    manager.ResetRateLimit();
+                }
+            }
+        }
+
+        private void ResetRateLimit() {
+            lock (_pauseSync) {
+                _pausedUntilTicks = 0;
+                _rateLimitBackoffLevel = 0;
+            }
         }
 
         public string ObtainConnectionGroupName() {
@@ -1106,7 +1203,9 @@ namespace JDP {
     public enum DownloadResult {
         Completed = 1,
         Skipped = 2,
-        RetryLater = 3
+        RetryLater = 3,
+        // Not sent, or answered with a rate limit: retried once the host's pause is over
+        RateLimited = 4
     }
 
     public enum StopReason {

@@ -77,6 +77,9 @@ namespace JDP {
         private string _reparseError;
         // Checks in a row that each file (by URL) failed in; guarded by itself
         private readonly Dictionary<string, int> _fileFailureCheckCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        // The host whose rate limit held back downloads of this thread, or null if none did; the
+        // downloads are retried in the first check after the host's pause
+        private ConnectionManager _rateLimitedConnection;
 
         static ThreadWatcher() {
             // HttpWebRequest uses ThreadPool for asynchronous calls
@@ -317,6 +320,21 @@ namespace JDP {
         // The images and thumbnails that failed in the last check
         public int FailedFileCount {
             get { lock (_settingsSync) { return _failedFileCount; } }
+        }
+
+        // The host whose rate limit holds back downloads of this thread, or null if none does
+        public string RateLimitedHost {
+            get { lock (_settingsSync) { return _rateLimitedConnection != null ? _rateLimitedConnection.Host : null; } }
+        }
+
+        // When the rate limit pause of RateLimitedHost ends (now if there is none); the held back
+        // downloads are retried in the first check after it
+        public DateTime RateLimitResumeTime {
+            get {
+                long resumeTicks;
+                lock (_settingsSync) { resumeTicks = _rateLimitedConnection != null ? _rateLimitedConnection.PausedUntilTicks : TickCount.Now; }
+                return DateTime.Now.AddMilliseconds(resumeTicks - TickCount.Now);
+            }
         }
 
         public Dictionary<string, ThreadWatcher> DescendantThreads {
@@ -789,8 +807,10 @@ namespace JDP {
             EndCheck();
         }
 
-        // A one-time download whose page could not be downloaded did not complete
+        // A one-time download whose page could not be downloaded did not complete. One with
+        // downloads held back by a rate limit keeps checking until they have been retried.
         private void StopOneTimeDownload() {
+            if (RateLimitedHost != null) return;
             string checkError = CheckError;
             Stop(checkError != null ? StopReason.Other : StopReason.DownloadComplete, checkError);
         }
@@ -802,8 +822,41 @@ namespace JDP {
             lock (_settingsSync) {
                 if (!_hasFilesToRetry) return;
             }
+            DropPageCacheTimes();
+        }
+
+        private void DropPageCacheTimes() {
             foreach (PageInfo pageInfo in _pageList) {
                 pageInfo.CacheTime = null;
+            }
+        }
+
+        // Once the rate limit pause is over (including any extension by other downloads), the
+        // pages are downloaded in full (not only if modified), so that the files held back by it
+        // are queued and retried
+        private void RetryRateLimitedDownloadsIfResumed() {
+            lock (_settingsSync) {
+                if (_rateLimitedConnection == null || _rateLimitedConnection.IsPaused) return;
+                _rateLimitedConnection = null;
+            }
+            DropPageCacheTimes();
+        }
+
+        // Pauses all requests to the host (from every watcher, since a server limits the client
+        // as a whole) for as long as the server asked, and holds back this download until then
+        private void HandleRateLimit(ConnectionManager connectionManager, HTTPRateLimitedException ex) {
+            int pauseMS = connectionManager.Pause(ex.RetryAfter);
+            General.LogQuietly(String.Format("Rate limited by {0}, pausing requests to it for {1} seconds{2}.",
+                connectionManager.Host, (pauseMS + 999) / 1000, ex.RetryAfter == null ? " (no Retry-After given)" : String.Empty));
+            RecordRateLimitedDownload(connectionManager);
+        }
+
+        // A download that was held back by a rate limit; of several paused hosts, keeps the one
+        // whose pause ends last
+        private void RecordRateLimitedDownload(ConnectionManager connectionManager) {
+            lock (_settingsSync) {
+                if (_rateLimitedConnection != null && _rateLimitedConnection.PausedUntilTicks >= connectionManager.PausedUntilTicks) return;
+                _rateLimitedConnection = connectionManager;
             }
         }
 
@@ -821,6 +874,7 @@ namespace JDP {
                         InitializeCheckState(siteHelper);
                     }
                 }
+                RetryRateLimitedDownloadsIfResumed();
             }
             catch (Exception ex) {
                 if (IsFatalIOException(ex)) {
@@ -1219,7 +1273,9 @@ namespace JDP {
         // A file that did not finish makes the next check download the page again so that the
         // file is retried, but only for a few checks in a row; after that it is retried only when
         // the page changes, so a file that always fails doesn't turn off If-Modified-Since.
+        // A file held back by a rate limit is retried after the pause and does not count as failed.
         private void RecordFileRetryState(string url, DownloadResult result) {
+            if (result == DownloadResult.RateLimited) return;
             if (result != DownloadResult.RetryLater) {
                 lock (_fileFailureCheckCounts) _fileFailureCheckCounts.Remove(url);
                 return;
@@ -1809,6 +1865,12 @@ namespace JDP {
                     attempt.EndTryDownload(DownloadResult.RetryLater);
                     return;
                 }
+                if (_connectionManager.IsPaused) {
+                    // The host is rate limiting this client, so nothing is sent to it until the pause is over
+                    _watcher.RecordRateLimitedDownload(_connectionManager);
+                    attempt.EndTryDownload(DownloadResult.RateLimited);
+                    return;
+                }
                 attempt.Start();
             }
 
@@ -1845,6 +1907,7 @@ namespace JDP {
                 }
 
                 public void EndTryDownload(DownloadResult result) {
+                    if (result == DownloadResult.Completed) _download._connectionManager.ResetRateLimitBackoff();
                     _download._connectionManager.ReleaseConnectionGroupName(_download._connectionGroupName);
                     _download._onDownloadEnd(result, _content, _lastModifiedTime, _encoding);
                 }
@@ -1925,30 +1988,40 @@ namespace JDP {
                 private void OnException(Exception ex) {
                     Cleanup(false);
                     _watcher.OnDownloadEnd(new DownloadEndEventArgs(_downloadID, _downloadedFileSize, false));
+                    if (ex is HTTPRateLimitedException) {
+                        // Too many requests, pause the host and retry after the pause
+                        _watcher.HandleRateLimit(_download._connectionManager, (HTTPRateLimitedException)ex);
+                        EndTryDownload(DownloadResult.RateLimited);
+                    }
+                    else if (!TryEndWithoutRetry(ex)) {
+                        // Other error (HTTP status, TLS, network), retry
+                        _download.Retry(ex);
+                    }
+                }
+
+                // Ends the download if another try would not help; returns false for any other error
+                private bool TryEndWithoutRetry(Exception ex) {
                     if (ex is HTTP304Exception) {
                         // Page not modified, skip
-                        EndTryDownload(DownloadResult.Skipped);
                     }
                     else if (ex is HTTP404Exception) {
                         // Page not found, stop
                         _watcher.Stop(StopReason.PageNotFound);
-                        EndTryDownload(DownloadResult.Skipped);
                     }
                     else if (ex is LocalFileException) {
                         // Fatal IO error, stop
                         Logger.Log("Error saving page " + _download._path + ":" + Environment.NewLine + ex.InnerException);
                         _watcher.Stop(StopReason.IOError);
-                        EndTryDownload(DownloadResult.Skipped);
                     }
                     else if (IsPageTooLarge(ex)) {
                         // Another try would get the same page, so report it now
                         _watcher.ReportPageFailure(_download._url, ex);
-                        EndTryDownload(DownloadResult.Skipped);
                     }
                     else {
-                        // Other error (HTTP status, TLS, network), retry
-                        _download.Retry(ex);
+                        return false;
                     }
+                    EndTryDownload(DownloadResult.Skipped);
+                    return true;
                 }
             }
         }
@@ -1991,6 +2064,12 @@ namespace JDP {
                     attempt.EndTryDownload(DownloadResult.RetryLater);
                     return;
                 }
+                if (_connectionManager.IsPaused) {
+                    // The host is rate limiting this client, so nothing is sent to it until the pause is over
+                    _watcher.RecordRateLimitedDownload(_connectionManager);
+                    attempt.EndTryDownload(DownloadResult.RateLimited);
+                    return;
+                }
                 attempt.Start();
             }
 
@@ -2023,6 +2102,7 @@ namespace JDP {
                 }
 
                 public void EndTryDownload(DownloadResult result) {
+                    if (result == DownloadResult.Completed) _download._connectionManager.ResetRateLimitBackoff();
                     _download._connectionManager.ReleaseConnectionGroupName(_download._connectionGroupName);
                     _download._onDownloadEnd(result);
                 }
@@ -2115,6 +2195,11 @@ namespace JDP {
                     else if (ex is HTTP404Exception) {
                         // File deleted from the server, skip
                         EndTryDownload(DownloadResult.Skipped);
+                    }
+                    else if (ex is HTTPRateLimitedException) {
+                        // Too many requests, pause the host and retry after the pause
+                        _watcher.HandleRateLimit(_download._connectionManager, (HTTPRateLimitedException)ex);
+                        EndTryDownload(DownloadResult.RateLimited);
                     }
                     else if (ex is FileTooLargeException) {
                         _watcher.ReportFileFailure(_download._url, ex);

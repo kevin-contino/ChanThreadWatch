@@ -1280,13 +1280,15 @@ namespace JDP {
 
         private void SetWaitStatus(ThreadWatcher watcher) {
             int remainingSeconds = (watcher.MillisecondsUntilNextCheck + 999) / 1000;
-            DisplayStatus(watcher, FormatWaitStatus(remainingSeconds, watcher.CheckError, watcher.FailedFileCount));
+            DisplayStatus(watcher, FormatWaitStatus(remainingSeconds, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitedHost, watcher.RateLimitResumeTime));
         }
 
-        // E.g. "Waiting 60 seconds", "Error: HTTP 403 Forbidden, waiting 60 seconds" or
+        // E.g. "Waiting 60 seconds", "Error: HTTP 403 Forbidden, waiting 60 seconds",
+        // "Rate limited by i.4cdn.org, resuming at 14:32:05, waiting 60 seconds" or
         // "2 files failed, waiting 60 seconds"
-        internal static string FormatWaitStatus(int remainingSeconds, string checkError, int failedFileCount) {
+        internal static string FormatWaitStatus(int remainingSeconds, string checkError, int failedFileCount, string rateLimitedHost = null, DateTime rateLimitResumeTime = default(DateTime)) {
             if (checkError != null) return String.Format("Error: {0}, waiting {1} seconds", checkError, remainingSeconds);
+            if (rateLimitedHost != null) return String.Format("Rate limited by {0}, resuming at {1:HH:mm:ss}, waiting {2} seconds", rateLimitedHost, rateLimitResumeTime, remainingSeconds);
             if (failedFileCount > 0) return String.Format("{0}, waiting {1} seconds", FormatFailedFileCount(failedFileCount), remainingSeconds);
             return String.Format("Waiting {0} seconds", remainingSeconds);
         }
