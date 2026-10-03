@@ -30,7 +30,7 @@ import subprocess
 import sys
 import tempfile
 from html.parser import HTMLParser
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SITES_DIR = os.path.join(REPO, "ChanThreadWatch.Tests", "Fixtures", "sites")
@@ -212,6 +212,23 @@ class Mapper:
             return self.url_tokens(base) + "." + ext.lower()
         return self.url_tokens(segment)
 
+    def image_md5_path(self, segments):
+        """Maps a "same image" path (/<board>/image/<md5>, optionally with a trailing "/") whose MD5
+        is standard base64, and so can contain "/" or "+" and span segments, or is percent-encoded.
+        The MD5 becomes {{md5u_N}}. Returns None if the path has no such MD5; a URL-safe MD5 is
+        one segment, which segment() maps."""
+        lowered = [s.lower() for s in segments]
+        if "image" not in lowered:
+            return None
+        start = lowered.index("image") + 1
+        end = len(segments) - 1 if len(segments) > start + 1 and segments[-1] == "" else len(segments)
+        md5 = "/".join(segments[start:end])
+        index = self.md5_index(unquote(md5)) if re.search(r"[/+%]", md5) else None
+        if index is None:
+            return None
+        head = [self.segment(s, lowered[i - 1] if i > 0 else "") for i, s in enumerate(segments[:start])]
+        return "/".join(head + ["{{md5u_%d}}" % index] + segments[end:])
+
     def url(self, value, page_host):
         value = value.strip()
         parts = urlsplit(value)
@@ -221,8 +238,10 @@ class Mapper:
         if parts.netloc:
             prefix = "{{base}}" if (parts.hostname or "") == page_host else "{{media}}"
         segments = parts.path.split("/")
-        mapped = [self.segment(s, segments[i - 1].lower() if i > 0 else "") for i, s in enumerate(segments)]
-        path = "/".join(mapped)
+        path = self.image_md5_path(segments)
+        if path is None:
+            mapped = [self.segment(s, segments[i - 1].lower() if i > 0 else "") for i, s in enumerate(segments)]
+            path = "/".join(mapped)
         if prefix and not path.startswith("/"):
             path = "/" + path
         fragment = "#" + self.url_tokens(parts.fragment) if parts.fragment else ""

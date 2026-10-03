@@ -14,14 +14,6 @@ namespace JDP.Tests.Integration {
     public class SiteFixtureDownloadTests : ThreadWatcherIntegrationTestBase {
         public static IEnumerable<object[]> Fixtures => SiteFixtures.Names;
 
-        // Known issue: FoolFuukaSiteHelper rewrites only the thread_image_link and post_file_filename
-        // links of an image. The desuarchive markup has two more plain links to each image (one
-        // in post_file_controls, one in the post header), and the saved page keeps
-        // them pointing at the server instead of the downloaded file. Remove the entry once fixed.
-        private static readonly Dictionary<string, int> KnownUnrewrittenLinksPerImage = new Dictionary<string, int> {
-            { "foolfuuka-desuarchive", 2 }
-        };
-
         [TestMethod]
         [DynamicData(nameof(Fixtures))]
         public void DownloadsFixtureThread(string name) {
@@ -96,10 +88,7 @@ namespace JDP.Tests.Integration {
             foreach (ThumbnailInfo thumb in fixture.Thumbnails) {
                 Assert.IsTrue(srcs.Contains("thumbs/" + thumb.FileName), name + " link to " + thumb.URL);
             }
-            int unrewrittenPerImage;
-            KnownUnrewrittenLinksPerImage.TryGetValue(name, out unrewrittenPerImage);
-            List<string> expectedServerLinks = fixture.Images.SelectMany(i => System.Linq.Enumerable.Repeat("href=\"" + i.URL + "\"", unrewrittenPerImage)).ToList();
-            CollectionAssert.AreEquivalent(expectedServerLinks, serverLinks, name + " links not rewritten:\n" + String.Join("\n", serverLinks.Take(20)));
+            Assert.IsEmpty(serverLinks, name + " links not rewritten:\n" + String.Join("\n", serverLinks.Take(20)));
         }
 
         private static string PathOf(string url) => new Uri(url).PathAndQuery;
