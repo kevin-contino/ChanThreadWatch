@@ -1034,14 +1034,17 @@ namespace JDP {
             return fileInfo.Substring(hashIndex).Replace("<!--", "").Replace("-->", "").Trim();
         }
 
-        // Reads the MD5 from the "same image" search link between the post header and the image link.
+        // Reads the MD5 from the "same image" search link (/<board>/image/<md5>) between the post
+        // header and the image link. The MD5 is URL-safe or standard base64, so it can contain "/"
+        // and is everything after the /image/ segment, percent-decoded.
         private string GetSimilarImageMD5(FileTags file) {
             HTMLTag similarImageLinkStartTag = Enumerable.FirstOrDefault(Enumerable.Where(
                 _htmlParser.FindStartTags(file.InfoTagRange.EndTag, file.LinkStartTag, "a"), t => t.GetAttributeValueOrEmpty("href").Contains("/image/")));
             if (similarImageLinkStartTag == null) return null;
 
-            string[] hrefSplit = similarImageLinkStartTag.GetAttributeValueOrEmpty("href").Split('/');
-            string imageMD5 = hrefSplit[hrefSplit.Length - 1].Replace('-', '+').Replace('_', '/');
+            string href = HttpUtility.HtmlDecode(similarImageLinkStartTag.GetAttributeValueOrEmpty("href"));
+            string encodedMD5 = href.Substring(href.IndexOf("/image/", StringComparison.Ordinal) + "/image/".Length);
+            string imageMD5 = Uri.UnescapeDataString(encodedMD5).Replace('-', '+').Replace('_', '/');
             return imageMD5.PadRight(imageMD5.Length + (4 - imageMD5.Length % 4) % 4, '=');
         }
 
@@ -1084,7 +1087,7 @@ namespace JDP {
                 ThumbnailInfo thumb = CreateThumbnail(file.ThumbURL);
                 if (IsMissingThumbnailData(thumb)) continue;
 
-                AddImageReplaces(replaceList, file, fileNameLinkTagRange, image, thumb);
+                AddImageReplaces(replaceList, postTagRange, file, fileNameLinkTagRange, image, thumb);
 
                 imageList.Add(image);
                 thumbnailList.Add(thumb);
@@ -1199,13 +1202,36 @@ namespace JDP {
             return String.IsNullOrEmpty(innerHTML) ? null : innerHTML;
         }
 
-        private static void AddImageReplaces(List<ReplaceInfo> replaceList, FileTags file, HTMLTagRange fileNameLinkTagRange, ImageInfo image, ThumbnailInfo thumb) {
+        private void AddImageReplaces(List<ReplaceInfo> replaceList, HTMLTagRange postTagRange, FileTags file, HTMLTagRange fileNameLinkTagRange, ImageInfo image, ThumbnailInfo thumb) {
             if (replaceList == null) return;
             AddAttributeReplace(replaceList, file.LinkStartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
             if (fileNameLinkTagRange != null) {
                 AddAttributeReplace(replaceList, fileNameLinkTagRange.StartTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
             }
+            AddOtherImageLinkReplaces(replaceList, postTagRange, file, fileNameLinkTagRange, image);
             AddAttributeReplace(replaceList, file.ThumbImageTag.GetAttribute("src"), ReplaceType.ImageSrc, thumb.FileName);
+        }
+
+        // Some markup (e.g. desuarchive) has more plain links to the full image, in
+        // post_file_controls and in the post header. Links that point elsewhere (search, view
+        // same, report) are kept.
+        private void AddOtherImageLinkReplaces(List<ReplaceInfo> replaceList, HTMLTagRange postTagRange, FileTags file, HTMLTagRange fileNameLinkTagRange, ImageInfo image) {
+            foreach (HTMLTag linkTag in Enumerable.Where(_htmlParser.FindStartTags(postTagRange, "a"), t => IsOtherImageLink(t, file, fileNameLinkTagRange, image.URL))) {
+                AddAttributeReplace(replaceList, linkTag.GetAttribute("href"), ReplaceType.ImageLinkHref, image.FileName);
+            }
+        }
+
+        // True if the link is not one of the links AddImageReplaces rewrites itself, and its URL
+        // resolves to the full image URL
+        private bool IsOtherImageLink(HTMLTag linkTag, FileTags file, HTMLTagRange fileNameLinkTagRange, string imageURL) {
+            if (linkTag == file.LinkStartTag) return false;
+            if (fileNameLinkTagRange != null && linkTag == fileNameLinkTagRange.StartTag) return false;
+            return IsLinkTo(linkTag, imageURL);
+        }
+
+        private bool IsLinkTo(HTMLTag linkTag, string url) {
+            string href = linkTag.GetAttributeValue("href");
+            return href != null && String.Equals(General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(href)), url, StringComparison.Ordinal);
         }
     }
 

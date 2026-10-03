@@ -365,6 +365,61 @@ namespace JDP.Tests {
             Assert.HasCount(2, replaces);
         }
 
+        // Without an MD5 comment, the MD5 is read from the "same image" link (/<board>/image/<md5>).
+        // A standard base64 MD5 can contain "/" and "+", and must not be cut at its last "/".
+        // Each form here is the same 16 bytes of 0xFB.
+        [TestMethod]
+        [DataRow("+/v7+/v7+/v7+/v7+/v7+w")]
+        [DataRow("+/v7+/v7+/v7+/v7+/v7+w==")]
+        [DataRow("-_v7-_v7-_v7-_v7-_v7-w")]
+        [DataRow("%2B%2Fv7%2B%2Fv7%2B%2Fv7%2B%2Fv7%2B%2Fv7%2Bw%3D%3D")]
+        public void FuukaGetImagesReadsMD5FromSameImageLink(string linkMD5) {
+            const string imageURL = "https://i.warosu.org/data/g/img/1.jpg";
+            string html = FuukaPostWithSameImageLink("p1", imageURL, "/g/image/" + linkMD5);
+
+            List<ImageInfo> images = AssertOnlyImage(FuukaURL, html, imageURL);
+
+            Assert.AreEqual(HashType.MD5, images[0].HashType);
+            CollectionAssert.AreEqual(System.Linq.Enumerable.Repeat((byte)0xFB, 16).ToArray(), images[0].Hash);
+        }
+
+        [TestMethod]
+        public void FuukaGetImagesWithoutMD5CommentOrSameImageLinkHasNoHash() {
+            const string imageURL = "https://i.warosu.org/data/g/img/1.jpg";
+            string html = FuukaPostWithSameImageLink("p1", imageURL, "/g/thread/123");
+
+            List<ImageInfo> images = AssertOnlyImage(FuukaURL, html, imageURL);
+
+            Assert.AreEqual(HashType.None, images[0].HashType);
+            Assert.IsNull(images[0].Hash);
+        }
+
+        // Every link in the post to the full image is rewritten to the local file, including the
+        // plain links desuarchive has in post_file_controls and the post header; links to other
+        // URLs (search, a different image) are kept
+        [TestMethod]
+        public void FoolFuukaGetImagesRewritesEveryLinkToTheFullImage() {
+            const string imageURL = "https://i.4pcdn.org/tg/1.jpg";
+            string html = "<article class=\"post has_image\" id=\"1\">" +
+                "<div class=\"post_file\"><span class=\"post_file_controls\"><a href=\"/tg/search/image/AQIDBAUGBwgJCgsMDQ4PEA/\"></a><a href=\"" + imageURL + "\"></a></span>" +
+                "<a href=\"" + imageURL + "\" class=\"post_file_filename\">a.jpg</a></div>" +
+                "<div><a href=\"" + imageURL + "\" class=\"thread_image_link\"><img src=\"https://i.4pcdn.org/tg/1s.jpg\" data-md5=\"AQIDBAUGBwgJCgsMDQ4PEA==\"></a></div>" +
+                "<header><div><a href=\"https://i.4pcdn.org/tg/2.jpg\"></a><a href=\"//i.4pcdn.org/tg/1.jpg\"></a></div>" +
+                "<span class=\"post_poster_data\"><span class=\"post_author\">Frank</span></span></header></article>";
+            SiteHelper helper = CreateHelper(FoolFuukaURL, html);
+            var replaces = new List<ReplaceInfo>();
+
+            List<ImageInfo> images = helper.GetImages(replaces, new List<ThumbnailInfo>());
+
+            Assert.HasCount(1, images);
+            string[] rewrittenLinks = replaces.Where(r => r.Type == ReplaceType.ImageLinkHref)
+                .Select(r => helper.GetHTMLParser().PreprocessedHTML.Substring(r.Offset, r.Length)).ToArray();
+            CollectionAssert.AreEquivalent(new[] {
+                "href=\"" + imageURL + "\"", "href=\"" + imageURL + "\"", "href=\"" + imageURL + "\"", "href=\"//i.4pcdn.org/tg/1.jpg\""
+            }, rewrittenLinks);
+            Assert.IsTrue(replaces.Where(r => r.Type == ReplaceType.ImageLinkHref).All(r => r.Tag == images[0].FileName));
+        }
+
         // An IP address host is used whole for the site name (and so the folder name), instead
         // of its next-to-last number; domain names keep their second-level name
         [TestMethod]
@@ -438,6 +493,12 @@ namespace JDP.Tests {
 
         private static string FuukaPost(string id, string imageURL, string fileName) {
             return "<div id=\"" + id + "\"><span>File: 1 KB, 1x1, " + fileName + "</span>" +
+                "<label><input type=\"checkbox\"><span class=\"postername\">Anonymous</span></label>" +
+                "<a href=\"" + imageURL + "\"><img src=\"https://i.warosu.org/data/g/thumb/" + id + "s.jpg\" class=\"thumb\"></a></div>";
+        }
+
+        private static string FuukaPostWithSameImageLink(string id, string imageURL, string linkHref) {
+            return "<div id=\"" + id + "\"><span>File: 1 KB, 1x1, a.jpg</span><a href=\"" + linkHref + "\">View same</a>" +
                 "<label><input type=\"checkbox\"><span class=\"postername\">Anonymous</span></label>" +
                 "<a href=\"" + imageURL + "\"><img src=\"https://i.warosu.org/data/g/thumb/" + id + "s.jpg\" class=\"thumb\"></a></div>";
         }
