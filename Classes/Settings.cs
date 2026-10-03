@@ -10,6 +10,7 @@ namespace JDP {
         private static readonly object _sync = new object();
         private static Dictionary<string, string> _settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static bool _saveBlocked;
+        private static bool _checkedCopies;
         private static readonly string[] _authSettingNames = { "PageAuth", "ImageAuth" };
 
         public static string ApplicationName {
@@ -460,6 +461,7 @@ namespace JDP {
             lock (_sync) {
                 _settings = settings;
                 _saveBlocked = saveBlocked;
+                _checkedCopies = false;
             }
         }
 
@@ -495,7 +497,7 @@ namespace JDP {
 
         private static bool TryPreserveSettingsFile(string path) {
             try {
-                Logger.Log("The settings file could not be loaded. The original file was kept as " + TextFile.PreserveCopy(path));
+                Logger.Log("The settings file could not be loaded. The original file was kept as " + TextFile.PreserveCopy(path, BlankPlaintextAuth));
                 return true;
             }
             catch (Exception ex) {
@@ -510,14 +512,48 @@ namespace JDP {
 
         public static void Save(string path) {
             try {
-                lock (_sync) {
-                    if (_saveBlocked) return;
-                    TextFile.WriteAllLinesAtomic(path, GetSettingLines());
+                // Copies made aside by a version that kept them byte for byte can hold plaintext
+                // logins, so after the first save following a load they are written again without
+                // them. That reads every copy, so it runs outside the lock, which the getters
+                // also take. A copy that fails is left unchanged and tried again next session.
+                if (WriteSettingsFile(path)) {
+                    TextFile.RewriteCopies(path, BlankPlaintextAuth);
                 }
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
             }
+        }
+
+        // Returns true if the file was written and the copies have yet to be checked since
+        // the last load (only one caller gets true).
+        private static bool WriteSettingsFile(string path) {
+            lock (_sync) {
+                if (_saveBlocked) return false;
+                TextFile.WriteAllLinesAtomic(path, GetSettingLines());
+                bool checkCopies = !_checkedCopies;
+                _checkedCopies = true;
+                return checkCopies;
+            }
+        }
+
+        // Returns the file's content with the value of every plaintext login setting removed
+        // (the name and '=' stay) and everything else kept (see TextFile.CutLineEnds), for a
+        // copy of a settings file. Lines are matched as Load reads them, and every line for a
+        // login setting is blanked, not only the first one that Load uses.
+        public static byte[] BlankPlaintextAuth(byte[] content) {
+            return TextFile.CutLineEnds(content, lines => Array.ConvertAll(lines, GetPlaintextAuthStart));
+        }
+
+        // Returns where a plaintext login value starts in the line, or -1
+        private static int GetPlaintextAuthStart(string line) {
+            int pos = line.IndexOf('=');
+            if (pos == -1 || !IsAuthSettingName(line.Substring(0, pos))) return -1;
+            return StoredAuth.IsPlaintext(line.Substring(pos + 1)) ? pos + 1 : -1;
+        }
+
+        private static bool IsAuthSettingName(string name) {
+            return Array.Exists(_authSettingNames, authName => String.Equals(authName, name, StringComparison.OrdinalIgnoreCase));
         }
 
         private static List<string> GetSettingLines() {
@@ -531,8 +567,7 @@ namespace JDP {
         // Plaintext logins loaded from a file written by an older version are encrypted
         // when the settings are written back.
         private static string ToStoredValue(string name, string value) {
-            bool isAuth = Array.Exists(_authSettingNames, authName => String.Equals(authName, name, StringComparison.OrdinalIgnoreCase));
-            return isAuth && !StoredAuth.IsProtected(value) ? StoredAuth.Protect(value) : value;
+            return IsAuthSettingName(name) && !StoredAuth.IsProtected(value) ? StoredAuth.Protect(value) : value;
         }
     }
 }

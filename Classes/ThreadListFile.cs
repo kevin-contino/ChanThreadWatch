@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Threading;
 
 namespace JDP {
     // Format of the thread list file (threads.txt): the first line is the file version,
@@ -42,10 +43,15 @@ namespace JDP {
         // True if a login is stored as plaintext (written by an older version). Only the
         // version line has to be valid, so this also checks a file that doesn't load.
         public static bool HasPlaintextAuth(string[] lines) {
+            int linesPerThread = GetLinesPerThread(TryParseFileVersion(lines));
+            return linesPerThread != 0 && HasPlaintextAuth(lines, linesPerThread, (lines.Length - 1) / linesPerThread);
+        }
+
+        // Returns 0 if the first line isn't a number
+        private static int TryParseFileVersion(string[] lines) {
             int fileVersion;
             Int32.TryParse(lines.Length != 0 ? lines[0] : null, NumberStyles.Integer, CultureInfo.InvariantCulture, out fileVersion);
-            int linesPerThread = GetLinesPerThread(fileVersion);
-            return linesPerThread != 0 && HasPlaintextAuth(lines, linesPerThread, (lines.Length - 1) / linesPerThread);
+            return fileVersion;
         }
 
         // The two logins follow the URL at the start of each thread
@@ -55,6 +61,52 @@ namespace JDP {
                 if (StoredAuth.IsPlaintext(lines[authLine]) || StoredAuth.IsPlaintext(lines[authLine + 1])) return true;
             }
             return false;
+        }
+
+        // Offsets from a thread's URL line of the fields that can hold any text (Description
+        // and Category), so also something that looks like a URL
+        private static readonly int[] _freeTextFields = { 7, 11 };
+
+        // Returns the file's content with every plaintext login removed and everything else
+        // kept (see TextFile.CutLineEnds), for a copy of a file that may not load. A file that
+        // doesn't load can have a missing or extra line or a version this one doesn't know,
+        // so threads are found by their URL line rather than by position: the two lines after
+        // a line starting with http:// or https:// are its logins, and a line that looks like
+        // a URL is never removed. When the version line is valid, a URL where that version
+        // puts the previous thread's description or category doesn't start a thread.
+        public static byte[] BlankPlaintextAuth(byte[] content) {
+            return TextFile.CutLineEnds(content, FindPlaintextAuth);
+        }
+
+        // Returns for each line 0 (remove the login) or -1 (keep the line)
+        private static int[] FindPlaintextAuth(string[] lines) {
+            int[] keptLengths = new int[lines.Length];
+            for (int i = 0; i < keptLengths.Length; i++) {
+                keptLengths[i] = -1;
+            }
+            int linesPerThread = GetLinesPerThread(TryParseFileVersion(lines));
+            int threadStart = -1;
+            for (int i = 0; i < lines.Length; i++) {
+                if (!IsThreadStart(lines[i], threadStart != -1 ? i - threadStart : -1, linesPerThread)) continue;
+                threadStart = i;
+                MarkPlaintextAuth(lines, i, keptLengths);
+            }
+            return keptLengths;
+        }
+
+        // offsetFromThreadStart is -1 before the first thread
+        private static bool IsThreadStart(string line, int offsetFromThreadStart, int linesPerThread) {
+            return LooksLikeURL(line) && !(offsetFromThreadStart < linesPerThread && Array.IndexOf(_freeTextFields, offsetFromThreadStart) != -1);
+        }
+
+        private static void MarkPlaintextAuth(string[] lines, int urlLine, int[] keptLengths) {
+            for (int i = urlLine + 1; i <= urlLine + 2 && i < lines.Length && !LooksLikeURL(lines[i]); i++) {
+                if (StoredAuth.IsPlaintext(lines[i])) keptLengths[i] = 0;
+            }
+        }
+
+        private static bool LooksLikeURL(string line) {
+            return line.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || line.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
 
         // True if the lines form a complete thread list that Parse accepts.
@@ -210,6 +262,7 @@ namespace JDP {
     public class ThreadListStore {
         private volatile bool _canSave;
         private bool _checkedBackup;
+        private int _checkedCopies;
 
         public bool CanSave {
             get { return _canSave; }
@@ -228,7 +281,7 @@ namespace JDP {
 
         private static bool TryPreserveFile(string path) {
             try {
-                string copyPath = TextFile.PreserveCopy(path);
+                string copyPath = TextFile.PreserveCopy(path, ThreadListFile.BlankPlaintextAuth);
                 Logger.Log("The thread list could not be fully loaded. The original file was kept as " + copyPath);
                 return true;
             }
@@ -243,7 +296,16 @@ namespace JDP {
             if (!_canSave) return false;
             TextFile.WriteAllLinesAtomic(path, ThreadListFile.Serialize(threads));
             ProtectBackupOnce(path + ".bak");
+            BlankCopiesOnce(path);
             return true;
+        }
+
+        // Copies made aside by a version that kept them byte for byte can hold plaintext
+        // logins, so after the first save of the session they are written again without
+        // them. A copy that fails is left unchanged and tried again next session.
+        private void BlankCopiesOnce(string path) {
+            if (Interlocked.Exchange(ref _checkedCopies, 1) != 0) return;
+            TextFile.RewriteCopies(path, ThreadListFile.BlankPlaintextAuth);
         }
 
         // A backup (see General.BackupThreadList) written by an older version holds plaintext

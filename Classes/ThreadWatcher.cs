@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
-using System.Text;
 using System.Threading;
 using System.Web;
 
@@ -531,8 +530,6 @@ namespace JDP {
             pageInfo.Path = Path.Combine(threadDir, GetPageFileName(_threadName, pageIndex));
             if (!File.Exists(pageInfo.Path)) return;
 
-            pageInfo.Encoding = DetectSavedPageEncoding(pageInfo.Path);
-
             HTMLParser parser = TryLoadHTMLParser(pageInfo.Path);
             if (parser == null) return;
             SiteHelper siteHelper = SiteHelpers.GetInstance(PageHost);
@@ -1044,10 +1041,10 @@ namespace JDP {
         private DownloadedPage DownloadPage(PageInfo pageInfo) {
             DownloadedPage page = null;
             ManualResetEvent downloadEndEvent = new ManualResetEvent(false);
-            DownloadPageEndCallback downloadEnd = (result, content, lastModifiedTime, encoding) => {
+            DownloadPageEndCallback downloadEnd = (result, content, lastModifiedTime) => {
                 try {
                     if (result == DownloadResult.Completed) {
-                        page = new DownloadedPage { Content = content, LastModifiedTime = lastModifiedTime, Encoding = encoding };
+                        page = new DownloadedPage { Content = content, LastModifiedTime = lastModifiedTime };
                     }
                 }
                 finally {
@@ -1074,7 +1071,6 @@ namespace JDP {
         private static void ApplyDownloadedPage(PageInfo pageInfo, DownloadedPage page, bool saveThumbnails) {
             pageInfo.IsFresh = true;
             pageInfo.CacheTime = page.LastModifiedTime;
-            pageInfo.Encoding = page.Encoding;
             pageInfo.ReplaceList = saveThumbnails ? new List<ReplaceInfo>() : null;
         }
 
@@ -1711,16 +1707,6 @@ namespace JDP {
             return Settings.SortImagesByPoster == true && !String.IsNullOrEmpty(image.Poster);
         }
 
-        private static Encoding DetectSavedPageEncoding(string path) {
-            try {
-                byte[] bytes = File.ReadAllBytes(path);
-                return General.DetectHTMLEncoding(bytes, null);
-            }
-            catch {
-                return Encoding.UTF8;
-            }
-        }
-
         // Returns null if the file couldn't be read or is empty
         private static HTMLParser TryLoadHTMLParser(string path) {
             string text = TryReadAllText(path);
@@ -1863,7 +1849,6 @@ namespace JDP {
         private sealed class DownloadedPage {
             public string Content;
             public DateTime? LastModifiedTime;
-            public Encoding Encoding;
         }
 
         // A failure to create or write a file on the local disk
@@ -1964,7 +1949,6 @@ namespace JDP {
                 private readonly ThreadWatcher _watcher;
                 private string _httpContentType;
                 private DateTime? _lastModifiedTime;
-                private Encoding _encoding;
                 private string _content;
                 private long _downloadID;
                 private FileStream _fileStream;
@@ -1982,7 +1966,7 @@ namespace JDP {
                 public void EndTryDownload(DownloadResult result) {
                     if (Interlocked.Exchange(ref _download._ended, 1) != 0) return;
                     ReleaseConnection(_download._connectionManager, _download._connectionGroupName);
-                    _download._onDownloadEnd(result, _content, _lastModifiedTime, _encoding);
+                    _download._onDownloadEnd(result, _content, _lastModifiedTime);
                 }
 
                 public void Start() {
@@ -2053,8 +2037,7 @@ namespace JDP {
                     }
                     Cleanup(true);
                     _watcher.OnDownloadEnd(new DownloadEndEventArgs(_downloadID, _downloadedFileSize, true));
-                    _encoding = General.DetectHTMLEncoding(pageBytes, _httpContentType);
-                    _content = _encoding.GetString(pageBytes);
+                    _content = General.DetectHTMLEncoding(pageBytes, _httpContentType).GetString(pageBytes);
                     EndTryDownload(DownloadResult.Completed);
                 }
 

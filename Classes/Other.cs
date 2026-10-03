@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Security.Cryptography;
-using System.Text;
 using System.Threading;
 
 namespace JDP {
@@ -21,7 +20,6 @@ namespace JDP {
         public DateTime? CacheTime { get; set; }
         public bool IsFresh { get; set; }
         public string Path { get; set; }
-        public Encoding Encoding { get; set; }
         public List<ReplaceInfo> ReplaceList { get; set; }
     }
 
@@ -1255,7 +1253,7 @@ namespace JDP {
 
     public delegate void DownloadFileEndCallback(DownloadResult result);
 
-    public delegate void DownloadPageEndCallback(DownloadResult result, string content, DateTime? lastModifiedTime, Encoding encoding);
+    public delegate void DownloadPageEndCallback(DownloadResult result, string content, DateTime? lastModifiedTime);
 
     public delegate void Action();
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
@@ -383,6 +384,251 @@ namespace JDP.Tests {
             store.Save(_path, new List<ThreadInfo>());
 
             CollectionAssert.AreEqual(encrypted, File.ReadAllLines(backupPath));
+        }
+
+        // A version 4 file whose last thread is cut off after its first login, with a byte
+        // order mark, mixed line breaks, no final line break and a byte that isn't valid UTF-8
+        private static byte[] MixedThreadListBytes(string[] logins, string encrypted) {
+            string[] lines = { "4",
+                "https://boards.4chan.org/a/thread/1", logins[0], encrypted, "600", "0", "a_1", "1", "Desc \u00e9", Ticks(AddedOnUtc), "", "", "Cat", "1",
+                "https://boards.4chan.org/a/thread/2", "", logins[1], "0", "1", "", "", "Child", Ticks(AddedOnUtc), "", "a_1", "", "0",
+                "https://boards.4chan.org/a/thread/3", logins[2] };
+            string[] breaks = { "\r\n", "\n", "\r" };
+            List<byte> bytes = new List<byte>(Encoding.UTF8.GetPreamble());
+            for (int i = 0; i < lines.Length; i++) {
+                bytes.AddRange(Encoding.UTF8.GetBytes(lines[i]));
+                if (i == 8) bytes.Add(0xFF);
+                if (i < lines.Length - 1) bytes.AddRange(Encoding.ASCII.GetBytes(breaks[i % 3]));
+            }
+            return bytes.ToArray();
+        }
+
+        private static readonly string[] PlaintextLogins = { "user:pass", "img:pass", "late:pass" };
+        private static readonly string[] NoLogins = { "", "", "" };
+
+        [TestMethod]
+        public void CopyOfAFileWithPlaintextLoginsHoldsNoneAndKeepsEveryOtherByte() {
+            string encrypted = StoredAuth.Protect("enc:pass");
+            File.WriteAllBytes(_path, MixedThreadListBytes(PlaintextLogins, encrypted));
+            ThreadListStore store = new ThreadListStore();
+
+            LoadLikeTheForm(store, _path);
+
+            string[] copies = CorruptCopies();
+            Assert.HasCount(1, copies);
+            CollectionAssert.AreEqual(MixedThreadListBytes(NoLogins, encrypted), File.ReadAllBytes(copies[0]));
+            Assert.IsFalse(ThreadListFile.HasPlaintextAuth(File.ReadAllLines(copies[0])));
+            CollectionAssert.AreEqual(MixedThreadListBytes(PlaintextLogins, encrypted), File.ReadAllBytes(_path));
+        }
+
+        private string CopyPath(string stamp) {
+            return _path + ".corrupt-" + stamp;
+        }
+
+        private static readonly string[] OldCopyLines = { "4", "https://boards.4chan.org/a/thread/1", "user:pass", "img:pass", "abc" };
+        private static readonly string[] BlankedOldCopyLines = { "4", "https://boards.4chan.org/a/thread/1", "", "", "abc" };
+
+        [TestMethod]
+        public void FirstSaveBlanksPlaintextLoginsInExistingCopiesOnce() {
+            string plainCopy = CopyPath("20200101-000000-000");
+            string encryptedCopy = CopyPath("20200102-000000-000");
+            string[] encryptedLines = { "4", "https://boards.4chan.org/a/thread/1", StoredAuth.Protect("u:p"), "", "abc" };
+            string otherFile = Path.Combine(_dir, "settings.txt.corrupt-20200101-000000-000");
+            File.WriteAllLines(_path, Version4Lines());
+            File.WriteAllLines(plainCopy, OldCopyLines);
+            File.WriteAllLines(encryptedCopy, encryptedLines);
+            File.WriteAllLines(otherFile, OldCopyLines);
+            DateTime encryptedWriteTime = File.GetLastWriteTimeUtc(encryptedCopy).AddDays(-1);
+            File.SetLastWriteTimeUtc(encryptedCopy, encryptedWriteTime);
+            ThreadListStore store = new ThreadListStore();
+            LoadLikeTheForm(store, _path);
+            string logPath = Path.Combine(Settings.GetSettingsDirectory(), Settings.LogFileName);
+            Logger.Log("ThreadListFileTests marker");
+            int start = ReadSharedFile(logPath).Length;
+
+            Assert.IsTrue(store.Save(_path, new List<ThreadInfo>()));
+
+            CollectionAssert.AreEqual(BlankedOldCopyLines, File.ReadAllLines(plainCopy));
+            CollectionAssert.AreEqual(encryptedLines, File.ReadAllLines(encryptedCopy));
+            Assert.AreEqual(encryptedWriteTime, File.GetLastWriteTimeUtc(encryptedCopy));
+            CollectionAssert.AreEqual(OldCopyLines, File.ReadAllLines(otherFile));
+            string log = ReadSharedFile(logPath).Substring(start);
+            Assert.AreEqual(1, log.Split(new[] { "Plaintext logins were removed from " + Path.GetFileName(plainCopy) + Environment.NewLine }, StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("user:pass", log);
+            Assert.DoesNotContain(_dir, log);
+
+            // Only once per session
+            File.WriteAllLines(plainCopy, OldCopyLines);
+            store.Save(_path, new List<ThreadInfo>());
+            CollectionAssert.AreEqual(OldCopyLines, File.ReadAllLines(plainCopy));
+        }
+
+        // E.g. antivirus or a sync tool holding the copy: it is left as it was and the next
+        // session tries again, while the other copies are still written
+        [TestMethod]
+        public void CopyThatCannotBeReplacedIsLeftUnchangedUntilTheNextSession() {
+            string copy = CopyPath("20200101-000000-000");
+            string otherCopy = CopyPath("20200102-000000-000");
+            File.WriteAllLines(_path, Version4Lines());
+            File.WriteAllLines(copy, OldCopyLines);
+            File.WriteAllLines(otherCopy, OldCopyLines);
+            byte[] original = File.ReadAllBytes(copy);
+            ThreadListStore store = new ThreadListStore();
+            LoadLikeTheForm(store, _path);
+
+            using (new FileStream(copy, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+                Assert.IsTrue(store.Save(_path, new List<ThreadInfo>()));
+            }
+            CollectionAssert.AreEqual(original, File.ReadAllBytes(copy));
+            CollectionAssert.AreEqual(BlankedOldCopyLines, File.ReadAllLines(otherCopy));
+            CollectionAssert.AreEquivalent(new[] { _path, copy, otherCopy }, Directory.GetFiles(_dir));
+            store.Save(_path, new List<ThreadInfo>());
+            CollectionAssert.AreEqual(original, File.ReadAllBytes(copy));
+
+            ThreadListStore nextSession = new ThreadListStore();
+            LoadLikeTheForm(nextSession, _path);
+            Assert.IsTrue(nextSession.Save(_path, new List<ThreadInfo>()));
+            CollectionAssert.AreEqual(BlankedOldCopyLines, File.ReadAllLines(copy));
+        }
+
+        // Threads are found by their URL line, so a broken block, a missing or unknown version
+        // line or a version this one doesn't know still has its logins removed
+        [TestMethod]
+        [DataRow("4\nhttps://a/1\nuser:pass\n\nabc\n", "4\nhttps://a/1\n\n\nabc\n", DisplayName = "bad number, truncated")]
+        [DataRow("4\r\nhttps://a/1\r\nuser:pass", "4\r\nhttps://a/1\r\n", DisplayName = "cut off in a login")]
+        [DataRow("4\nhttps://a/1\nuser:pass\nhttps://a/2\nimg:pass\n", "4\nhttps://a/1\n\nhttps://a/2\n\n", DisplayName = "URL in a login position is kept")]
+        [DataRow("1\nhttps://a/1\nuser:pass\nimg:pass\n300\n1\na_1\nhttps://a/2\nu2:p\n", "1\nhttps://a/1\n\n\n300\n1\na_1\nhttps://a/2\n\n", DisplayName = "version 1, second thread cut off")]
+        [DataRow("4\nhttps://a/1\ndpapi:AAAA\nuser:pass\n", "4\nhttps://a/1\ndpapi:AAAA\n\n", DisplayName = "encrypted login kept")]
+        [DataRow("5\nhttps://a/1\nuser:pass\n", "5\nhttps://a/1\n\n", DisplayName = "unknown version")]
+        [DataRow("\nHTTPS://a/1\nuser:pass\n", "\nHTTPS://a/1\n\n", DisplayName = "blank version line")]
+        [DataRow("x\nhttp://a/1\nuser:pass\n", "x\nhttp://a/1\n\n", DisplayName = "version not a number")]
+        [DataRow("4\nuser:pass\nimg:pass\n", "4\nuser:pass\nimg:pass\n", DisplayName = "no URL line")]
+        [DataRow("", "", DisplayName = "empty")]
+        public void PlaintextLoginsAreBlankedInAMalformedFile(string content, string expected) {
+            byte[] blanked = ThreadListFile.BlankPlaintextAuth(Encoding.UTF8.GetBytes(content));
+
+            Assert.AreEqual(expected, Encoding.UTF8.GetString(blanked));
+        }
+
+        private static string BlankThreadListText(string[] lines) {
+            byte[] content = Encoding.UTF8.GetBytes(String.Join("\r\n", lines) + "\r\n");
+            return Encoding.UTF8.GetString(ThreadListFile.BlankPlaintextAuth(content));
+        }
+
+        private static string[] Version4LinesWithLogins() {
+            return new[] { "4",
+                "https://boards.4chan.org/a/thread/1", "u:p", "i:p", "600", "0", "a_1", "1", "Parent", Ticks(AddedOnUtc), "", "", "Cat", "1",
+                "https://boards.4chan.org/a/thread/2", "u2:p", "", "0", "1", "", "", "Child", Ticks(AddedOnUtc), Ticks(LastImageOnUtc), "a_1", "", "0" };
+        }
+
+        // A missing or extra line shifts every later thread, which a position rule would get
+        // wrong (removing a value that isn't a login and keeping a login)
+        [TestMethod]
+        [DataRow(4, -1, DisplayName = "missing line")]
+        [DataRow(12, 1, DisplayName = "extra line")]
+        public void LoginsAfterAMissingOrExtraLineAreBlanked(int index, int change) {
+            List<string> lines = new List<string>(Version4LinesWithLogins());
+            if (change < 0) lines.RemoveAt(index); else lines.Insert(index, "extra");
+            List<string> expected = new List<string>(lines);
+            foreach (string login in new[] { "u:p", "i:p", "u2:p" }) {
+                expected[expected.IndexOf(login)] = "";
+            }
+
+            Assert.AreEqual(String.Join("\r\n", expected) + "\r\n", BlankThreadListText(lines.ToArray()));
+        }
+
+        // A description or category holding a URL is where the file version puts it, so the
+        // two lines after it (dates, or the auto follow flag) are kept
+        [TestMethod]
+        [DataRow(8, DisplayName = "description")]
+        [DataRow(12, DisplayName = "category")]
+        public void UrlInAFreeTextFieldDoesNotStartAThread(int index) {
+            string[] lines = Version4LinesWithLogins();
+            lines[index] = "https://example.com/x";
+            string[] expected = (string[])lines.Clone();
+            expected[2] = expected[3] = expected[15] = "";
+
+            Assert.AreEqual(String.Join("\r\n", expected) + "\r\n", BlankThreadListText(lines));
+        }
+
+        // Well-formed files of every version: the same lines a position rule would remove
+        [TestMethod]
+        public void WellFormedFilesOfEveryVersionHaveTheirLoginsBlankedByPosition() {
+            foreach (string[] lines in new[] { Version1Lines(), Version2Lines(), Version3Lines(), Version4Lines(), Version4LinesWithLogins() }) {
+                int linesPerThread = ThreadListFile.GetLinesPerThread(Int32.Parse(lines[0]));
+                string[] expected = (string[])lines.Clone();
+                for (int i = 2; i < expected.Length; i += linesPerThread) {
+                    expected[i] = expected[i + 1] = "";
+                }
+
+                Assert.AreEqual(String.Join("\r\n", expected) + "\r\n", BlankThreadListText(lines), lines[0]);
+            }
+        }
+
+        private static IEnumerable<object[]> Utf16And32Encodings() {
+            yield return new object[] { new UnicodeEncoding(false, true) };
+            yield return new object[] { new UnicodeEncoding(true, true) };
+            yield return new object[] { new UTF32Encoding(false, true) };
+            yield return new object[] { new UTF32Encoding(true, true) };
+        }
+
+        private static byte[] Encode(Encoding encoding, string text) {
+            return System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Concat(encoding.GetPreamble(), encoding.GetBytes(text)));
+        }
+
+        // Decoded, blanked and encoded again with the same byte order mark
+        [TestMethod]
+        [DynamicData(nameof(Utf16And32Encodings))]
+        public void FileWithAUtf16Or32ByteOrderMarkIsBlankedInItsEncoding(Encoding encoding) {
+            byte[] content = Encode(encoding, "9\r\nhttps://a/1\r\nuser:pass\r\ndpapi:AAAA\r\n60\r\n");
+            byte[] noPlaintext = Encode(encoding, "9\r\nhttps://a/1\r\n\r\ndpapi:AAAA\r\n60\r\n");
+
+            CollectionAssert.AreEqual(noPlaintext, ThreadListFile.BlankPlaintextAuth(content));
+            Assert.AreSame(noPlaintext, ThreadListFile.BlankPlaintextAuth(noPlaintext));
+        }
+
+        // When the swap fails and the file is no longer there (as File.Replace can leave it),
+        // the temporary file holds the only copy of the content, so it is kept
+        [TestMethod]
+        public void TempFileIsKeptWhenTheSwapFailsAndTheFileIsGone() {
+            string target = Path.Combine(_dir, "target.txt");
+            Directory.CreateDirectory(target);
+            byte[] content = Encoding.ASCII.GetBytes("content");
+
+            Assert.ThrowsExactly<IOException>(() => TextFile.WriteAllBytesAtomic(target, content));
+
+            CollectionAssert.AreEqual(content, File.ReadAllBytes(Path.Combine(_dir, "~target.txt.tmp")));
+        }
+
+        [TestMethod]
+        public void CopyThatFailsToBeWrittenIsDeleted() {
+            File.WriteAllLines(_path, Version4Lines());
+
+            Assert.ThrowsExactly<InvalidOperationException>(() => TextFile.PreserveCopy(_path, content => { throw new InvalidOperationException(); }));
+
+            CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
+        }
+
+        // Too large to have been written by this program, and not read again every session
+        [TestMethod]
+        public void CopyLargerThanTheLimitIsNotRewritten() {
+            string copy = CopyPath("20200101-000000-000");
+            File.WriteAllLines(_path, Version4Lines());
+            File.WriteAllLines(copy, OldCopyLines);
+            using (FileStream fs = new FileStream(copy, FileMode.Open, FileAccess.Write)) {
+                fs.SetLength(TextFile.MaxRewrittenCopySize + 1);
+            }
+            ThreadListStore store = new ThreadListStore();
+            LoadLikeTheForm(store, _path);
+            string logPath = Path.Combine(Settings.GetSettingsDirectory(), Settings.LogFileName);
+            Logger.Log("ThreadListFileTests marker");
+            int start = ReadSharedFile(logPath).Length;
+
+            Assert.IsTrue(store.Save(_path, new List<ThreadInfo>()));
+
+            Assert.AreEqual(TextFile.MaxRewrittenCopySize + 1, new FileInfo(copy).Length);
+            string log = ReadSharedFile(logPath).Substring(start);
+            Assert.AreEqual(1, log.Split(new[] { Path.GetFileName(copy) + " was not checked for plaintext logins" }, StringSplitOptions.None).Length - 1);
         }
 
         private static IEnumerable<string> LinesThatFailAfter(int count) {
