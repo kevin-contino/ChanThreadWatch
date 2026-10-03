@@ -878,8 +878,9 @@ namespace JDP {
             // Read on the watcher's thread, before a restart could reset them
             string stopError = watcher.StopError;
             int failedFileCount = watcher.FailedFileCount;
+            string reparseError = watcher.ReparseError;
             BeginInvoke(() => {
-                DisplayStatus(watcher, FormatStopStatus(args.StopReason, stopError, failedFileCount));
+                DisplayStatus(watcher, AppendReparseError(FormatStopStatus(args.StopReason, stopError, failedFileCount), reparseError));
                 SetupWaitTimer();
                 if (args.StopReason != StopReason.UserRequest && args.StopReason != StopReason.Exiting) {
                     _saveThreadList = true;
@@ -1296,6 +1297,11 @@ namespace JDP {
                 reasonText += ", " + FormatFailedFileCount(failedFileCount);
             }
             return "Stopped: " + reasonText;
+        }
+
+        // E.g. "Stopped: User requested, reparse failed: Access to the path is denied"
+        internal static string AppendReparseError(string stopStatus, string reparseError) {
+            return !String.IsNullOrEmpty(reparseError) ? stopStatus + ", reparse failed: " + reparseError : stopStatus;
         }
 
         private static string GetStopReasonText(StopReason stopReason) {

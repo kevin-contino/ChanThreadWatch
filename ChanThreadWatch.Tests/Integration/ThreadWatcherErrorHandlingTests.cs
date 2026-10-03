@@ -392,6 +392,43 @@ namespace JDP.Tests.Integration {
             StringAssert.Contains(ReadLog(), "Reparse of " + watcher.PageURL + " failed");
         }
 
+        // A failed reparse raises the stop status again with its error, so the UI shows it
+        // instead of the reparse progress (here the thread has no download folder yet)
+        [TestMethod]
+        public void ReparseThatFailsReportsItsError() {
+            LoopbackHttpServer server = StartServer();
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            var stopped = new ManualResetEvent(false);
+            string reparseError = null;
+            watcher.StopStatus += (s, e) => { reparseError = s.ReparseError; stopped.Set(); };
+
+            watcher.BeginReparse();
+
+            Assert.IsTrue(stopped.WaitOne(10000), "No stop status after the failed reparse");
+            Assert.IsFalse(String.IsNullOrEmpty(reparseError));
+            Assert.DoesNotContain("\n", reparseError);
+        }
+
+        // A reparse that ends early (here there is no saved page) also replaces the reparse
+        // progress with the stop status, and clears the error of an earlier failed reparse
+        [TestMethod]
+        public void ReparseWithoutSavedPageRaisesStopStatusWithoutError() {
+            LoopbackHttpServer server = StartServer();
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            var stopped = new AutoResetEvent(false);
+            var reparseErrors = new List<string>();
+            watcher.StopStatus += (s, e) => { reparseErrors.Add(s.ReparseError); stopped.Set(); };
+            watcher.BeginReparse();
+            Assert.IsTrue(stopped.WaitOne(10000), "No stop status after the failed reparse");
+            watcher.ThreadDownloadDirectory = Path.Combine(DownloadDir, "empty");
+
+            watcher.BeginReparse();
+
+            Assert.IsTrue(stopped.WaitOne(10000), "No stop status after the reparse without a saved page");
+            Assert.IsNotNull(reparseErrors[0]);
+            Assert.IsNull(reparseErrors[1]);
+        }
+
         // B9: when the poster folder can't be created, the watcher stops with a disk error and
         // the image meant for that folder is not downloaded
         [TestMethod]

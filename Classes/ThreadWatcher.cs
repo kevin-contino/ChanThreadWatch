@@ -74,6 +74,7 @@ namespace JDP {
         private readonly object _descendantSlotSync = new object();
         private int _reservedDescendantSlots;
         private string _stopError;
+        private string _reparseError;
         // Checks in a row that each file (by URL) failed in; guarded by itself
         private readonly Dictionary<string, int> _fileFailureCheckCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
@@ -308,6 +309,11 @@ namespace JDP {
             get { lock (_settingsSync) { return _stopError; } }
         }
 
+        // The error that made the last reparse fail, or null if it went fine
+        public string ReparseError {
+            get { lock (_settingsSync) { return _reparseError; } }
+        }
+
         // The images and thumbnails that failed in the last check
         public int FailedFileCount {
             get { lock (_settingsSync) { return _failedFileCount; } }
@@ -376,6 +382,7 @@ namespace JDP {
                 _isStopping = false;
                 _stopReason = StopReason.Other;
                 _stopError = null;
+                _reparseError = null;
                 _hasRun = true;
                 _hasInitialized = false;
                 _nextCheckWorkItem = _workScheduler.AddItem(TickCount.Now, Check, PageHost);
@@ -443,11 +450,15 @@ namespace JDP {
         private void Reparse() {
             lock (_settingsSync) {
                 _reparseFinishedEvent.Reset();
+                _reparseError = null;
             }
             try {
                 ReparsePages();
             }
             catch (Exception ex) {
+                lock (_settingsSync) {
+                    _reparseError = String.Join(" ", ex.Message.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
+                }
                 Logger.Log("Reparse of " + _pageURL + " failed:" + Environment.NewLine + ex);
             }
             finally {
@@ -455,6 +466,8 @@ namespace JDP {
                 lock (_settingsSync) {
                     _reparseFinishedEvent.Set();
                 }
+                // Replaces the reparse progress with the stop status, and the reparse error if any
+                OnStopStatus(new StopStatusEventArgs(StopReason));
             }
         }
 
@@ -515,7 +528,6 @@ namespace JDP {
             }
             siteHelper.SetURL(pageInfo.URL);
             Process(pageInfo, siteHelper, threadDir, imageDir, thumbDir, completedImages, completedThumbs, null);
-            OnStopStatus(new StopStatusEventArgs(StopReason));
         }
 
         private static bool TryCreateReparseThumbnailDirectory(string thumbDir) {
