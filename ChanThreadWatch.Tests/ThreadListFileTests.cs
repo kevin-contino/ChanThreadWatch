@@ -587,6 +587,19 @@ namespace JDP.Tests {
             Assert.AreSame(noPlaintext, ThreadListFile.BlankPlaintextAuth(noPlaintext));
         }
 
+        // When the swap fails and the file is no longer there (as File.Replace can leave it),
+        // the temporary file holds the only copy of the content, so it is kept
+        [TestMethod]
+        public void TempFileIsKeptWhenTheSwapFailsAndTheFileIsGone() {
+            string target = Path.Combine(_dir, "target.txt");
+            Directory.CreateDirectory(target);
+            byte[] content = Encoding.ASCII.GetBytes("content");
+
+            Assert.ThrowsExactly<IOException>(() => TextFile.WriteAllBytesAtomic(target, content));
+
+            CollectionAssert.AreEqual(content, File.ReadAllBytes(Path.Combine(_dir, "~target.txt.tmp")));
+        }
+
         [TestMethod]
         public void CopyThatFailsToBeWrittenIsDeleted() {
             File.WriteAllLines(_path, Version4Lines());

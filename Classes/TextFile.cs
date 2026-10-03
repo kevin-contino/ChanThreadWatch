@@ -24,18 +24,22 @@ namespace JDP {
 
         // Like WriteAllLinesAtomic, for content that has to be kept byte for byte. The
         // temporary file's name starts differently from the file's, so a search for recovery
-        // copies (GetCopySearchPattern) never finds it, and it is deleted if the write fails.
+        // copies (GetCopySearchPattern) never finds it. If the write fails it is deleted, but
+        // not when the swap failed after the file was already moved away (File.Replace can
+        // fail that way): the temporary file then holds the only copy of the content.
         public static void WriteAllBytesAtomic(string path, byte[] content) {
             string tempPath = Path.Combine(Path.GetDirectoryName(path), "~" + Path.GetFileName(path) + ".tmp");
+            bool replacing = false;
             try {
                 using (FileStream fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None)) {
                     fs.Write(content, 0, content.Length);
                     fs.Flush(true);
                 }
+                replacing = true;
                 ReplaceWithTempFile(tempPath, path);
             }
             catch {
-                TryDelete(tempPath);
+                if (!replacing || File.Exists(path)) TryDelete(tempPath);
                 throw;
             }
         }

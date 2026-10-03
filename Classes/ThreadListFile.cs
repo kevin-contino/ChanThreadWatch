@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Threading;
 
 namespace JDP {
     // Format of the thread list file (threads.txt): the first line is the file version,
@@ -261,7 +262,7 @@ namespace JDP {
     public class ThreadListStore {
         private volatile bool _canSave;
         private bool _checkedBackup;
-        private bool _checkedCopies;
+        private int _checkedCopies;
 
         public bool CanSave {
             get { return _canSave; }
@@ -303,8 +304,7 @@ namespace JDP {
         // logins, so after the first save of the session they are written again without
         // them. A copy that fails is left unchanged and tried again next session.
         private void BlankCopiesOnce(string path) {
-            if (_checkedCopies) return;
-            _checkedCopies = true;
+            if (Interlocked.Exchange(ref _checkedCopies, 1) != 0) return;
             TextFile.RewriteCopies(path, ThreadListFile.BlankPlaintextAuth);
         }
 

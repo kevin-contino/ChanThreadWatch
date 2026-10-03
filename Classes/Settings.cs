@@ -512,10 +512,12 @@ namespace JDP {
 
         public static void Save(string path) {
             try {
-                lock (_sync) {
-                    if (_saveBlocked) return;
-                    TextFile.WriteAllLinesAtomic(path, GetSettingLines());
-                    BlankCopiesOnce(path);
+                // Copies made aside by a version that kept them byte for byte can hold plaintext
+                // logins, so after the first save following a load they are written again without
+                // them. That reads every copy, so it runs outside the lock, which the getters
+                // also take. A copy that fails is left unchanged and tried again next session.
+                if (WriteSettingsFile(path)) {
+                    TextFile.RewriteCopies(path, BlankPlaintextAuth);
                 }
             }
             catch (Exception ex) {
@@ -523,13 +525,16 @@ namespace JDP {
             }
         }
 
-        // Copies made aside by a version that kept them byte for byte can hold plaintext
-        // logins, so after the first save following a load they are written again without
-        // them. A copy that fails is left unchanged and tried again next session.
-        private static void BlankCopiesOnce(string path) {
-            if (_checkedCopies) return;
-            _checkedCopies = true;
-            TextFile.RewriteCopies(path, BlankPlaintextAuth);
+        // Returns true if the file was written and the copies have yet to be checked since
+        // the last load (only one caller gets true).
+        private static bool WriteSettingsFile(string path) {
+            lock (_sync) {
+                if (_saveBlocked) return false;
+                TextFile.WriteAllLinesAtomic(path, GetSettingLines());
+                bool checkCopies = !_checkedCopies;
+                _checkedCopies = true;
+                return checkCopies;
+            }
         }
 
         // Returns the file's content with the value of every plaintext login setting removed
