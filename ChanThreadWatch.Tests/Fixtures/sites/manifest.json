@@ -1,0 +1,72 @@
+{
+  "4chan": {
+    "helper": "FourChanSiteHelper",
+    "pagePath": "/w25/thread/7770000004",
+    "capture": "direct",
+    "captured": "2026-10-02",
+    "images": 7,
+    "hashes": 7,
+    "thumbnails": 7,
+    "crossLinks": 0
+  },
+  "8ch": {
+    "helper": "InfinitechanSiteHelper",
+    "pagePath": "/w21/res/7770000004.html",
+    "capture": "direct",
+    "captured": "2026-10-02",
+    "images": 2,
+    "hashes": 2,
+    "thumbnails": 2,
+    "crossLinks": 0
+  },
+  "foolfuuka": {
+    "helper": "FoolFuukaSiteHelper",
+    "pagePath": "/w1/thread/7770000004/",
+    "capture": "direct",
+    "captured": "2026-10-02",
+    "images": 128,
+    "hashes": 128,
+    "thumbnails": 128,
+    "crossLinks": 0
+  },
+  "foolfuuka-archivedmoe": {
+    "helper": "FoolFuukaSiteHelper",
+    "pagePath": "/w25/thread/7770000004/",
+    "capture": "firecrawl",
+    "captured": "2026-10-02",
+    "images": 4,
+    "hashes": 4,
+    "thumbnails": 4,
+    "crossLinks": 0
+  },
+  "foolfuuka-desuarchive": {
+    "helper": "FoolFuukaSiteHelper",
+    "pagePath": "/w9/thread/7770000002/",
+    "capture": "firecrawl",
+    "captured": "2026-10-02",
+    "images": 57,
+    "hashes": 57,
+    "thumbnails": 57,
+    "crossLinks": 0
+  },
+  "fuuka": {
+    "helper": "FuukaSiteHelper",
+    "pagePath": "/w3/thread/7770000005",
+    "capture": "direct",
+    "captured": "2026-10-02",
+    "images": 1,
+    "hashes": 1,
+    "thumbnails": 1,
+    "crossLinks": 0
+  },
+  "lynxchan": {
+    "helper": "LynxChanSiteHelper",
+    "pagePath": "/w11/res/7770000001.html",
+    "capture": "direct",
+    "captured": "2026-10-02",
+    "images": 47,
+    "hashes": 0,
+    "thumbnails": 47,
+    "crossLinks": 0
+  }
+}

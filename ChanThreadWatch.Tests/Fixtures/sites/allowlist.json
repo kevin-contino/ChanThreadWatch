@@ -1,0 +1,34 @@
+{
+  "comment": "Shared by tools/site-fixtures/sanitize_site_fixture.py and SiteFixtureSterilityTests. Only markup the site helpers read is kept; every value is a placeholder.",
+  "keptTags": [ "html", "head", "body", "div", "span", "a", "img", "article", "figure", "header", "p", "blockquote", "label", "input", "table", "tbody", "tr", "td" ],
+  "droppedTags": [ "script", "style", "noscript", "iframe", "frame", "object", "embed", "svg", "math", "select", "option", "textarea", "button", "link", "meta", "template", "canvas", "video", "audio", "source", "title", "time", "h1", "h2", "h3", "h4", "h5", "h6" ],
+  "keptClasses": [
+    "thread", "postContainer", "post", "op", "reply", "file", "fileText", "fileThumb", "imgspoiler", "nameBlock", "name", "postertrip", "hand", "postMessage", "quotelink", "deadlink",
+    "has-file", "files", "fileinfo", "postfilename", "trip", "body",
+    "comment", "thumb", "postername",
+    "has_image", "thread_image_link", "post_file", "post_file_filename", "post_file_controls", "post_file_metadata", "post_poster_data", "post_author", "post_tripcode", "poster_hash",
+    "postCell", "opCell", "opHead", "innerPost", "linkName", "panelUploads", "uploadCell", "imgLink", "nameLink", "originalNameLink"
+  ],
+  "keptAttributes": [ "class", "id", "href", "src", "data-md5", "title", "target" ],
+  "idPrefixes": [ "", "p", "pc", "t", "f", "fT", "m", "pi", "pim", "reply_" ],
+  "urlKeywords": [ "thread", "res", "src", "thumb", "thumbs", "image", "images", "data", "static", "spoiler", "file", "files", "fpath", "media", "p", "q" ],
+  "fileExtensions": [ "jpg", "jpeg", "png", "gif", "webp", "webm", "mp4", "html", "spoiler" ],
+  "textContexts": {
+    "name": [ "name", "postername", "post_author", "linkName" ],
+    "trip": [ "postertrip", "post_tripcode", "trip" ],
+    "posterId": [ "hand", "poster_hash" ],
+    "fileName": [ "postfilename", "post_file_filename", "originalNameLink", "nameLink" ],
+    "deadLink": [ "deadlink" ],
+    "fuukaFileInfo": [ "span.fileinfo" ]
+  },
+  "grammar": {
+    "number": "777[0-9]{7}",
+    "word": "w[0-9]{1,4}",
+    "hex": "f{10,}[0-9]{6}",
+    "fileName": "file-[0-9]{1,4}\\.(?:jpg|jpeg|png|gif|webp|webm|mp4|html|spoiler|bin)",
+    "index": "[0-9]{1,4}",
+    "md5": "\\{\\{md5_[0-9]{1,4}\\}\\}",
+    "md5UrlSafe": "\\{\\{md5u_[0-9]{1,4}\\}\\}",
+    "host": "\\{\\{(base|media)\\}\\}"
+  }
+}

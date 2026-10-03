@@ -321,3 +321,8 @@ ASALocalRun/
 
 # Local working notes and plans (not tracked)
 /temp/
+
+# Claude Code agent worktrees and Firecrawl CLI cache (raw captures must never be committed)
+.claude/worktrees/
+.firecrawl/
+*-raw.html
