@@ -41,8 +41,8 @@ Site fixtures are real thread markup with every value replaced by a placeholder.
 | Board names and other URL words | `w1`, `w2`, ... (allowlisted keywords such as `thread`, `res`, `src` stay) |
 | Hosts | `{{base}}` (the page host) or `{{media}}` (any other host) |
 | Hex file hashes | `fff...000001` |
-| MD5s | `{{md5_N}}`, URL-safe form `{{md5u_N}}` |
+| MD5s | `{{md5_N}}`, URL-safe form `{{md5u_N}}`, standard form in a `/image/` path `{{md5s_N}}` |
 | File names | `file-N.ext` |
 | Names, tripcodes, poster IDs | `name-N`, `!trip-N`, `id-N` / `ID:id-N` ("Anonymous" stays) |
 
-The tests replace the hosts with `http://fixture.test` and `http://media.test`, and `{{md5_N}}` with the base64 MD5 of `fixture-image-N`.
+The tests replace the hosts with `http://fixture.test` and `http://media.test`, and `{{md5_N}}` with the base64 MD5 of `fixture-image-N-K`, where K is the smallest number from 0 whose base64 MD5 contains both `/` and `+`. `{{md5u_N}}` and `{{md5s_N}}` are the same MD5 in URL-safe and standard base64, without padding.

@@ -30,6 +30,24 @@ const SITES = {
         quotes: [['7770000006', '7770000004'], ['7770000016', '7770000014'], ['7770000017', '7770000016']],
         serverBacklinks: false
     },
+    '4chan-crosslinks': {
+        posts: 'div.post',
+        site: '4chan',
+        post: (doc, id) => doc.getElementById('p' + id),
+        prefix: 'p',
+        thumbs: 'a.fileThumb img',
+        quotes: [['7770000009', '7770000007'], ['7770000014', '7770000012'], ['7770000015', '7770000014']],
+        serverBacklinks: false
+    },
+    '4chan-names': {
+        posts: 'div.post',
+        site: '4chan',
+        post: (doc, id) => doc.getElementById('p' + id),
+        prefix: 'p',
+        thumbs: 'a.fileThumb img',
+        quotes: [['7770000006', '7770000004'], ['7770000011', '7770000009'], ['7770000012', '7770000010']],
+        serverBacklinks: false
+    },
     '8ch': {
         posts: 'div.post',
         site: 'vichan',
@@ -47,6 +65,15 @@ const SITES = {
         prefix: 'p',
         thumbs: 'a img.thumb',
         quotes: [['7770000006', '7770000005'], ['7770000007', '7770000006'], ['7770000008', '7770000007']],
+        serverBacklinks: false
+    },
+    'fuuka-base64-md5': {
+        posts: 'td.comment, div.comment',
+        site: 'fuuka',
+        post: (doc, id) => doc.getElementById('p' + id),
+        prefix: 'p',
+        thumbs: 'a img.thumb',
+        quotes: [['7770000006', '7770000005'], ['7770000014', '7770000012'], ['7770000015', '7770000011']],
         serverBacklinks: false
     },
     foolfuuka: {
@@ -99,7 +126,7 @@ function readFixture(name) {
     return fs.readFileSync(path.join(FIXTURES, name + '.html'), 'utf8')
         .replaceAll('{{base}}', BASE_URL)
         .replaceAll('{{media}}', MEDIA_URL)
-        .replace(/\{\{md5u?_\d+\}\}/g, 'AAAAAAAAAAAAAAAAAAAAAA==');
+        .replace(/\{\{md5[us]?_\d+\}\}/g, 'AAAAAAAAAAAAAAAAAAAAAA==');
 }
 
 // Like General.GetReplacementURL: a link to an anchor on the page becomes just the fragment

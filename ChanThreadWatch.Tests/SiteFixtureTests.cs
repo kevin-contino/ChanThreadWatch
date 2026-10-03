@@ -12,6 +12,10 @@ namespace JDP.Tests {
     public class SiteFixtureTests {
         public static IEnumerable<object[]> Fixtures => SiteFixtures.Names;
 
+        // Every value a {{md5_N}}, {{md5u_N}} or {{md5s_N}} placeholder can stand for
+        private static readonly Lazy<HashSet<string>> PlaceholderMD5s = new Lazy<HashSet<string>>(
+            () => new HashSet<string>(System.Linq.Enumerable.Range(1, 10000).Select(SiteFixtures.PlaceholderMD5)));
+
         // Nothing else may sit in the fixture folder (for example a raw capture), because only the
         // listed fixtures are checked for real data
         [TestMethod]
@@ -39,6 +43,7 @@ namespace JDP.Tests {
                 { "index", "[0-9]{1,4}" },
                 { "md5", @"\{\{md5_[0-9]{1,4}\}\}" },
                 { "md5UrlSafe", @"\{\{md5u_[0-9]{1,4}\}\}" },
+                { "md5Standard", @"\{\{md5s_[0-9]{1,4}\}\}" },
                 { "host", @"\{\{(base|media)\}\}" }
             }.ToList(), grammar.ToList());
         }
@@ -87,7 +92,7 @@ namespace JDP.Tests {
         [DynamicData(nameof(Fixtures))]
         public void HelperReadsPlaceholderValues(string name) {
             List<ImageInfo> images = CreateHelper(name).GetImages(null, new List<ThumbnailInfo>());
-            HashSet<string> md5s = new HashSet<string>(System.Linq.Enumerable.Range(1, 10000).Select(SiteFixtures.PlaceholderMD5));
+            HashSet<string> md5s = PlaceholderMD5s.Value;
 
             foreach (ImageInfo image in images) {
                 StringAssert.Matches(image.OriginalFileName, new Regex(@"^file-\d+\.[a-z0-9]+$"), name);
@@ -95,6 +100,32 @@ namespace JDP.Tests {
                 Assert.IsTrue(image.Hash == null || md5s.Contains(Convert.ToBase64String(image.Hash)), name + " hash");
                 Assert.IsTrue(image.Poster == "" || Regex.IsMatch(image.Poster, @"^(name-\d+(!trip-\d+)?|!trip-\d+|(ID:)?id-\d+|Anonymous!trip-\d+)$"), name + " poster " + image.Poster);
             }
+        }
+
+        // On warosu a reply's first span is the poster name inside its label; the file info is the
+        // span with the fileinfo class after it, so reply images are found as well as the OP's
+        [TestMethod]
+        public void FuukaFindsReplyImages() {
+            List<ImageInfo> images = CreateHelper("fuuka-base64-md5").GetImages(null, new List<ThumbnailInfo>());
+
+            CollectionAssert.AreEqual(new[] { "file-1.jpg", "file-2.png", "file-3.jpg" }, images.Select(i => i.OriginalFileName).ToArray());
+            CollectionAssert.AreEqual(new[] { 1, 2, 3 }.Select(SiteFixtures.PlaceholderMD5).ToArray(), images.Select(i => Convert.ToBase64String(i.Hash)).ToArray());
+        }
+
+        // The OP's "same image" link carries its MD5 in standard base64 ({{md5s_1}}), so the path
+        // after /image/ holds "/" and "+" and the whole of it is the MD5
+        [TestMethod]
+        public void FuukaReadsStandardBase64MD5FromSameImageLink() {
+            string fixture = SiteFixtures.ReadFixture("fuuka-base64-md5");
+            StringAssert.Contains(fixture, "/image/{{md5s_1}}\"");
+            string md5 = SiteFixtures.PlaceholderMD5(1);
+            StringAssert.Contains(SiteFixtures.Substitute(fixture), "/image/" + md5.TrimEnd('=') + "\"");
+
+            List<ImageInfo> images = CreateHelper("fuuka-base64-md5").GetImages(null, new List<ThumbnailInfo>());
+
+            Assert.AreEqual(HashType.MD5, images[0].HashType);
+            Assert.AreEqual(md5, Convert.ToBase64String(images[0].Hash));
+            StringAssert.Matches(md5, new Regex(@"^(?=.*/)(?=.*\+)"));
         }
 
         [TestMethod]
@@ -121,6 +152,8 @@ namespace JDP.Tests {
         [DataRow("<span class=\"name\">name-8144079</span>", "text \"name-8144079\"")]
         [DataRow("<span class=\"postfilename\">file-1.secretword</span>", "text \"file-1.secretword\"")]
         [DataRow("<div></div></div id=\"x\">", "attributes on </div>")]
+        [DataRow("<a href=\"/w3/image/AbC/dEf+gHi\"></a>", "href=\"/w3/image/AbC/dEf+gHi\" on <a>")]
+        [DataRow("<a href=\"/w3/image/{{md5x_1}}\"></a>", "href=\"/w3/image/{{md5x_1}}\" on <a>")]
         public void SterilityCheckRejectsRealData(string fixture, string expected) {
             CollectionAssert.Contains(SiteFixtures.FindViolations(fixture), expected);
         }
@@ -130,7 +163,7 @@ namespace JDP.Tests {
             const string fixture = "<!DOCTYPE html>\n<html><head></head><body><div class=\"thread\" id=\"t7770000001\"><span class=\"name\">name-1</span>" +
                 "<span class=\"postertrip\">!trip-2</span><span class=\"deadlink\">&gt;&gt;7770000003</span><span class=\"fileinfo\">File: 10 KB, 64x64, file-4.jpg <!-- {{md5_5}} --></span>" +
                 "<a href=\"{{media}}/w6/src/7770000007.jpg\" title=\"file-8.png\" target=\"_blank\"><img src=\"/w6/thumb/7770000009w7.jpg\" data-md5=\"{{md5_10}}\"></a>" +
-                "<a href=\"{{base}}/w6/image/{{md5u_10}}#p7770000001\">Anonymous</a></div></body></html>";
+                "<a href=\"{{base}}/w6/image/{{md5u_10}}#p7770000001\">Anonymous</a><a href=\"/w6/image/{{md5s_10}}\"></a></div></body></html>";
 
             Assert.IsEmpty(SiteFixtures.FindViolations(fixture));
         }
