@@ -878,8 +878,10 @@ namespace JDP {
         // Removes scripts, embedded content, event handler attributes and script URLs, so a saved
         // page can't run code when it is opened from disk
         private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets, string offlineScriptSite) {
-            AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite);
-            AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
+            // A page that gets no new policy keeps the one it has
+            if (AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite)) {
+                AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
+            }
             foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
                 replaceList.Add(CreateRemoveReplace(tag.Offset, GetActiveElementLength(htmlParser, tag)));
             }
@@ -899,10 +901,13 @@ namespace JDP {
 
         // Adds our script and the policy that allows it where the browser reads them in the head
         // (see OfflinePageScript.CreateHeadReplace). A page without a script, or without a head
-        // the browser would see as such, gets the policy that allows no script instead.
-        private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
+        // the browser would see as such, gets the policy that allows no script instead. Returns
+        // false if the page got no policy.
+        private static bool AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
             ReplaceInfo replace = (offlineScriptSite != null ? OfflinePageScript.CreateHeadReplace(htmlParser, offlineScriptSite) : null) ?? CreateNoScriptPolicyReplace(htmlParser);
-            if (replace != null) replaceList.Add(replace);
+            if (replace == null) return false;
+            replaceList.Add(replace);
+            return true;
         }
 
         // Replaces the head start tag, or the html start tag when the head is implied, so no other

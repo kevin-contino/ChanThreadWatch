@@ -251,6 +251,8 @@
         style.maxWidth = '60%';
         style.padding = '4px';
         style.border = '1px solid #888';
+        // A preview under the cursor must not take the mouse from the link it shows
+        style.pointerEvents = 'none';
         style.background = pageBackground();
         box.appendChild(clonePost(post));
         return box;

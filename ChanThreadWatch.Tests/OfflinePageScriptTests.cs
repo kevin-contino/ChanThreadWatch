@@ -164,6 +164,15 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
+        public void PageThatGetsNoNewPolicyKeepsItsEarlierOne() {
+            const string html = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\"><p>a</p>";
+
+            foreach (string site in new[] { null, "4chan" }) {
+                Assert.AreEqual(html, Save(html, site), site);
+            }
+        }
+
+        [TestMethod]
         public void PolicyThatTheSiteWroteIsKept() {
             const string sitePolicy = "<meta http-equiv=\"Content-Security-Policy\" content=\"img-src 'self'\">";
             const string otherHash = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'sha256-abc='; object-src 'none'; frame-src 'none'; connect-src 'none'\">";
@@ -222,10 +231,17 @@ namespace JDP.Tests {
         [DataRow("text<html><head></head></html>")]
         [DataRow("<p>a</p><html><head></head></html>")]
         [DataRow("<!-- <head> --><p>a</p>")]
+        // A browser ends these comments earlier than HTMLParser does
+        [DataRow("<!---><html><head></head></html>")]
+        [DataRow("<!--><html><head></head></html>")]
+        [DataRow("<!-- a --!> <html><head></head></html>")]
+        [DataRow("<!-- a <!-- b --><html><head></head></html>")]
+        [DataRow("<!---><body><script>alert(1)</script>--><html><head><title>t</title></head><body></body></html>")]
+        [DataRow("<?xml version=\"1.0\"?><html><head></head></html>")]
         public void HeadThatTheBrowserDoesNotSeeGetsNoScript(string html) {
             string saved = Save(html, "4chan");
 
-            Assert.DoesNotContain("<script", saved);
+            Assert.DoesNotContain("<script data-site", saved);
             Assert.DoesNotContain(OfflinePageScript.PolicyMeta, saved);
             Assert.AreEqual(SaveWithoutSite(html), saved);
         }
@@ -242,6 +258,17 @@ namespace JDP.Tests {
 
             StringAssert.Contains(saved, anchor + OfflinePageScript.PolicyMeta);
             AssertHasOfflineScript(saved, "4chan");
+        }
+
+        // HTMLParser reads "<!--->" as the start of a comment that ends at the next "-->", where a
+        // browser ends it at once and runs the script. Only the policy keeps it from running; this
+        // documents HTMLParser's behavior, which a separate change is to fix.
+        [TestMethod]
+        public void CommentThatABrowserEndsEarlyHidesAScriptFromTheRemoval() {
+            string saved = Save("<html><head></head><body><!---><script>alert(1)</script>--></body></html>", "4chan");
+
+            StringAssert.Contains(saved, "<!---><script>alert(1)</script>-->");
+            StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
         }
 
         // HTMLParser reads an svg title as text, so it finds no script tag there; a browser runs the

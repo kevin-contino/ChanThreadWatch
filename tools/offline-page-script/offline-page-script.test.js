@@ -332,6 +332,17 @@ for (const name of Object.keys(MANIFEST)) {
             assert.ok(parseFloat(style.left) >= 0 && parseFloat(style.top) >= 0);
         });
 
+        // A preview moved under the cursor by the clamp would otherwise take the mouse from the
+        // link, hide, and show again
+        test.it('a preview does not take the mouse from the link', async () => {
+            const page = await load(name);
+            const [fromId, toId] = page.config.quotes[0];
+
+            mouse(page, quoteLink(page, fromId, toId), 'mouseover', null, 5000, 5000);
+
+            assert.equal(previews(page)[0].style.pointerEvents, 'none');
+        });
+
         // In a browser, elements named like document properties shadow them, and a form's fields
         // shadow the form's properties. jsdom does not shadow them, so this only shows that such
         // markup does not stop the script; a browser is needed to see the shadowing itself.
