@@ -226,7 +226,7 @@ namespace JDP.Tests.Integration {
             LoopbackResponse error = LoopbackResponse.StatusOnly(500, "Internal Server Error");
             server.RouteSequence(FirstImage, error, error, error, LoopbackResponse.Bytes(fixture.Images[FirstImage], "image/jpeg"));
             ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
-            string imagePath = Path.Combine(DownloadDir, "0_wg_100", "1700000000001.jpg");
+            string imagePath = Path.Combine(DownloadDir, "127.0.0.1_wg_100", "1700000000001.jpg");
             FileStream blocker = null;
             var failedCounts = new List<int>();
             watcher.WaitStatus += (s, e) => failedCounts.Add(watcher.FailedFileCount);
@@ -400,7 +400,7 @@ namespace JDP.Tests.Integration {
             LoopbackHttpServer server = StartServer();
             fixture.RouteAll(server);
             Settings.SortImagesByPoster = true;
-            string threadDir = Path.Combine(DownloadDir, "0_wg_100");
+            string threadDir = Path.Combine(DownloadDir, "127.0.0.1_wg_100");
             Directory.CreateDirectory(threadDir);
             // A file where the poster folder of "Bob!Trip" would go
             File.WriteAllText(Path.Combine(threadDir, "Bob!Trip"), "not a folder");
@@ -655,7 +655,7 @@ namespace JDP.Tests.Integration {
                 RawBytes = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: " + announced + "\r\nConnection: close\r\n\r\nshort body")
             });
             ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
-            string path = Path.Combine(DownloadDir, "0_wg_100", "1700000000001.jpg");
+            string path = Path.Combine(DownloadDir, "127.0.0.1_wg_100", "1700000000001.jpg");
             long largestPreallocation = 0;
             var sync = new object();
             watcher.DownloadStart += (s, e) => {

@@ -287,6 +287,78 @@ namespace JDP.Tests {
             Assert.IsNotNull(images[0].Hash);
         }
 
+        // B26: a dead post without a checkbox is still resurrected, with the marker after its start tag
+        [TestMethod]
+        public void FourChanResurrectDeadPostsMarksPostWithoutCheckbox() {
+            string previous = FourChanThread(FourChanContainer("pc1", "first") +
+                "<div class=\"postContainer replyContainer\" id=\"pc2\"><div class=\"post reply\"><blockquote class=\"postMessage\">deleted</blockquote></div></div>");
+            string current = FourChanThread(FourChanContainer("pc1", "first"));
+            SiteHelper helper = CreateHelper(FourChanURL, current);
+
+            helper.ResurrectDeadPosts(new HTMLParser(previous), new List<ReplaceInfo>());
+
+            StringAssert.Contains(helper.GetHTMLParser().PreprocessedHTML,
+                "<div class=\"postContainer replyContainer\" id=\"pc2\"><strong style=\"color: #FF0000\">[Deleted]</strong><div class=\"post reply\">");
+        }
+
+        // B26
+        [TestMethod]
+        public void InfinitechanResurrectDeadPostsMarksPostWithoutCheckbox() {
+            string previous = InfinitechanThread(InfinitechanPost("op_1", "first") +
+                "<div class=\"post reply\" id=\"reply_2\"><p class=\"intro\"><span class=\"name\">Anonymous</span></p><div class=\"body\">deleted</div></div>");
+            string current = InfinitechanThread(InfinitechanPost("op_1", "first"));
+            SiteHelper helper = CreateHelper(InfinitechanURL, current);
+
+            helper.ResurrectDeadPosts(new HTMLParser(previous), new List<ReplaceInfo>());
+
+            StringAssert.Contains(helper.GetHTMLParser().PreprocessedHTML,
+                "<div class=\"post reply\" id=\"reply_2\"><strong style=\"color: #FF0000\">[Deleted]</strong> <p class=\"intro\">");
+        }
+
+        // B27: a URL without path segments (e.g. a saved page path) gives an empty thread ID
+        // instead of throwing, while a short URL such as a board URL keeps its last segment, so
+        // that different boards still get different page IDs and folder names
+        [TestMethod]
+        [DataRow(@"C:\Threads\100.html", "")]
+        [DataRow("https://boards.4chan.org/wg/", "wg")]
+        public void FourChanThreadIDOfURLWithTooFewSegments(string url, string expected) {
+            SiteHelper helper = SiteHelpers.GetInstance("boards.4chan.org");
+            helper.SetURL(url);
+
+            Assert.AreEqual(expected, helper.GetThreadID());
+            Assert.AreEqual(expected, helper.GetThreadName());
+        }
+
+        // B28: a post that is a td with a div of the same id inside it has its image read once
+        [TestMethod]
+        public void FuukaGetImagesReadsPostInsideSameIDCellOnce() {
+            const string imageURL = "https://i.warosu.org/data/g/img/1.jpg";
+            string html = "<table><tr><td id=\"p1\">" + FuukaPost("p1", imageURL, "a.jpg") + "</td></tr></table>";
+            var replaces = new List<ReplaceInfo>();
+            var thumbs = new List<ThumbnailInfo>();
+
+            List<ImageInfo> images = CreateHelper(FuukaURL, html).GetImages(replaces, thumbs);
+
+            CollectionAssert.AreEqual(new[] { imageURL }, images.Select(i => i.URL).ToArray());
+            Assert.HasCount(1, thumbs);
+            Assert.HasCount(2, replaces);
+        }
+
+        // An IP address host is used whole for the site name (and so the folder name), instead
+        // of its next-to-last number; domain names keep their second-level name
+        [TestMethod]
+        [DataRow("http://127.0.0.1:8080/b/res/123.html", "127.0.0.1")]
+        [DataRow("http://[::1]:8080/b/res/123.html", "[--1]")]
+        [DataRow("http://[fe80::1]/b/res/123.html", "[fe80--1]")]
+        [DataRow("https://boards.example.com/b/res/123.html", "example")]
+        public void GenericSiteNameOfIPAddressHostIsTheWholeHost(string url, string expected) {
+            SiteHelper helper = new SiteHelper();
+            helper.SetURL(url);
+
+            Assert.AreEqual(expected, helper.GetSiteName());
+            Assert.AreEqual(expected + "/b/123", helper.GetPageID());
+        }
+
         private static List<ImageInfo> AssertOnlyImage(string url, string html, string expectedImageURL) {
             List<ImageInfo> images = GetImages(url, html);
             CollectionAssert.AreEqual(new[] { expectedImageURL }, images.Select(i => i.URL).ToArray());
