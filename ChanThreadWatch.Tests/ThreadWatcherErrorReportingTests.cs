@@ -75,6 +75,16 @@ namespace JDP.Tests {
             Assert.AreEqual("Stopped: User requested", frmChanThreadWatch.AppendReparseError("Stopped: User requested", String.Empty));
         }
 
+        // A bug's raw message (e.g. from Path.Combine with a null folder) is not shown; file errors are
+        [TestMethod]
+        public void ReparseErrorHidesTheMessageOfAnUnexpectedError() {
+            Exception bug = Assert.ThrowsExactly<ArgumentNullException>(() => Path.Combine(null, "1.html"));
+            Assert.AreEqual("unexpected error, details in the log file", ThreadWatcher.DescribeReparseError(bug));
+            Assert.AreEqual("unexpected error, details in the log file", ThreadWatcher.DescribeReparseError(new InvalidOperationException("Sequence contains no elements")));
+            Assert.AreEqual("Access to the path is denied", ThreadWatcher.DescribeReparseError(new UnauthorizedAccessException("Access to the path is denied.")));
+            Assert.AreEqual("The disk is full", ThreadWatcher.DescribeReparseError(new IOException("The disk is full.\r\n")));
+        }
+
         // B25: a thread added by auto-follow only inherits credentials from a same-origin parent
         [TestMethod]
         public void ChildThreadOnAnotherOriginGetsNoCredentials() {

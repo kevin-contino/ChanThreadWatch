@@ -24,6 +24,8 @@ namespace JDP {
         internal static int ReadTimeoutMS { get; set; } = DefaultReadTimeoutMS;
         internal static int MaxPageBytes { get; set; } = DefaultMaxPageBytes;
         internal static int MaxPageReadMS { get; set; } = DefaultMaxPageReadMS;
+        internal static int FileReadGraceMS { get; set; } = DefaultFileReadGraceMS;
+        internal static int MinFileBytesPerSecond { get; set; } = DefaultMinFileBytesPerSecond;
 
         internal const int DefaultRequestTimeoutMS = 60000;
         internal const int DefaultReadTimeoutMS = 60000;
@@ -32,6 +34,12 @@ namespace JDP {
         // Longest time spent reading a page that is buffered in memory. Each read is also limited
         // by ReadTimeoutMS, but a server sending a byte now and then would never reach that.
         internal const int DefaultMaxPageReadMS = 5 * 60 * 1000;
+        // A streamed download (a file, or a page reached through a meta refresh) has no fixed
+        // size to base a time limit on, so it may take FileReadGraceMS plus the time its data
+        // needs at MinFileBytesPerSecond: a 100 MB video may take about 3 hours. A server
+        // dripping data slower than that is cut off, and the size limit bounds the rest.
+        internal const int DefaultFileReadGraceMS = 5 * 60 * 1000;
+        internal const int DefaultMinFileBytesPerSecond = 10 * 1024;
 
         public const string DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
@@ -224,9 +232,9 @@ namespace JDP {
 
         // Reads the stream to its end and closes it. Throws PageTooLargeException as soon as the
         // data grows past MaxPageBytes, so an oversized page never gets buffered in full, and
-        // times out once reading has taken longer than MaxPageReadMS (unless speed is limited).
+        // times out once reading has taken longer than MaxPageReadMS (not counting the speed limit).
         internal static byte[] ReadPageBytes(Stream stream) {
-            long deadlineTicks = TickCount.Now + MaxPageReadMS;
+            long startTicks = TickCount.Now;
             using (stream)
             using (MemoryStream memoryStream = new MemoryStream()) {
                 byte[] data = new byte[8192];
@@ -235,7 +243,7 @@ namespace JDP {
                     if (memoryStream.Length + dataLen > MaxPageBytes) {
                         throw new PageTooLargeException(MaxPageBytes);
                     }
-                    if (IsPastPageReadDeadline(deadlineTicks)) {
+                    if (GetActiveReadMS(startTicks, stream) > MaxPageReadMS) {
                         throw new Exception("Timed out while reading response.");
                     }
                     memoryStream.Write(data, 0, dataLen);
@@ -244,10 +252,17 @@ namespace JDP {
             }
         }
 
-        // A speed limit (shared by all downloads) can make a healthy page take longer than
-        // MaxPageReadMS, so the deadline only applies without one
-        private static bool IsPastPageReadDeadline(long deadlineTicks) {
-            return TickCount.Now > deadlineTicks && (Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite) == ThrottledStream.Infinite;
+        // The time spent reading since startTicks, less the time the speed limit (shared by
+        // all downloads) made the stream sleep, which can make a healthy download take any time
+        private static long GetActiveReadMS(long startTicks, Stream stream) {
+            ThrottledStream throttledStream = stream as ThrottledStream;
+            long sleptMS = throttledStream != null ? throttledStream.SleptMilliseconds : 0;
+            return TickCount.Now - startTicks - sleptMS;
+        }
+
+        // A streamed download may take FileReadGraceMS plus the time its data needs at MinFileBytesPerSecond
+        private static bool IsPastStreamReadDeadline(long startTicks, Stream stream, long bytesRead) {
+            return GetActiveReadMS(startTicks, stream) > FileReadGraceMS + bytesRead * 1000 / MinFileBytesPerSecond;
         }
 
         public static DateTime? GetResponseLastModifiedTime(HttpWebResponse response) {
@@ -1021,11 +1036,14 @@ namespace JDP {
             private readonly Action _onComplete;
             private readonly Action<Exception> _onException;
             private bool _aborting;
+            private bool _completed;
             private HttpWebRequest _request;
             private HttpWebResponse _response;
             private Stream _responseStream;
             private byte[] _buff;
             private string _url;
+            private long _readStartTicks;
+            private long _totalBytesRead;
 
             public AsyncDownload(string auth, string connectionGroupName, DateTime? cacheLastModifiedTime, Action<HttpWebResponse> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
                 _auth = auth;
@@ -1037,11 +1055,24 @@ namespace JDP {
                 _onException = onException;
             }
 
+            // Unfortunately BeginGetResponse blocks until the DNS lookup (and proxy detection) has
+            // finished, so it runs on a thread pool thread and the caller gets the abort delegate
+            // right away. HttpWebRequest.Abort would also wait for the lookup, so the request is
+            // only published for AbortInternal once BeginGetResponse has returned.
             public void Start(string url, string referer) {
                 try {
                     HttpWebRequest request = CreateRequest(url, referer);
-                    // Unfortunately BeginGetResponse blocks until the DNS lookup has finished
+                    ThreadPool.QueueUserWorkItem((s) => BeginGetResponse(request));
+                }
+                catch (Exception ex) {
+                    AbortInternal(ex);
+                }
+            }
+
+            private void BeginGetResponse(HttpWebRequest request) {
+                try {
                     IAsyncResult requestResult = request.BeginGetResponse(OnGetResponse, request);
+                    PublishRequest(request);
                     AbortOnTimeout(requestResult, RequestTimeoutMS, "Timed out while waiting for response.");
                 }
                 catch (Exception ex) {
@@ -1052,8 +1083,21 @@ namespace JDP {
             private HttpWebRequest CreateRequest(string url, string referer) {
                 lock (_sync) {
                     _url = url;
-                    _request = BuildWebRequest(url: url, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime, referer: referer);
-                    return _request;
+                    return BuildWebRequest(url: url, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime, referer: referer);
+                }
+            }
+
+            // If the download was aborted during BeginGetResponse, the request is aborted here
+            // instead (but not once completed, which would close a reusable connection). A meta
+            // refresh request may already have replaced it.
+            private void PublishRequest(HttpWebRequest request) {
+                lock (_sync) {
+                    if (!_aborting) {
+                        if (_request == null) _request = request;
+                    }
+                    else if (!_completed) {
+                        request.Abort();
+                    }
                 }
             }
 
@@ -1215,6 +1259,7 @@ namespace JDP {
                     _responseStream = responseStream;
                     _onResponse(_response);
                     _buff = new byte[ReadBufferSize];
+                    _readStartTicks = TickCount.Now;
                     return true;
                 }
             }
@@ -1244,15 +1289,21 @@ namespace JDP {
                 }
             }
 
-            // Called while holding _sync. Returns false when the download has completed.
+            // Called while holding _sync. Returns false when the download has completed. Each
+            // read is limited by ReadTimeoutMS, and the whole download by the stream read deadline.
             private bool ReadChunk(IAsyncResult readResultParam) {
                 int bytesRead = _responseStream.EndRead(readResultParam);
                 if (bytesRead == 0) {
                     _request = null;
+                    _completed = true;
                     _onComplete();
                     _aborting = true;
                     Cleanup();
                     return false;
+                }
+                _totalBytesRead += bytesRead;
+                if (IsPastStreamReadDeadline(_readStartTicks, _responseStream, _totalBytesRead)) {
+                    throw new Exception("Timed out while reading response.");
                 }
                 _onDownloadChunk(_buff, bytesRead);
                 return true;

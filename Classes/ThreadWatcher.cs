@@ -457,7 +457,7 @@ namespace JDP {
             }
             catch (Exception ex) {
                 lock (_settingsSync) {
-                    _reparseError = String.Join(" ", ex.Message.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
+                    _reparseError = DescribeReparseError(ex);
                 }
                 Logger.Log("Reparse of " + _pageURL + " failed:" + Environment.NewLine + ex);
             }
@@ -469,6 +469,14 @@ namespace JDP {
                 // Replaces the reparse progress with the stop status, and the reparse error if any
                 OnStopStatus(new StopStatusEventArgs(StopReason));
             }
+        }
+
+        // A short description of why a reparse failed, shown in the status. File errors (e.g.
+        // access denied) keep their message; any other error is a bug whose message (e.g.
+        // "Value cannot be null") means nothing to the user, so it is only in the log.
+        internal static string DescribeReparseError(Exception ex) {
+            if (!(ex is IOException || ex is UnauthorizedAccessException)) return "unexpected error, details in the log file";
+            return String.Join(" ", ex.Message.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
         }
 
         private void ReparsePages() {

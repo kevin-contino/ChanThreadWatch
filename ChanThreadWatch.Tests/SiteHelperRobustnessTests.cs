@@ -435,6 +435,19 @@ namespace JDP.Tests {
             Assert.AreEqual(expected + "/b/123", helper.GetPageID());
         }
 
+        // A single-label host has no second-level name, so it is used whole instead of giving
+        // an empty site name (and a folder name like "_b_123")
+        [TestMethod]
+        [DataRow("http://localhost:8080/b/res/123.html", "localhost")]
+        [DataRow("http://myserver/b/res/123.html", "myserver")]
+        public void GenericSiteNameOfSingleLabelHostIsTheWholeHost(string url, string expected) {
+            SiteHelper helper = new SiteHelper();
+            helper.SetURL(url);
+
+            Assert.AreEqual(expected, helper.GetSiteName());
+            Assert.AreEqual(expected + "/b/123", helper.GetPageID());
+        }
+
         private static List<ImageInfo> AssertOnlyImage(string url, string html, string expectedImageURL) {
             List<ImageInfo> images = GetImages(url, html);
             CollectionAssert.AreEqual(new[] { expectedImageURL }, images.Select(i => i.URL).ToArray());

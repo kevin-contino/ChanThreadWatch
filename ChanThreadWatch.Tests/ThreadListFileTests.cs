@@ -299,6 +299,92 @@ namespace JDP.Tests {
             CollectionAssert.AreEqual(Version4Lines(), File.ReadAllLines(_path));
         }
 
+        // A backup written before logins were encrypted is rewritten by the first save, with
+        // its own threads (not the saved list) and encrypted logins
+        [TestMethod]
+        public void FirstSaveEncryptsPlaintextLoginsInTheBackup() {
+            string backupPath = _path + ".bak";
+            File.WriteAllLines(_path, Version4Lines());
+            File.WriteAllLines(backupPath, Version1Lines());
+            ThreadListStore store = new ThreadListStore();
+            LoadLikeTheForm(store, _path);
+
+            Assert.IsTrue(store.Save(_path, store.Read(_path).Threads));
+
+            string[] backup = File.ReadAllLines(backupPath);
+            CollectionAssert.DoesNotContain(backup, "user:pass");
+            Assert.IsFalse(ThreadListFile.HasPlaintextAuth(backup));
+            ThreadListData data = ThreadListFile.Parse(backup);
+            Assert.HasCount(1, data.Threads);
+            Assert.AreEqual("https://boards.4chan.org/a/thread/1", data.Threads[0].URL);
+            Assert.AreEqual("user:pass", data.Threads[0].PageAuth);
+        }
+
+        // E.g. antivirus or a sync tool holding the backup during the first save
+        [TestMethod]
+        public void BackupInUseDuringTheFirstSaveIsEncryptedByALaterSave() {
+            string backupPath = _path + ".bak";
+            File.WriteAllLines(_path, Version4Lines());
+            File.WriteAllLines(backupPath, Version1Lines());
+            ThreadListStore store = new ThreadListStore();
+            LoadLikeTheForm(store, _path);
+
+            using (new FileStream(backupPath, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                Assert.IsTrue(store.Save(_path, new List<ThreadInfo>()));
+            }
+            Assert.IsTrue(ThreadListFile.HasPlaintextAuth(File.ReadAllLines(backupPath)));
+            Assert.IsTrue(store.Save(_path, new List<ThreadInfo>()));
+
+            string[] backup = File.ReadAllLines(backupPath);
+            Assert.IsFalse(ThreadListFile.HasPlaintextAuth(backup));
+            Assert.AreEqual("user:pass", ThreadListFile.Parse(backup).Threads[0].PageAuth);
+        }
+
+        // A backup that doesn't load fully can't be written again without losing data, so it is
+        // only reported, once, without the login
+        [TestMethod]
+        public void IncompleteBackupWithPlaintextLoginsIsReportedOnceAndLeftAsItIs() {
+            string backupPath = _path + ".bak";
+            string[] truncated = new List<string>(Version1Lines()) { "https://boards.4chan.org/a/thread/2" }.ToArray();
+            File.WriteAllLines(_path, Version4Lines());
+            File.WriteAllLines(backupPath, truncated);
+            ThreadListStore store = new ThreadListStore();
+            LoadLikeTheForm(store, _path);
+            string logPath = Path.Combine(Settings.GetSettingsDirectory(), Settings.LogFileName);
+            Logger.Log("ThreadListFileTests marker");
+            int start = ReadSharedFile(logPath).Length;
+
+            store.Save(_path, new List<ThreadInfo>());
+            store.Save(_path, new List<ThreadInfo>());
+
+            CollectionAssert.AreEqual(truncated, File.ReadAllLines(backupPath));
+            string log = ReadSharedFile(logPath).Substring(start);
+            Assert.AreEqual(1, log.Split(new[] { "backup holds plaintext logins" }, StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("user:pass", log);
+        }
+
+        // The logger keeps the log file open for appending
+        private static string ReadSharedFile(string path) {
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (StreamReader sr = new StreamReader(fs)) {
+                return sr.ReadToEnd();
+            }
+        }
+
+        [TestMethod]
+        public void BackupWithoutPlaintextLoginsIsLeftAsItIs() {
+            string backupPath = _path + ".bak";
+            string[] encrypted = ThreadListFile.GetBackupLines(Version1Lines());
+            File.WriteAllLines(_path, Version4Lines());
+            File.WriteAllLines(backupPath, encrypted);
+            ThreadListStore store = new ThreadListStore();
+            LoadLikeTheForm(store, _path);
+
+            store.Save(_path, new List<ThreadInfo>());
+
+            CollectionAssert.AreEqual(encrypted, File.ReadAllLines(backupPath));
+        }
+
         private static IEnumerable<string> LinesThatFailAfter(int count) {
             for (int i = 0; i < count; i++) {
                 yield return "new " + i;

@@ -31,6 +31,8 @@ namespace JDP.Tests {
             General.ReadTimeoutMS = General.DefaultReadTimeoutMS;
             General.MaxPageBytes = General.DefaultMaxPageBytes;
             General.MaxPageReadMS = General.DefaultMaxPageReadMS;
+            General.FileReadGraceMS = General.DefaultFileReadGraceMS;
+            General.MinFileBytesPerSecond = General.DefaultMinFileBytesPerSecond;
             Settings.MaximumBytesPerSecond = null;
         }
 
@@ -312,6 +314,105 @@ namespace JDP.Tests {
             }
         }
 
+        // A speed limit no longer turns the page deadline off: this limit is far above the drip
+        // rate, so the stream never sleeps and the drip still counts against the deadline
+        [TestMethod]
+        public void DripFedHtmlBodyTimesOutWithASpeedLimit() {
+            General.MaxPageReadMS = ShortTimeoutMS;
+            Settings.MaximumBytesPerSecond = 1L << 40;
+            using (var release = new ManualResetEvent(false))
+            using (var server = new LoopbackHttpServer()) {
+                try {
+                    server.Route("/start", LoopbackResponse.RawThenDrip(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n<html><head>", release, TimeSpan.FromMilliseconds(100)));
+
+                    DownloadProbe probe = DownloadProbe.Start(server.URL("/start"));
+
+                    probe.AssertEndsOnce(ShortTimeoutBound);
+                    Assert.AreEqual("Timed out while reading response.", probe.Error.Message);
+                }
+                finally {
+                    release.Set();
+                }
+            }
+        }
+
+        // A byte every 100 ms is far below the minimum average speed, so the file download
+        // times out after the grace period although each read gets data in time
+        [TestMethod]
+        public void DripFedFileTimesOut() {
+            General.FileReadGraceMS = ShortTimeoutMS;
+            General.MinFileBytesPerSecond = 1000 * 1000;
+            using (var release = new ManualResetEvent(false))
+            using (var server = new LoopbackHttpServer()) {
+                try {
+                    server.Route("/file", LoopbackResponse.RawThenDrip(
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/webm\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n", release, TimeSpan.FromMilliseconds(100)));
+
+                    DownloadProbe probe = DownloadProbe.Start(server.URL("/file"));
+
+                    probe.AssertEndsOnce(ShortTimeoutBound);
+                    Assert.AreEqual("Timed out while reading response.", probe.Error.Message);
+                }
+                finally {
+                    release.Set();
+                }
+            }
+        }
+
+        // The speed limit makes this file take about 4 s, far longer than the 1.2 s it is
+        // allowed, but the time the throttle sleeps does not count against the deadline
+        [TestMethod]
+        public void SpeedLimitedFileIsNotCutOffByTheDeadline() {
+            const int fileBytes = 200 * 1024;
+            General.FileReadGraceMS = ShortTimeoutMS;
+            General.MinFileBytesPerSecond = 1000 * 1000;
+            Settings.MaximumBytesPerSecond = 50 * 1024;
+            using (var release = new ManualResetEvent(false))
+            using (var server = new LoopbackHttpServer()) {
+                try {
+                    server.Route("/file", LoopbackResponse.RawThenDrip(
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/webm\r\nContent-Length: " + fileBytes + "\r\nConnection: close\r\n\r\n",
+                        release, TimeSpan.FromMilliseconds(20), 8 * 1024));
+
+                    DownloadProbe probe = DownloadProbe.Start(server.URL("/file"));
+
+                    probe.AssertEndsOnce(Promptly);
+                    Assert.AreEqual(1, probe.Completes, probe.Error?.ToString());
+                    Assert.AreEqual(new string('a', fileBytes), probe.BodyText);
+                }
+                finally {
+                    release.Set();
+                }
+            }
+        }
+
+        // BeginGetResponse blocks during the DNS lookup and proxy detection; a proxy that
+        // doesn't answer until released stands in for a slow lookup. The abort delegate must
+        // be handed back, and work, before the lookup ends.
+        [TestMethod]
+        public void AbortDuringSlowLookupEndsPromptly() {
+            IWebProxy defaultProxy = WebRequest.DefaultWebProxy;
+            using (var release = new ManualResetEvent(false)) {
+                try {
+                    WebRequest.DefaultWebProxy = new BlockingProxy(release);
+                    DownloadProbe probe = null;
+                    var starter = new Thread(() => probe = DownloadProbe.Start("http://slow-lookup.invalid/b/res/1.html"));
+                    starter.Start();
+                    Assert.IsTrue(starter.Join(Promptly), "DownloadAsync did not return until the lookup ended");
+
+                    probe.Abort();
+
+                    probe.AssertEndsOnce(Promptly);
+                    Assert.AreEqual("Download has been aborted.", probe.Error.Message);
+                }
+                finally {
+                    release.Set();
+                    WebRequest.DefaultWebProxy = defaultProxy;
+                }
+            }
+        }
+
         [TestMethod]
         public void StalledMetaRefreshRequestTimesOut() {
             General.RequestTimeoutMS = ShortTimeoutMS;
@@ -531,6 +632,26 @@ namespace JDP.Tests {
         private static int ConcurrentDownloads() {
             FieldInfo field = typeof(ThrottledStream).GetField("_concurrentDownloads", BindingFlags.NonPublic | BindingFlags.Static);
             return (int)field.GetValue(null);
+        }
+
+        private sealed class BlockingProxy : IWebProxy {
+            private readonly WaitHandle _release;
+
+            public BlockingProxy(WaitHandle release) {
+                _release = release;
+            }
+
+            public ICredentials Credentials { get; set; }
+
+            public Uri GetProxy(Uri destination) {
+                _release.WaitOne(TimeSpan.FromSeconds(30));
+                return destination;
+            }
+
+            public bool IsBypassed(Uri host) {
+                _release.WaitOne(TimeSpan.FromSeconds(30));
+                return true;
+            }
         }
 
         private sealed class DownloadProbe {

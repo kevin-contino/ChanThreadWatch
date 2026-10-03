@@ -20,6 +20,11 @@ namespace JDP {
             return stored != null && stored.StartsWith(Prefix, StringComparison.Ordinal);
         }
 
+        // True for a non-empty login that was written unencrypted by an older version
+        public static bool IsPlaintext(string stored) {
+            return !String.IsNullOrEmpty(stored) && !IsProtected(stored);
+        }
+
         // Line breaks are replaced as in the rest of the file, so a login reads back the
         // same whether it was saved encrypted or as plaintext. Null and empty stay empty.
         public static string Protect(string auth) {
