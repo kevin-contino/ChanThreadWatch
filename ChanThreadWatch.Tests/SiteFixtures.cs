@@ -39,9 +39,15 @@ namespace JDP.Tests {
         }
 
         public static string Substitute(string fixture) {
-            string html = fixture.Replace("{{base}}", BaseURL).Replace("{{media}}", MediaURL);
-            html = Regex.Replace(html, @"\{\{md5_(\d+)\}\}", m => PlaceholderMD5(Int32.Parse(m.Groups[1].Value)));
-            return Regex.Replace(html, @"\{\{md5u_(\d+)\}\}", m => PlaceholderMD5(Int32.Parse(m.Groups[1].Value)).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+            return Substitute(fixture, BaseURL, MediaURL, PlaceholderMD5);
+        }
+
+        // md5 returns the base64 MD5 that {{md5_N}} stands for, given N; {{md5u_N}} gets the
+        // URL-safe form of the same value without padding
+        public static string Substitute(string fixture, string baseURL, string mediaURL, Func<int, string> md5) {
+            string html = fixture.Replace("{{base}}", baseURL).Replace("{{media}}", mediaURL);
+            html = Regex.Replace(html, @"\{\{md5_(\d+)\}\}", m => md5(Int32.Parse(m.Groups[1].Value)));
+            return Regex.Replace(html, @"\{\{md5u_(\d+)\}\}", m => md5(Int32.Parse(m.Groups[1].Value)).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
         }
 
         private static Dictionary<string, object> ReadJson(string fileName) {
