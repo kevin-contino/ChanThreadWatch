@@ -409,8 +409,13 @@ namespace JDP {
             }
         }
 
+        // Setting the login that is already read back keeps the stored value, so a saved login
+        // that can't be decrypted (read as empty) survives until a different login is set.
         private static void SetAuth(string name, string value) {
-            Set(name, value != null ? StoredAuth.Protect(value) : null);
+            lock (_sync) {
+                if (value == GetAuth(name)) return;
+                Set(name, value != null ? StoredAuth.Protect(value) : null);
+            }
         }
 
         private static void SetBool(string name, bool? value) {

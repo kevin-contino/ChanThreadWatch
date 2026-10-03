@@ -191,10 +191,12 @@ namespace JDP.Tests {
             int start = ReadSharedFile(logPath).Length;
 
             Assert.AreEqual(String.Empty, StoredAuth.Unprotect(stored));
+            Assert.AreEqual(String.Empty, StoredAuth.Unprotect(stored));
 
-            // Only what this test logged; the log file is shared by the whole run
+            // Only what this test logged; the log file is shared by the whole run. The
+            // same value is reported once, so the periodic backup doesn't repeat it.
             string log = ReadSharedFile(logPath).Substring(start);
-            Assert.Contains("A saved login could not be decrypted", log);
+            Assert.AreEqual(1, log.Split(new[] { "A saved login could not be decrypted" }, StringSplitOptions.None).Length - 1);
             Assert.DoesNotContain(stored.Substring(StoredAuth.Prefix.Length, 24), log);
             Assert.DoesNotContain("fakepage", log);
         }
@@ -205,6 +207,54 @@ namespace JDP.Tests {
             using (StreamReader sr = new StreamReader(fs)) {
                 return sr.ReadToEnd();
             }
+        }
+
+        // A temporary DPAPI failure must not erase the login: the stored value is written back as it was
+        [TestMethod]
+        public void UndecryptableThreadListAuthSurvivesSaveByteForByte() {
+            File.WriteAllLines(ThreadsPath, Version4Lines(Tampered(StoredAuth.Protect(FakePageAuth)), ProtectedWithOtherEntropy(FakeImageAuth)));
+            byte[] original = File.ReadAllBytes(ThreadsPath);
+
+            List<ThreadInfo> reloaded = SaveThreads(new ThreadListStore().Read(ThreadsPath).Threads);
+            SaveThreads(reloaded);
+
+            CollectionAssert.AreEqual(original, File.ReadAllBytes(ThreadsPath));
+            Assert.AreEqual(String.Empty, reloaded[0].PageAuth);
+            Assert.AreEqual(String.Empty, reloaded[0].ImageAuth);
+        }
+
+        [TestMethod]
+        public void NewThreadListLoginReplacesAnUndecryptableOne() {
+            string otherEntropy = ProtectedWithOtherEntropy(FakeImageAuth);
+            File.WriteAllLines(ThreadsPath, Version4Lines(Tampered(StoredAuth.Protect(FakePageAuth)), otherEntropy));
+            ThreadInfo thread = new ThreadListStore().Read(ThreadsPath).Threads[0];
+            thread.PageAuth = "fakenewuser:fakenewpass";
+
+            List<ThreadInfo> reloaded = SaveThreads(new List<ThreadInfo> { thread });
+
+            Assert.AreEqual("fakenewuser:fakenewpass", reloaded[0].PageAuth);
+            Assert.AreEqual(otherEntropy, File.ReadAllLines(ThreadsPath)[3]);
+        }
+
+        [TestMethod]
+        public void ClearedUndecryptableThreadListLoginIsWrittenEmpty() {
+            File.WriteAllLines(ThreadsPath, Version4Lines(Tampered(StoredAuth.Protect(FakePageAuth)), ""));
+            ThreadInfo thread = new ThreadListStore().Read(ThreadsPath).Threads[0];
+            // What the edit form does when the login is changed to empty
+            thread.ExtraData.UndecryptablePageAuth = null;
+
+            SaveThreads(new List<ThreadInfo> { thread });
+
+            Assert.AreEqual(String.Empty, File.ReadAllLines(ThreadsPath)[2]);
+        }
+
+        [TestMethod]
+        public void BackupKeepsAnUndecryptableLogin() {
+            string tampered = Tampered(StoredAuth.Protect(FakePageAuth));
+
+            string[] backup = ThreadListFile.GetBackupLines(Version4Lines(tampered, ""));
+
+            Assert.AreEqual(tampered, backup[2]);
         }
 
         [TestMethod]
@@ -279,6 +329,36 @@ namespace JDP.Tests {
 
             Assert.AreEqual(String.Empty, Settings.PageAuth);
             Assert.IsTrue(Settings.UseSlug);
+        }
+
+        // Mirrors the main form: the text box is filled from the setting and written back on exit
+        [TestMethod]
+        public void UndecryptableSettingsAuthSurvivesSaveByteForByte() {
+            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + Tampered(StoredAuth.Protect(FakePageAuth)), "ImageAuth=" + ProtectedWithOtherEntropy(FakeImageAuth) });
+            byte[] original = File.ReadAllBytes(SettingsPath);
+            Settings.Load(SettingsPath);
+
+            Settings.PageAuth = Settings.PageAuth ?? String.Empty;
+            Settings.ImageAuth = Settings.ImageAuth ?? String.Empty;
+            Settings.Save(SettingsPath);
+
+            CollectionAssert.AreEqual(original, File.ReadAllBytes(SettingsPath));
+            Settings.Load(SettingsPath);
+            Assert.AreEqual(String.Empty, Settings.PageAuth);
+        }
+
+        [TestMethod]
+        public void NewSettingsLoginReplacesAnUndecryptableOne() {
+            string otherEntropy = ProtectedWithOtherEntropy(FakeImageAuth);
+            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + Tampered(StoredAuth.Protect(FakePageAuth)), "ImageAuth=" + otherEntropy });
+            Settings.Load(SettingsPath);
+
+            Settings.PageAuth = "fakenewuser:fakenewpass";
+            Settings.Save(SettingsPath);
+            Settings.Load(SettingsPath);
+
+            Assert.AreEqual("fakenewuser:fakenewpass", Settings.PageAuth);
+            Assert.Contains("ImageAuth=" + otherEntropy, File.ReadAllLines(SettingsPath));
         }
 
         [TestMethod]
