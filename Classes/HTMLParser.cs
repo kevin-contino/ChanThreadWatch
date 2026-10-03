@@ -329,6 +329,8 @@ namespace JDP {
             bool isRawText = IsRawTextStartTag(tag, foreignContent);
             foreignContent.Update(tag);
             if (!isRawText) return htmlStart;
+            // Nothing ends plaintext
+            if (tag.NameEquals("plaintext")) return -1;
             string endTagText = "/" + tag.Name;
             int pos;
             while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
@@ -338,11 +340,20 @@ namespace JDP {
             return -1;
         }
 
-        // In svg and math a browser reads the contents of title, style and textarea as markup.
-        // Script contents stay text here: the removal of scripts takes their contents with them.
+        // Elements whose contents a browser reads as text when it reads them as HTML. Scripting is
+        // on in the browser that opens a saved page, so noscript is one of them.
+        private static readonly string[] _rawTextNames = {
+            "style", "title", "textarea", "xmp", "iframe", "noembed", "noframes", "noscript", "plaintext"
+        };
+
+        // In svg and math a browser reads the contents of these elements as markup, and a browser
+        // ignores the slash of a self-closing HTML start tag. Script contents stay text here, also
+        // in svg, and a self-closing script start tag is still read as one without contents: the
+        // removal of scripts takes the contents found with them.
         private static bool IsRawTextStartTag(HTMLTag tag, ForeignContent foreignContent) {
-            if (tag.IsEnd || tag.IsSelfClosing) return false;
-            return tag.NameEquals("script") || (tag.NameEqualsAny("style", "title", "textarea") && foreignContent.IsReadAsHTML(tag));
+            if (tag.IsEnd) return false;
+            if (tag.NameEquals("script")) return !tag.IsSelfClosing;
+            return tag.NameEqualsAny(_rawTextNames) && foreignContent.IsReadAsHTML(tag);
         }
 
         private static bool StartsWithRawTextEndTag(string html, int htmlStart, int htmlEnd, string endTagText) {
@@ -489,12 +500,14 @@ namespace JDP {
             return attributeValue != null && ClassAttributeValueHas(attributeValue, targetClassName);
         }
 
-        // The svg and math elements open at a point of the page, as far as a browser's tree
-        // builder uses them to decide if it reads a start tag as HTML or as foreign content.
-        // Inside an integration point (svg foreignObject, desc and title, MathML mi, mo, mn, ms,
-        // mtext, and annotation-xml for HTML) a browser reads start tags as HTML again. HTML
-        // elements are not followed, so an end tag inside an integration point is matched against
-        // the foreign elements even where a browser ignores it for an HTML element still open.
+        // The svg and math elements open at a point of the page, and the HTML elements open inside
+        // their integration points, as far as a browser's tree builder uses them to decide if it
+        // reads a start tag as HTML or as foreign content. Inside an integration point (svg
+        // foreignObject, desc and title, MathML mi, mo, mn, ms, mtext, and annotation-xml for HTML)
+        // a browser reads start tags as HTML again, and ignores the end tag of a foreign element
+        // while an HTML element is open there. Where the browser may have closed an HTML element
+        // without its end tag, the choice that stays in foreign content is taken, since a parser
+        // in foreign content reads title, style and textarea contents as tags.
         private sealed class ForeignContent {
             private static readonly string[] _breakoutNames = {
                 "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt", "em", "embed",
@@ -503,44 +516,61 @@ namespace JDP {
                 "tt", "u", "ul", "var"
             };
 
-            private readonly List<ForeignElement> _openElements = new List<ForeignElement>();
+            private static readonly string[] _voidNames = {
+                "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "image", "img", "input",
+                "keygen", "link", "meta", "param", "source", "track", "wbr"
+            };
+
+            private readonly List<OpenElement> _openElements = new List<OpenElement>();
+
+            // The stack indexes of the open elements of each name, so finding the element an end
+            // tag closes takes the same time however many elements are open
+            private readonly Dictionary<string, Stack<int>> _indexesByName = new Dictionary<string, Stack<int>>(StringComparer.Ordinal);
+
+            private OpenElement Current {
+                get { return _openElements.Count != 0 ? _openElements[_openElements.Count - 1] : null; }
+            }
 
             public bool IsReadAsHTML(HTMLTag startTag) {
-                if (_openElements.Count == 0) return true;
-                ForeignElement current = _openElements[_openElements.Count - 1];
-                return current.IsHTMLIntegrationPoint || (current.IsTextIntegrationPoint && !startTag.NameEqualsAny("mglyph", "malignmark"));
+                OpenElement current = Current;
+                if (current == null || !current.IsForeign || current.IsHTMLIntegrationPoint) return true;
+                return current.IsTextIntegrationPoint && !startTag.NameEqualsAny("mglyph", "malignmark");
             }
 
             public void Update(HTMLTag tag) {
                 if (tag.IsEnd) {
                     Close(tag);
                 }
-                else if (IsReadAsHTML(tag)) {
-                    OpenRoot(tag);
-                }
                 else {
-                    OpenChild(tag);
+                    Open(tag);
                 }
             }
 
-            private void OpenRoot(HTMLTag tag) {
-                if (!tag.IsSelfClosing && tag.NameEqualsAny("svg", "math")) {
-                    _openElements.Add(new ForeignElement(tag, tag.NameEquals("svg")));
-                }
-            }
-
-            // An HTML element such as a div or p ends the foreign content it appears in
-            private void OpenChild(HTMLTag tag) {
-                if (IsBreakoutTag(tag)) {
-                    CloseToHTML();
+            // An HTML element such as a div or p ends the foreign content it appears in, and is
+            // then read as HTML
+            private void Open(HTMLTag tag) {
+                if (!IsReadAsHTML(tag) && IsBreakoutTag(tag)) CloseToHTML();
+                if (IsReadAsHTML(tag)) {
+                    OpenInHTML(tag);
                 }
                 else if (!tag.IsSelfClosing) {
-                    _openElements.Add(new ForeignElement(tag, IsSvgChild(tag)));
+                    Push(OpenElement.CreateForeign(tag, IsSvgChild(tag)));
+                }
+            }
+
+            // HTML elements are followed only inside foreign content. A browser ignores the slash
+            // of a self-closing HTML start tag.
+            private void OpenInHTML(HTMLTag tag) {
+                if (tag.NameEqualsAny("svg", "math")) {
+                    if (!tag.IsSelfClosing) Push(OpenElement.CreateForeign(tag, tag.NameEquals("svg")));
+                }
+                else if (Current != null && !tag.NameEqualsAny(_voidNames)) {
+                    Push(OpenElement.CreateHTML(tag, Current));
                 }
             }
 
             private bool IsSvgChild(HTMLTag tag) {
-                ForeignElement current = _openElements[_openElements.Count - 1];
+                OpenElement current = Current;
                 return current.IsSvg || (tag.NameEquals("svg") && current.Name == "annotation-xml");
             }
 
@@ -552,33 +582,113 @@ namespace JDP {
                 return tag.GetAttribute("color") != null || tag.GetAttribute("face") != null || tag.GetAttribute("size") != null;
             }
 
+            // An end tag closes the nearest open element of its name and those above it. Closing
+            // more HTML elements than the browser does is the safe side, since the end tags of
+            // foreign elements are then honored and the page is read as foreign content again.
             private void Close(HTMLTag tag) {
-                if (tag.NameEqualsAny("br", "p")) {
-                    CloseToHTML();
-                    return;
-                }
-                int i = _openElements.FindLastIndex(e => e.Name == tag.Name);
-                if (i != -1) _openElements.RemoveRange(i, _openElements.Count - i);
+                if (tag.NameEqualsAny("br", "p")) CloseToHTML();
+                int index = LastIndexOf(tag.Name);
+                if (index != -1 && IsClosedByEndTag(index)) PopFrom(index);
+            }
+
+            // A browser ignores the end tag of a foreign element while an HTML element is open
+            // above it. If each such element may have been closed without its end tag, the end
+            // tag is honored only when that leaves the page in foreign content.
+            private bool IsClosedByEndTag(int index) {
+                OpenElement current = Current;
+                if (!_openElements[index].IsForeign || current.HTMLIndex < index) return true;
+                if (current.CertainIndex > index) return false;
+                return IsForeignContentAt(index - 1);
+            }
+
+            private bool IsForeignContentAt(int index) {
+                return index >= 0 && _openElements[index].IsForeign && !_openElements[index].IsIntegrationPoint;
             }
 
             private void CloseToHTML() {
-                int i = _openElements.FindLastIndex(e => e.IsHTMLIntegrationPoint || e.IsTextIntegrationPoint);
-                _openElements.RemoveRange(i + 1, _openElements.Count - (i + 1));
+                OpenElement current = Current;
+                if (current != null) PopFrom(current.HTMLContextIndex + 1);
+            }
+
+            private int LastIndexOf(string name) {
+                Stack<int> indexes;
+                return _indexesByName.TryGetValue(name, out indexes) && indexes.Count != 0 ? indexes.Peek() : -1;
+            }
+
+            private void Push(OpenElement element) {
+                int index = _openElements.Count;
+                element.Link(Current ?? OpenElement.None, index);
+                _openElements.Add(element);
+                Stack<int> indexes;
+                if (!_indexesByName.TryGetValue(element.Name, out indexes)) {
+                    indexes = new Stack<int>();
+                    _indexesByName.Add(element.Name, indexes);
+                }
+                indexes.Push(index);
+            }
+
+            private void PopFrom(int index) {
+                while (_openElements.Count > index) {
+                    OpenElement element = Current;
+                    _openElements.RemoveAt(_openElements.Count - 1);
+                    _indexesByName[element.Name].Pop();
+                }
             }
         }
 
-        private sealed class ForeignElement {
-            public ForeignElement(HTMLTag tag, bool isSvg) {
-                Name = tag.Name;
-                IsSvg = isSvg;
-                IsHTMLIntegrationPoint = isSvg ? tag.NameEqualsAny("foreignobject", "desc", "title") : IsHTMLAnnotation(tag);
-                IsTextIntegrationPoint = !isSvg && tag.NameEqualsAny("mi", "mo", "mn", "ms", "mtext");
+        private sealed class OpenElement {
+            // HTML elements that only their own end tag or the end tag of an element below them
+            // closes, as long as only such elements are open between them and the integration point
+            private static readonly string[] _certainNames = {
+                "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl",
+                "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu", "nav", "ol",
+                "search", "section", "summary", "ul"
+            };
+
+            // Stands below the bottom of the stack
+            public static readonly OpenElement None = new OpenElement(String.Empty) { HTMLIndex = -1, CertainIndex = -1, HTMLContextIndex = -1 };
+
+            private OpenElement(string name) {
+                Name = name;
+            }
+
+            public static OpenElement CreateForeign(HTMLTag tag, bool isSvg) {
+                return new OpenElement(tag.Name) {
+                    IsForeign = true,
+                    IsSvg = isSvg,
+                    IsHTMLIntegrationPoint = isSvg ? tag.NameEqualsAny("foreignobject", "desc", "title") : IsHTMLAnnotation(tag),
+                    IsTextIntegrationPoint = !isSvg && tag.NameEqualsAny("mi", "mo", "mn", "ms", "mtext")
+                };
+            }
+
+            public static OpenElement CreateHTML(HTMLTag tag, OpenElement parent) {
+                return new OpenElement(tag.Name) {
+                    IsCertain = tag.NameEqualsAny(_certainNames) && (parent.IsForeign || parent.IsCertain)
+                };
             }
 
             public string Name { get; private set; }
+            public bool IsForeign { get; private set; }
             public bool IsSvg { get; private set; }
             public bool IsHTMLIntegrationPoint { get; private set; }
             public bool IsTextIntegrationPoint { get; private set; }
+            public bool IsCertain { get; private set; }
+
+            public bool IsIntegrationPoint {
+                get { return IsHTMLIntegrationPoint || IsTextIntegrationPoint; }
+            }
+
+            // Stack indexes of the nearest elements at or below this one: an HTML element, a
+            // certain HTML element, and an element inside which start tags are read as HTML
+            public int HTMLIndex { get; private set; }
+            public int CertainIndex { get; private set; }
+            public int HTMLContextIndex { get; private set; }
+
+            public void Link(OpenElement below, int index) {
+                HTMLIndex = IsForeign ? below.HTMLIndex : index;
+                CertainIndex = IsCertain ? index : below.CertainIndex;
+                HTMLContextIndex = IsForeign && !IsIntegrationPoint ? below.HTMLContextIndex : index;
+            }
 
             private static bool IsHTMLAnnotation(HTMLTag tag) {
                 string encoding = tag.GetAttributeValueOrEmpty("encoding");

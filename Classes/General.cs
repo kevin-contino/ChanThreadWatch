@@ -872,16 +872,15 @@ namespace JDP {
         private static readonly string[] _activeContentElements = { "script", "iframe", "frame", "object", "embed", "applet" };
 
         // Added to the saved page's head. Blocks anything the removal misses where a browser parses
-        // the markup differently from HTMLParser (for example inside noembed or xmp).
+        // the markup differently from HTMLParser (for example after an svg that the end tag of an
+        // HTML element outside it closes).
         public const string ActiveContentPolicyMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\">";
 
         // Removes scripts, embedded content, event handler attributes and script URLs, so a saved
         // page can't run code when it is opened from disk
         private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets, string offlineScriptSite) {
-            // A page that gets no new policy keeps the one it has
-            if (AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite)) {
-                AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
-            }
+            AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite);
+            AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
             foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
                 replaceList.Add(CreateRemoveReplace(tag.Offset, GetActiveElementLength(htmlParser, tag)));
             }
@@ -901,25 +900,36 @@ namespace JDP {
 
         // Adds our script and the policy that allows it where the browser reads them in the head
         // (see OfflinePageScript.CreateHeadReplace). A page without a script, or without a head
-        // the browser would see as such, gets the policy that allows no script instead. Returns
-        // false if the page got no policy.
-        private static bool AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
+        // the browser would see as such, gets the policy that allows no script instead.
+        private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
             ReplaceInfo replace = (offlineScriptSite != null ? OfflinePageScript.CreateHeadReplace(htmlParser, offlineScriptSite) : null) ?? CreateNoScriptPolicyReplace(htmlParser);
-            if (replace == null) return false;
             replaceList.Add(replace);
-            return true;
         }
 
+        // What a browser reads before it starts the html element: white space, a BOM, comments,
+        // the doctype and other markup it reads as a comment. A comment ends where a browser ends it.
+        private static readonly Regex _leadingMarkup = new Regex("^(?:[ \\t\\n\\f\\r\\uFEFF]|<!--(?:-?>|[\\s\\S]*?--!?>)|<!(?!--)[^>]*>|<\\?[^>]*>)*");
+
         // Replaces the head start tag, or the html start tag when the head is implied, so no other
-        // replacement can share its offset. A page with neither gets no policy.
+        // replacement can share its offset. A page with neither gets the policy before its first
+        // content, which a browser puts in the head it creates.
         private static ReplaceInfo CreateNoScriptPolicyReplace(HTMLParser htmlParser) {
             HTMLTag tag = htmlParser.FindStartTag("head") ?? htmlParser.FindStartTag("html");
-            if (tag == null) return null;
+            if (tag == null) return CreateLeadingPolicyReplace(htmlParser);
             return new ReplaceInfo {
                 Offset = tag.Offset,
                 Length = tag.Length,
                 Type = ReplaceType.Other,
                 Value = "<" + tag.Name + ">" + ActiveContentPolicyMeta
+            };
+        }
+
+        private static ReplaceInfo CreateLeadingPolicyReplace(HTMLParser htmlParser) {
+            return new ReplaceInfo {
+                Offset = _leadingMarkup.Match(htmlParser.PreprocessedHTML).Length,
+                Length = 0,
+                Type = ReplaceType.Other,
+                Value = ActiveContentPolicyMeta
             };
         }
 

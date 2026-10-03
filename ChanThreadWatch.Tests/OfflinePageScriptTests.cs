@@ -105,8 +105,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        public void FragmentGetsNoScript() {
-            Assert.AreEqual("<p>a</p>", Save("<p>a</p>", "4chan"));
+        public void FragmentGetsNoScriptButThePolicyThatAllowsNone() {
+            Assert.AreEqual(General.ActiveContentPolicyMeta + "<p>a</p>", Save("<p>a</p>", "4chan"));
         }
 
         [TestMethod]
@@ -163,8 +163,10 @@ namespace JDP.Tests {
             AssertHasOfflineScript(saved, "fuuka");
         }
 
+        // A page without a head or html start tag gets the policy before its first content, in place
+        // of the earlier one, so saving it again changes nothing
         [TestMethod]
-        public void PageThatGetsNoNewPolicyKeepsItsEarlierOne() {
+        public void PageWithoutAHeadKeepsOnePolicy() {
             const string html = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\"><p>a</p>";
 
             foreach (string site in new[] { null, "4chan" }) {
