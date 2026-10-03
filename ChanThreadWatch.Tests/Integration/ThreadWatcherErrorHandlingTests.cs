@@ -468,6 +468,26 @@ namespace JDP.Tests.Integration {
             Assert.IsFalse(Directory.Exists(childDir));
         }
 
+        // A settings file without the parent description format (e.g. after a hand edit) uses
+        // the default format instead of failing
+        [TestMethod]
+        public void ChildThreadFolderUsesTheDefaultParentFormatWhenTheSettingIsMissing() {
+            Settings.RenameDownloadFolderWithDescription = true;
+            Settings.RenameDownloadFolderWithParentThreadDescription = true;
+            Settings.ParentThreadDescriptionFormat = null;
+            ThreadWatcher parent = new ThreadWatcher("http://127.0.0.1:1/wg/thread/100");
+            parent.Description = "Parent";
+            ThreadWatcher child = new ThreadWatcher("http://127.0.0.1:1/wg/thread/200") { ParentThread = parent };
+            string childDir = Path.Combine(DownloadDir, "Child");
+            Directory.CreateDirectory(childDir);
+            child.ThreadDownloadDirectory = childDir;
+
+            child.Description = "Child";
+
+            Assert.AreEqual(" (Parent)", child.ParentThreadFormattedDescription);
+            Assert.AreEqual(Path.Combine(DownloadDir, "Child (Parent)"), child.ThreadDownloadDirectory);
+        }
+
         // B29: a cross-link that is not a valid URL is skipped; the valid ones are still followed
         [TestMethod]
         public void InvalidCrossLinkIsSkipped() {

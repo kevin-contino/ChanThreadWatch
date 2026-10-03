@@ -225,12 +225,17 @@ namespace JDP {
         public string ParentThreadFormattedDescription {
             get {
                 if (ParentThread == null || Settings.RenameDownloadFolderWithParentThreadDescription != true ||
-                    (!String.IsNullOrEmpty(Settings.ParentThreadDescriptionFormat) && _description.EndsWith(Settings.ParentThreadDescriptionFormat.Replace("{Parent}", ParentThread.Description))))
+                    (!String.IsNullOrEmpty(ParentThreadDescriptionFormat) && _description.EndsWith(ParentThreadDescriptionFormat.Replace("{Parent}", ParentThread.Description))))
                 {
                     return String.Empty;
                 }
-                return Settings.ParentThreadDescriptionFormat.Replace("{Parent}", ParentThread.Description);
+                return ParentThreadDescriptionFormat.Replace("{Parent}", ParentThread.Description);
             }
+        }
+
+        // The settings file may lack the format (e.g. after a hand edit), so fall back to the default
+        private static string ParentThreadDescriptionFormat {
+            get { return Settings.ParentThreadDescriptionFormat ?? Settings.DefaultParentThreadDescriptionFormat; }
         }
 
         public object Tag {
