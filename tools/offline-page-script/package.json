@@ -1,0 +1,11 @@
+{
+  "name": "offline-page-script-tests",
+  "private": true,
+  "description": "Tests Resources/OfflinePageScript.js against the site fixtures in jsdom",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1"
+  }
+}

@@ -417,6 +417,12 @@ namespace JDP {
         public virtual bool IsThreadPage() {
             return true;
         }
+
+        // The OfflinePageScript site whose markup this site's saved pages have, or null to save
+        // pages without the script. Sites whose markup is not known get no script.
+        public virtual string GetOfflinePageScriptSite() {
+            return null;
+        }
     }
 
     public class FourChanSiteHelper : FourChanLookAlikeSiteHelper {
@@ -635,6 +641,10 @@ namespace JDP {
             return FindThreadDivStartTag() != null;
         }
 
+        public override string GetOfflinePageScriptSite() {
+            return OfflinePageScript.FourChan;
+        }
+
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
             bool seenSpoiler = false;
@@ -732,6 +742,10 @@ namespace JDP {
     public class InfinitechanSiteHelper : SiteHelper {
         public override bool IsThreadPage() {
             return FindThreadDivStartTag() != null;
+        }
+
+        public override string GetOfflinePageScriptSite() {
+            return OfflinePageScript.Vichan;
         }
 
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
@@ -947,6 +961,10 @@ namespace JDP {
     }
 
     public class FuukaSiteHelper : SiteHelper {
+        public override string GetOfflinePageScriptSite() {
+            return OfflinePageScript.Fuuka;
+        }
+
         protected override bool IsImage(HTMLTag linkTag) {
             return Enumerable.FirstOrDefault(Enumerable.Where(_htmlParser.FindStartTags(_htmlParser.CreateTagRange(linkTag), "img"), t => HTMLParser.ClassAttributeValueHas(t, "thumb"))) != null;
         }
@@ -1070,6 +1088,10 @@ namespace JDP {
     }
 
     public class FoolFuukaSiteHelper : SiteHelper {
+        public override string GetOfflinePageScriptSite() {
+            return OfflinePageScript.FoolFuuka;
+        }
+
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
 
@@ -1237,6 +1259,10 @@ namespace JDP {
     }
 
     public class LynxChanSiteHelper : SiteHelper {
+        public override string GetOfflinePageScriptSite() {
+            return OfflinePageScript.LynxChan;
+        }
+
         public override List<ImageInfo> GetImages(List<ReplaceInfo> replaceList, List<ThumbnailInfo> thumbnailList, bool local = false) {
             List<ImageInfo> imageList = new List<ImageInfo>();
             bool seenSpoiler = false;

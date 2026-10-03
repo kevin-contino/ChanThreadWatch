@@ -981,7 +981,7 @@ namespace JDP {
 
             if (!DownloadThreadPage(siteHelper, pageInfo)) return;
 
-            SaveUnprocessedPage(siteHelper.GetHTMLParser(), pageInfo);
+            SaveUnprocessedPage(siteHelper, pageInfo);
 
             siteHelper.ResurrectDeadPosts(previousParser, pageInfo.ReplaceList);
 
@@ -1015,11 +1015,14 @@ namespace JDP {
         }
 
         // A page without a replace list (thumbnails off) is not processed after the check, so the
-        // page as downloaded is saved now with only its active content removed
-        private static void SaveUnprocessedPage(HTMLParser htmlParser, PageInfo pageInfo) {
+        // page as downloaded is saved now with only its active content removed and our offline
+        // script added
+        private static void SaveUnprocessedPage(SiteHelper siteHelper, PageInfo pageInfo) {
             if (pageInfo.ReplaceList != null) return;
+            HTMLParser htmlParser = siteHelper.GetHTMLParser();
+            List<ReplaceInfo> replaces = General.GetActiveContentReplaces(htmlParser, siteHelper.GetOfflinePageScriptSite());
             using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
-                General.WriteReplacedString(htmlParser.PreprocessedHTML, General.GetActiveContentReplaces(htmlParser), sw);
+                General.WriteReplacedString(htmlParser.PreprocessedHTML, replaces, sw);
             }
             DeleteBackupIfPageComplete(htmlParser, pageInfo.Path);
         }
@@ -1493,7 +1496,7 @@ namespace JDP {
                     pageInfo.ReplaceList.RemoveAt(i--);
                 }
             }
-            General.AddOtherReplaces(htmlParser, pageInfo.URL, pageInfo.ReplaceList);
+            General.AddOtherReplaces(htmlParser, pageInfo.URL, pageInfo.ReplaceList, siteHelper.GetOfflinePageScriptSite());
             using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
                 General.WriteReplacedString(htmlParser.PreprocessedHTML, pageInfo.ReplaceList, sw);
             }

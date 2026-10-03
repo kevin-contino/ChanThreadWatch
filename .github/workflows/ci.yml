@@ -49,6 +49,26 @@ jobs:
           name: test-results
           path: TestResults
 
+  offline-page-script:
+    name: Offline page script
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/offline-page-script
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Uses the runner's preinstalled Node; jsdom is pinned by the lockfile and its install scripts are not run
+      - name: Install jsdom
+        run: npm ci --ignore-scripts
+
+      # Runs Resources/OfflinePageScript.js in jsdom against each site fixture
+      - name: Test
+        run: npm test
+
   complexity:
     name: Cyclomatic complexity
     runs-on: ubuntu-latest
