@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -87,6 +88,91 @@ namespace JDP.Tests {
             Settings.Save(_path);
 
             CollectionAssert.AreEqual(original, File.ReadAllLines(_path));
+        }
+
+        // Every line for a login setting is blanked (Load uses the first), matched as Load
+        // matches names; the name and '=' stay, and everything else is kept byte for byte
+        [TestMethod]
+        [DataRow("CheckEvery=5\r\nPageAuth=user:pass\r\nUseSlug=1", "CheckEvery=5\r\nPageAuth=\r\nUseSlug=1", DisplayName = "page login")]
+        [DataRow("imageauth=a=b\nPAGEAUTH=x\rPageAuth=y\n", "imageauth=\nPAGEAUTH=\rPageAuth=\n", DisplayName = "any case, every line, mixed breaks")]
+        [DataRow("\uFEFFPageAuth=user:pass\r\n", "\uFEFFPageAuth=\r\n", DisplayName = "byte order mark")]
+        [DataRow("PageAuth=dpapi:AAAA\r\nPageAuth=\r\n", "PageAuth=dpapi:AAAA\r\nPageAuth=\r\n", DisplayName = "encrypted or empty kept")]
+        [DataRow("PageAuth\r\nPageAuth =x\r\nTitle=PageAuth=x\r\n", "PageAuth\r\nPageAuth =x\r\nTitle=PageAuth=x\r\n", DisplayName = "not a login setting")]
+        public void PlaintextLoginsAreBlankedInASettingsCopy(string content, string expected) {
+            byte[] blanked = Settings.BlankPlaintextAuth(Encoding.UTF8.GetBytes(content));
+
+            Assert.AreEqual(expected, Encoding.UTF8.GetString(blanked));
+        }
+
+        [TestMethod]
+        public void SettingsCopyInUtf16IsBlankedInItsEncoding() {
+            Encoding utf16 = new UnicodeEncoding(false, true);
+            byte[] content = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Concat(utf16.GetPreamble(), utf16.GetBytes("PageAuth=user:pass\r\nUseSlug=1\r\n")));
+            byte[] expected = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Concat(utf16.GetPreamble(), utf16.GetBytes("PageAuth=\r\nUseSlug=1\r\n")));
+
+            CollectionAssert.AreEqual(expected, Settings.BlankPlaintextAuth(content));
+        }
+
+        private static readonly string[] OldCopyLines = { "CheckEvery=5", "PageAuth=user:pass", "ImageAuth=img:pass", "WindowTitle=user:pass" };
+        private static readonly string[] BlankedOldCopyLines = { "CheckEvery=5", "PageAuth=", "ImageAuth=", "WindowTitle=user:pass" };
+
+        // The logger keeps the log file open for appending
+        private static string ReadSharedFile(string path) {
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (StreamReader sr = new StreamReader(fs)) {
+                return sr.ReadToEnd();
+            }
+        }
+
+        // Once after each load: a copy written again later in the session is left alone
+        [TestMethod]
+        public void FirstSaveBlanksPlaintextLoginsInExistingSettingsCopiesOnce() {
+            string copy = _path + ".corrupt-20200101-000000-000";
+            string encryptedCopy = _path + ".corrupt-20200102-000000-000";
+            string[] encryptedLines = { "PageAuth=" + StoredAuth.Protect("u:p"), "UseSlug=1" };
+            string threadListCopy = Path.Combine(_dir, "threads.txt.corrupt-20200101-000000-000");
+            File.WriteAllLines(copy, OldCopyLines);
+            File.WriteAllLines(encryptedCopy, encryptedLines);
+            File.WriteAllLines(threadListCopy, OldCopyLines);
+            Settings.Load(_path);
+            string logPath = Path.Combine(Settings.GetSettingsDirectory(), Settings.LogFileName);
+            Logger.Log("SettingsPersistenceTests marker");
+            int start = ReadSharedFile(logPath).Length;
+
+            Settings.Save(_path);
+
+            CollectionAssert.AreEqual(BlankedOldCopyLines, File.ReadAllLines(copy));
+            CollectionAssert.AreEqual(encryptedLines, File.ReadAllLines(encryptedCopy));
+            CollectionAssert.AreEqual(OldCopyLines, File.ReadAllLines(threadListCopy));
+            string log = ReadSharedFile(logPath).Substring(start);
+            Assert.AreEqual(1, log.Split(new[] { "Plaintext logins were removed from " + Path.GetFileName(copy) + Environment.NewLine }, StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("user:pass", log);
+
+            File.WriteAllLines(copy, OldCopyLines);
+            Settings.Save(_path);
+            CollectionAssert.AreEqual(OldCopyLines, File.ReadAllLines(copy));
+
+            Settings.Load(_path);
+            Settings.Save(_path);
+            CollectionAssert.AreEqual(BlankedOldCopyLines, File.ReadAllLines(copy));
+        }
+
+        [TestMethod]
+        public void SettingsCopyThatCannotBeReplacedIsLeftUnchangedUntilTheNextLoad() {
+            string copy = _path + ".corrupt-20200101-000000-000";
+            File.WriteAllLines(copy, OldCopyLines);
+            byte[] original = File.ReadAllBytes(copy);
+            Settings.Load(_path);
+
+            using (new FileStream(copy, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+                Settings.Save(_path);
+            }
+
+            CollectionAssert.AreEqual(original, File.ReadAllBytes(copy));
+            CollectionAssert.AreEquivalent(new[] { _path, copy }, Directory.GetFiles(_dir));
+            Settings.Load(_path);
+            Settings.Save(_path);
+            CollectionAssert.AreEqual(BlankedOldCopyLines, File.ReadAllLines(copy));
         }
 
         [TestMethod]

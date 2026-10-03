@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Text;
 
 namespace JDP {
     // Format of the thread list file (threads.txt): the first line is the file version,
@@ -43,10 +42,15 @@ namespace JDP {
         // True if a login is stored as plaintext (written by an older version). Only the
         // version line has to be valid, so this also checks a file that doesn't load.
         public static bool HasPlaintextAuth(string[] lines) {
+            int linesPerThread = GetLinesPerThread(TryParseFileVersion(lines));
+            return linesPerThread != 0 && HasPlaintextAuth(lines, linesPerThread, (lines.Length - 1) / linesPerThread);
+        }
+
+        // Returns 0 if the first line isn't a number
+        private static int TryParseFileVersion(string[] lines) {
             int fileVersion;
             Int32.TryParse(lines.Length != 0 ? lines[0] : null, NumberStyles.Integer, CultureInfo.InvariantCulture, out fileVersion);
-            int linesPerThread = GetLinesPerThread(fileVersion);
-            return linesPerThread != 0 && HasPlaintextAuth(lines, linesPerThread, (lines.Length - 1) / linesPerThread);
+            return fileVersion;
         }
 
         // The two logins follow the URL at the start of each thread
@@ -58,85 +62,50 @@ namespace JDP {
             return false;
         }
 
-        // Returns the file's bytes with every plaintext login removed and all other bytes kept
-        // (encrypted logins, other lines, line breaks, encoding), for a copy of a file that may
-        // not load. Lines are split as the loader splits them (CR, LF or CRLF) and logins are
-        // found by their position from the version line, also in a last incomplete thread.
-        // Without a supported version line, or in a file that isn't read as UTF-8, a login
-        // can't be told apart from other values, so nothing is changed.
+        // Offsets from a thread's URL line of the fields that can hold any text (Description
+        // and Category), so also something that looks like a URL
+        private static readonly int[] _freeTextFields = { 7, 11 };
+
+        // Returns the file's content with every plaintext login removed and everything else
+        // kept (see TextFile.CutLineEnds), for a copy of a file that may not load. A file that
+        // doesn't load can have a missing or extra line or a version this one doesn't know,
+        // so threads are found by their URL line rather than by position: the two lines after
+        // a line starting with http:// or https:// are its logins, and a line that looks like
+        // a URL is never removed. When the version line is valid, a URL where that version
+        // puts the previous thread's description or category doesn't start a thread.
         public static byte[] BlankPlaintextAuth(byte[] content) {
-            int linesPerThread = GetLinesPerThread(ReadUtf8FileVersion(content));
-            if (linesPerThread == 0) return content;
-            return RemoveSpans(content, FindPlaintextAuth(content, SplitLines(content), linesPerThread));
+            return TextFile.CutLineEnds(content, FindPlaintextAuth);
         }
 
-        // Returns 0 if the version line isn't a number or the file has a byte order mark
-        // other than UTF-8's (its line breaks are then not single bytes).
-        private static int ReadUtf8FileVersion(byte[] content) {
-            using (StreamReader sr = new StreamReader(new MemoryStream(content), new UTF8Encoding(false), true)) {
-                string versionLine = sr.ReadLine();
-                int fileVersion;
-                bool isVersion = Int32.TryParse(versionLine, NumberStyles.Integer, CultureInfo.InvariantCulture, out fileVersion);
-                return isVersion && sr.CurrentEncoding is UTF8Encoding ? fileVersion : 0;
+        // Returns for each line 0 (remove the login) or -1 (keep the line)
+        private static int[] FindPlaintextAuth(string[] lines) {
+            int[] keptLengths = new int[lines.Length];
+            for (int i = 0; i < keptLengths.Length; i++) {
+                keptLengths[i] = -1;
+            }
+            int linesPerThread = GetLinesPerThread(TryParseFileVersion(lines));
+            int threadStart = -1;
+            for (int i = 0; i < lines.Length; i++) {
+                if (!IsThreadStart(lines[i], threadStart != -1 ? i - threadStart : -1, linesPerThread)) continue;
+                threadStart = i;
+                MarkPlaintextAuth(lines, i, keptLengths);
+            }
+            return keptLengths;
+        }
+
+        // offsetFromThreadStart is -1 before the first thread
+        private static bool IsThreadStart(string line, int offsetFromThreadStart, int linesPerThread) {
+            return LooksLikeURL(line) && !(offsetFromThreadStart < linesPerThread && Array.IndexOf(_freeTextFields, offsetFromThreadStart) != -1);
+        }
+
+        private static void MarkPlaintextAuth(string[] lines, int urlLine, int[] keptLengths) {
+            for (int i = urlLine + 1; i <= urlLine + 2 && i < lines.Length && !LooksLikeURL(lines[i]); i++) {
+                if (StoredAuth.IsPlaintext(lines[i])) keptLengths[i] = 0;
             }
         }
 
-        private static List<LineSpan> SplitLines(byte[] content) {
-            List<LineSpan> lines = new List<LineSpan>();
-            int start = 0;
-            while (start < content.Length) {
-                int end = FindLineEnd(content, start);
-                lines.Add(new LineSpan(start, end));
-                start = SkipLineBreak(content, end);
-            }
-            return lines;
-        }
-
-        private static int FindLineEnd(byte[] content, int start) {
-            int end = start;
-            while (end < content.Length && content[end] != '\r' && content[end] != '\n') {
-                end++;
-            }
-            return end;
-        }
-
-        private static int SkipLineBreak(byte[] content, int end) {
-            bool isCRLF = end + 1 < content.Length && content[end] == '\r' && content[end + 1] == '\n';
-            return end + (isCRLF ? 2 : 1);
-        }
-
-        // The two logins follow the URL at the start of each thread
-        private static List<LineSpan> FindPlaintextAuth(byte[] content, List<LineSpan> lines, int linesPerThread) {
-            List<LineSpan> found = new List<LineSpan>();
-            for (int i = 1; i < lines.Count; i++) {
-                int field = (i - 1) % linesPerThread;
-                if ((field == 1 || field == 2) && StoredAuth.IsPlaintext(Encoding.UTF8.GetString(content, lines[i].Start, lines[i].Length))) {
-                    found.Add(lines[i]);
-                }
-            }
-            return found;
-        }
-
-        private static byte[] RemoveSpans(byte[] content, List<LineSpan> spans) {
-            using (MemoryStream ms = new MemoryStream(content.Length)) {
-                int copied = 0;
-                foreach (LineSpan span in spans) {
-                    ms.Write(content, copied, span.Start - copied);
-                    copied = span.Start + span.Length;
-                }
-                ms.Write(content, copied, content.Length - copied);
-                return ms.ToArray();
-            }
-        }
-
-        private struct LineSpan {
-            public readonly int Start;
-            public readonly int Length;
-
-            public LineSpan(int start, int end) {
-                Start = start;
-                Length = end - start;
-            }
+        private static bool LooksLikeURL(string line) {
+            return line.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || line.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
 
         // True if the lines form a complete thread list that Parse accepts.
@@ -336,28 +305,7 @@ namespace JDP {
         private void BlankCopiesOnce(string path) {
             if (_checkedCopies) return;
             _checkedCopies = true;
-            try {
-                foreach (string copyPath in Directory.GetFiles(Path.GetDirectoryName(path), TextFile.GetCopySearchPattern(path))) {
-                    TryBlankCopy(copyPath);
-                }
-            }
-            catch (Exception ex) {
-                Logger.Log("The thread list recovery copies could not be listed; the next session tries again. " + ex.GetType().Name + ": " + ex.Message);
-            }
-        }
-
-        private static void TryBlankCopy(string copyPath) {
-            try {
-                byte[] content = File.ReadAllBytes(copyPath);
-                byte[] blanked = ThreadListFile.BlankPlaintextAuth(content);
-                // Removing a login always shortens the content
-                if (blanked.Length == content.Length) return;
-                TextFile.WriteAllBytesAtomic(copyPath, blanked);
-                Logger.Log("Plaintext logins were removed from " + Path.GetFileName(copyPath));
-            }
-            catch (Exception ex) {
-                Logger.Log("Plaintext logins could not be removed from " + Path.GetFileName(copyPath) + "; the next session tries again. " + ex.GetType().Name + ": " + ex.Message);
-            }
+            TextFile.RewriteCopies(path, ThreadListFile.BlankPlaintextAuth);
         }
 
         // A backup (see General.BackupThreadList) written by an older version holds plaintext
