@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -143,16 +143,16 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        public void AddOtherReplacesRewritesLinksAndRemovesBase() {
+        public void AddOtherReplacesRewritesLinksAndRemovesBaseAndScripts() {
             const string html = "<base href=\"x\"><a href=\"#top\">t</a><img src=\"i.jpg\"><script src=s.js></script><link href=\"c.css\"><a name=n><a href=\"?a=1&amp;b=2\">";
 
             List<ReplaceInfo> replaces = OtherReplaces(html, Page);
 
             CollectionAssert.AreEqual(
-                new[] { "", "href=\"#top\"", "src=\"http://a.com/b/i.jpg\"", "src=\"http://a.com/b/s.js\"", "href=\"http://a.com/b/c.css\"", "href=\"http://a.com/b/c?a=1&amp;b=2\"" },
+                new[] { "", "", "href=\"#top\"", "src=\"http://a.com/b/i.jpg\"", "href=\"http://a.com/b/c.css\"", "href=\"http://a.com/b/c?a=1&amp;b=2\"" },
                 replaces.Select(r => r.Value).ToArray());
             CollectionAssert.AreEqual(
-                new[] { "<base href=\"x\">", "href=\"#top\"", "src=\"i.jpg\"", "src=s.js", "href=\"c.css\"", "href=\"?a=1&amp;b=2\"" },
+                new[] { "<base href=\"x\">", "<script src=s.js></script>", "href=\"#top\"", "src=\"i.jpg\"", "href=\"c.css\"", "href=\"?a=1&amp;b=2\"" },
                 replaces.Select(r => html.Substring(r.Offset, r.Length)).ToArray());
             Assert.IsTrue(replaces.All(r => r.Type == ReplaceType.Other));
         }

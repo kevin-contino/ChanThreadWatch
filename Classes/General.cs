@@ -756,7 +756,76 @@ namespace JDP {
                     });
             }
 
+            AddActiveContentReplaces(htmlParser, replaceList, existingOffsets);
             AddURLAttributeReplaces(htmlParser, pageURL, replaceList, existingOffsets);
+        }
+
+        // Elements that are removed from saved pages together with their contents
+        private static readonly string[] _activeContentElements = { "script", "iframe", "frame", "object", "embed", "applet" };
+
+        // Added to the saved page's head. Blocks anything the removal misses where a browser parses
+        // the markup differently from HTMLParser (for example inside noembed or noframes).
+        public const string ActiveContentPolicyMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\">";
+
+        // Removes scripts, embedded content, event handler attributes and script URLs, so a saved
+        // page can't run code when it is opened from disk
+        private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets) {
+            AddContentPolicyReplace(htmlParser, replaceList);
+            foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
+                HTMLTagRange tagRange = htmlParser.CreateTagRange(tag);
+                replaceList.Add(CreateRemoveReplace(tag.Offset, tagRange != null ? tagRange.Length : tag.Length));
+            }
+            foreach (HTMLTag tag in htmlParser.Tags) {
+                AddActiveAttributeReplaces(tag.Attributes, replaceList, existingOffsets);
+                AddActiveAttributeReplaces(tag.DuplicateAttributes, replaceList, existingOffsets);
+            }
+        }
+
+        // Replaces the head start tag, so no other replacement can share its offset
+        private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {
+            HTMLTag headTag = htmlParser.FindStartTag("head");
+            if (headTag == null) return;
+            replaceList.Add(
+                new ReplaceInfo {
+                    Offset = headTag.Offset,
+                    Length = headTag.Length,
+                    Type = ReplaceType.Other,
+                    Value = "<head>" + ActiveContentPolicyMeta
+                });
+        }
+
+        // Attributes already replaced by the site helper hold values the program wrote, so they are kept
+        private static void AddActiveAttributeReplaces(List<HTMLAttribute> attributes, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets) {
+            foreach (HTMLAttribute attribute in attributes) {
+                if (existingOffsets.Contains(attribute.Offset) || !IsActiveAttribute(attribute)) continue;
+                replaceList.Add(CreateRemoveReplace(attribute.Offset, attribute.Length));
+                existingOffsets.Add(attribute.Offset);
+            }
+        }
+
+        private static ReplaceInfo CreateRemoveReplace(int offset, int length) {
+            return new ReplaceInfo {
+                Offset = offset,
+                Length = length,
+                Type = ReplaceType.Other,
+                Value = String.Empty
+            };
+        }
+
+        private static bool IsActiveAttribute(HTMLAttribute attribute) {
+            return attribute.Name.StartsWith("on", StringComparison.Ordinal) || IsScriptURL(attribute.Value);
+        }
+
+        // Browsers ignore tabs, newlines and leading spaces in a URL scheme, also when written as
+        // character references. HttpUtility doesn't know the HTML5-only names used here.
+        public static bool IsScriptURL(string value) {
+            string decoded = HttpUtility.HtmlDecode(value.Replace("&Tab;", "\t").Replace("&NewLine;", "\n").Replace("&colon;", ":"));
+            StringBuilder url = new StringBuilder(decoded.Length);
+            foreach (char c in decoded) {
+                if (c > ' ') url.Append(Char.ToLowerInvariant(c));
+            }
+            string scheme = url.ToString();
+            return scheme.StartsWith("javascript:", StringComparison.Ordinal) || scheme.StartsWith("vbscript:", StringComparison.Ordinal);
         }
 
         private static void AddNewLineReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {
@@ -773,7 +842,7 @@ namespace JDP {
         }
 
         private static void AddURLAttributeReplaces(HTMLParser htmlParser, string pageURL, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets) {
-            foreach (HTMLTag tag in htmlParser.FindStartTags("a", "img", "script", "link")) {
+            foreach (HTMLTag tag in htmlParser.FindStartTags("a", "img", "link")) {
                 HTMLAttribute attribute = GetURLAttribute(tag);
                 if (attribute == null || existingOffsets.Contains(attribute.Offset)) continue;
                 string newURL = GetReplacementURL(pageURL, attribute.Value, tag.NameEquals("a"));
@@ -791,7 +860,7 @@ namespace JDP {
 
         private static HTMLAttribute GetURLAttribute(HTMLTag tag) {
             if (tag.NameEqualsAny("a", "link")) return tag.GetAttribute("href");
-            if (tag.NameEqualsAny("img", "script")) return tag.GetAttribute("src");
+            if (tag.NameEquals("img")) return tag.GetAttribute("src");
             return null;
         }
 

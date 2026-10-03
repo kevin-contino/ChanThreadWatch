@@ -301,6 +301,9 @@ namespace JDP {
             if (tag.GetAttribute(attribute.Name) == null) {
                 tag.Attributes.Add(attribute);
             }
+            else {
+                tag.DuplicateAttributes.Add(attribute);
+            }
             return htmlStart;
         }
 
@@ -484,11 +487,14 @@ namespace JDP {
         public bool IsEnd { get; set; }
         public bool IsSelfClosing { get; set; }
         public List<HTMLAttribute> Attributes { get; set; }
+        // Later attributes with a name already in Attributes; browsers ignore them
+        public List<HTMLAttribute> DuplicateAttributes { get; set; }
         public int Offset { get; set; }
         public int Length { get; set; }
 
         public HTMLTag() {
             Attributes = new List<HTMLAttribute>();
+            DuplicateAttributes = new List<HTMLAttribute>();
         }
 
         public int EndOffset {
