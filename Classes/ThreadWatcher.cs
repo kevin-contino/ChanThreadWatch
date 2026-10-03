@@ -750,9 +750,13 @@ namespace JDP {
         private int _maxFileNameLength;
         private int _maxFileNameLengthBaseDir;
         private string _threadName;
+        // Read once per check, so that changing the setting during a check can't leave a page
+        // with no replace list to be processed, or a page with one unprocessed
+        private bool _saveThumbnails;
 
         private void Check() {
             try {
+                _saveThumbnails = Settings.SaveThumbnails != false;
                 SiteHelper siteHelper = SiteHelpers.GetInstance(PageHost);
 
                 BeginCheck(siteHelper);
@@ -770,7 +774,7 @@ namespace JDP {
 
                 DownloadPendingImages(pendingImages, imageDir);
 
-                if (Settings.SaveThumbnails != false) {
+                if (_saveThumbnails) {
                     DownloadPendingThumbnails(pendingThumbs, thumbDir);
                     ProcessFreshPages(siteHelper, threadDir, imageDir, thumbDir);
                 }
@@ -921,7 +925,7 @@ namespace JDP {
                 RejectPage(pageInfo, previousCacheTime, "page could not be read");
                 return false;
             }
-            ApplyDownloadedPage(pageInfo, page);
+            ApplyDownloadedPage(pageInfo, page, _saveThumbnails);
             siteHelper.SetURL(pageInfo.URL);
             siteHelper.SetHTMLParser(pageParser);
             if (siteHelper.IsThreadPage()) return true;
@@ -983,11 +987,11 @@ namespace JDP {
             }
         }
 
-        private static void ApplyDownloadedPage(PageInfo pageInfo, DownloadedPage page) {
+        private static void ApplyDownloadedPage(PageInfo pageInfo, DownloadedPage page, bool saveThumbnails) {
             pageInfo.IsFresh = true;
             pageInfo.CacheTime = page.LastModifiedTime;
             pageInfo.Encoding = page.Encoding;
-            pageInfo.ReplaceList = (Settings.SaveThumbnails != false) ? new List<ReplaceInfo>() : null;
+            pageInfo.ReplaceList = saveThumbnails ? new List<ReplaceInfo>() : null;
         }
 
         // A page that can't be used (an error, ban or captcha page served with 200 OK, or one

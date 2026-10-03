@@ -115,6 +115,49 @@ namespace JDP.Tests.Integration {
             Assert.IsFalse(Directory.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "thumbs")));
         }
 
+        // The setting is read once per check: turned off after the page is downloaded, the page is
+        // still processed with local links
+        [TestMethod]
+        public void ThumbnailsTurnedOffDuringCheckStillProcessesPage() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            SetSaveThumbnailsAfterPageDownload(watcher, false);
+
+            StopReason reason = RunToStop(watcher);
+
+            Assert.AreEqual(StopReason.DownloadComplete, reason);
+            string html = File.ReadAllText(SavedPagePath(watcher));
+            StringAssert.Contains(html, "<img src=\"thumbs/1700000000001s.jpg\"");
+            Assert.DoesNotContain("<script", html);
+        }
+
+        // Turned on after the page is downloaded, the page has no replace list and is not processed
+        [TestMethod]
+        public void ThumbnailsTurnedOnDuringCheckLeavesPageUnprocessed() {
+            Settings.SaveThumbnails = false;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            SetSaveThumbnailsAfterPageDownload(watcher, true);
+
+            StopReason reason = RunToStop(watcher);
+
+            Assert.AreEqual(StopReason.DownloadComplete, reason);
+            string html = File.ReadAllText(SavedPagePath(watcher));
+            StringAssert.Contains(html, "<img src=\"" + server.BaseURL() + "/wg/1700000000001s.jpg\"");
+            Assert.DoesNotContain("<script", html);
+            Assert.IsEmpty(server.RequestsTo(FourChanThreadFixture.ThumbPaths[0]));
+        }
+
+        private static void SetSaveThumbnailsAfterPageDownload(ThreadWatcher watcher, bool saveThumbnails) {
+            watcher.DownloadStatus += (s, e) => {
+                if (e.DownloadType == DownloadType.Page && e.CompleteCount == 1) Settings.SaveThumbnails = saveThumbnails;
+            };
+        }
+
         // The second download moves the saved page to the backup, which is deleted once the new
         // page is saved complete
         [TestMethod]
