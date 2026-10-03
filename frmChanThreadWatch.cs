@@ -19,6 +19,7 @@ namespace JDP {
         private int[] _columnWidths;
         private object _cboCheckEveryLastValue;
         private bool _isLoadingThreadsFromFile;
+        private readonly ThreadListStore _threadListStore = new ThreadListStore();
         private static Dictionary<string, int> _categories = new Dictionary<string, int>();
         private static Dictionary<string, ThreadWatcher> _watchers = new Dictionary<string, ThreadWatcher>();
         private static HashSet<string> _blacklist = new HashSet<string>();
@@ -206,8 +207,7 @@ namespace JDP {
 
         private void frmChanThreadWatch_FormClosed(object sender, FormClosedEventArgs e) {
             if (IsDisposed) return;
-            SaveControlSettings();
-            SaveColumnSettings();
+            SaveExitSettings();
 
             Settings.Save();
 
@@ -224,6 +224,17 @@ namespace JDP {
             SaveThreadList();
 
             Program.ReleaseMutex();
+        }
+
+        // A failure here must not skip the settings and thread list saves that follow on exit.
+        private void SaveExitSettings() {
+            try {
+                SaveControlSettings();
+                SaveColumnSettings();
+            }
+            catch (Exception ex) {
+                Logger.Log(ex.ToString());
+            }
         }
 
         private void SaveControlSettings() {
@@ -265,8 +276,13 @@ namespace JDP {
             }
         }
 
+        // Falls back to the saved setting (or 3 minutes) instead of throwing when neither
+        // control holds a usable value.
         private int GetCheckEveryMinutes() {
-            return cboCheckEvery.Enabled ? (int)cboCheckEvery.SelectedValue : Int32.Parse(txtCheckEvery.Text);
+            object selectedValue = cboCheckEvery.Enabled ? cboCheckEvery.SelectedValue : null;
+            if (selectedValue != null) return (int)selectedValue;
+            int minutes;
+            return Int32.TryParse(txtCheckEvery.Text, out minutes) ? minutes : (Settings.CheckEvery ?? 3);
         }
 
         private void frmChanThreadWatch_DragEnter(object sender, DragEventArgs e) {
@@ -1288,149 +1304,101 @@ namespace JDP {
             DisplayProgressStatus(watcher, "Reparsing", type, hideDetail, completeCount, totalCount);
         }
 
+        private static string ThreadListPath {
+            get { return Path.Combine(Settings.GetSettingsDirectory(), Settings.ThreadsFileName); }
+        }
+
         private void SaveThreadList() {
             if (_isLoadingThreadsFromFile) return;
             try {
-                // Prepare lines before writing file so that an exception can't result
-                // in a partially written file.
-                List<string> lines = new List<string>();
-                lines.Add("4"); // File version
-                foreach (ThreadWatcher watcher in ThreadWatchers) {
-                    AddThreadLines(lines, watcher);
-                }
-                string path = Path.Combine(Settings.GetSettingsDirectory(), Settings.ThreadsFileName);
-                File.WriteAllLines(path, lines.ToArray());
+                // The thread list store refuses to save until the load has finished, and
+                // writes atomically so a failure can't leave a partially written file.
+                _threadListStore.Save(ThreadListPath, GetSavedThreadInfos());
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
             }
         }
 
-        private static void AddThreadLines(List<string> lines, ThreadWatcher watcher) {
-            WatcherExtraData extraData = (WatcherExtraData)watcher.Tag;
-            lines.Add(watcher.PageURL);
-            lines.Add(watcher.PageAuth);
-            lines.Add(watcher.ImageAuth);
-            lines.Add(watcher.CheckIntervalSeconds.ToString());
-            lines.Add(watcher.OneTimeDownload ? "1" : "0");
-            lines.Add(GetSaveDirLine(watcher));
-            lines.Add(GetStopReasonLine(watcher));
-            lines.Add(watcher.Description);
-            lines.Add(extraData.AddedOn.ToUniversalTime().Ticks.ToString());
-            lines.Add(GetLastImageOnLine(extraData));
-            lines.Add(extraData.AddedFrom);
-            lines.Add(watcher.Category);
-            lines.Add(watcher.AutoFollow ? "1" : "0");
+        private List<ThreadInfo> GetSavedThreadInfos() {
+            List<ThreadInfo> threads = new List<ThreadInfo>();
+            foreach (ThreadWatcher watcher in ThreadWatchers) {
+                threads.Add(GetSavedThreadInfo(watcher));
+            }
+            return threads;
+        }
+
+        private static ThreadInfo GetSavedThreadInfo(ThreadWatcher watcher) {
+            return new ThreadInfo {
+                URL = watcher.PageURL,
+                PageAuth = watcher.PageAuth,
+                ImageAuth = watcher.ImageAuth,
+                CheckIntervalSeconds = watcher.CheckIntervalSeconds,
+                OneTimeDownload = watcher.OneTimeDownload,
+                SaveDir = GetSaveDirLine(watcher),
+                StopReason = GetSavedStopReason(watcher),
+                Description = watcher.Description,
+                ExtraData = (WatcherExtraData)watcher.Tag,
+                Category = watcher.Category,
+                AutoFollow = watcher.AutoFollow
+            };
         }
 
         private static string GetSaveDirLine(ThreadWatcher watcher) {
             return watcher.ThreadDownloadDirectory != null ? General.GetRelativeDirectoryPath(watcher.ThreadDownloadDirectory, watcher.MainDownloadDirectory) : String.Empty;
         }
 
-        private static string GetStopReasonLine(ThreadWatcher watcher) {
-            return (watcher.IsStopping && watcher.StopReason != StopReason.Exiting) ? ((int)watcher.StopReason).ToString() : String.Empty;
-        }
-
-        private static string GetLastImageOnLine(WatcherExtraData extraData) {
-            return extraData.LastImageOn != null ? extraData.LastImageOn.Value.ToUniversalTime().Ticks.ToString() : String.Empty;
+        private static StopReason? GetSavedStopReason(ThreadWatcher watcher) {
+            return (watcher.IsStopping && watcher.StopReason != StopReason.Exiting) ? watcher.StopReason : (StopReason?)null;
         }
 
         private void LoadThreadList() {
+            bool loadedFully = false;
             try {
-                string[] lines = ReadThreadListLines();
-                if (lines == null) return;
-                int fileVersion = Int32.Parse(lines[0]);
-                int linesPerThread = GetLinesPerThread(fileVersion);
-                if (linesPerThread == 0) return;
-                if (lines.Length < (1 + linesPerThread)) return;
-                _isLoadingThreadsFromFile = true;
-                Invoke(() => {
-                    UpdateCategories(String.Empty);
-                });
-                AddThreadsFromLines(lines, fileVersion, linesPerThread);
-                LinkLoadedThreadsToParents();
-                MigrateChildThreadsToNewFormat();
-                _isLoadingThreadsFromFile = false;
+                loadedFully = LoadThreadListFile();
             }
             catch (Exception ex) {
-                _isLoadingThreadsFromFile = false;
                 Logger.Log(ex.ToString());
             }
+            _isLoadingThreadsFromFile = false;
+            // If anything failed, the original file is copied aside before saving is allowed.
+            _threadListStore.EndLoad(ThreadListPath, loadedFully);
         }
 
-        // Returns null if the thread list file doesn't exist or is empty.
-        private static string[] ReadThreadListLines() {
-            string path = Path.Combine(Settings.GetSettingsDirectory(), Settings.ThreadsFileName);
-            if (!File.Exists(path)) return null;
-            string[] lines = File.ReadAllLines(path);
-            if (lines.Length < 1) return null;
-            return lines;
+        // Returns false if any part of the file could not be loaded.
+        private bool LoadThreadListFile() {
+            ThreadListData data = _threadListStore.Read(ThreadListPath);
+            if (data == null) return true;
+            bool allThreadsAdded = data.Threads.Count == 0 || AddLoadedThreads(data.Threads);
+            return allThreadsAdded && data.TrailingLineCount == 0;
         }
 
-        // Returns 0 for unsupported file versions.
-        private static int GetLinesPerThread(int fileVersion) {
-            switch (fileVersion) {
-                case 1: return 6;
-                case 2: return 7;
-                case 3: return 10;
-                case 4: return 13;
-                default: return 0;
+        private bool AddLoadedThreads(List<ThreadInfo> threads) {
+            _isLoadingThreadsFromFile = true;
+            Invoke(() => {
+                UpdateCategories(String.Empty);
+            });
+            int failedCount = 0;
+            foreach (ThreadInfo thread in threads) {
+                if (!TryAddLoadedThread(thread)) failedCount++;
             }
+            LinkLoadedThreadsToParents();
+            MigrateChildThreadsToNewFormat();
+            _isLoadingThreadsFromFile = false;
+            return failedCount == 0;
         }
 
-        private void AddThreadsFromLines(string[] lines, int fileVersion, int linesPerThread) {
-            int i = 1;
-            while (i <= lines.Length - linesPerThread) {
-                ThreadInfo thread = ParseThreadInfo(lines, ref i, fileVersion);
+        private bool TryAddLoadedThread(ThreadInfo thread) {
+            try {
+                thread.SaveDir = thread.SaveDir.Length != 0 ? General.GetAbsoluteDirectoryPath(thread.SaveDir, Settings.AbsoluteDownloadDirectory) : null;
                 Invoke(() => {
                     AddThread(thread);
                 });
+                return true;
             }
-        }
-
-        private static ThreadInfo ParseThreadInfo(string[] lines, ref int i, int fileVersion) {
-            ThreadInfo thread = new ThreadInfo { ExtraData = new WatcherExtraData() };
-            thread.URL = lines[i++];
-            thread.PageAuth = lines[i++];
-            thread.ImageAuth = lines[i++];
-            thread.CheckIntervalSeconds = Int32.Parse(lines[i++]);
-            thread.OneTimeDownload = lines[i++] == "1";
-            thread.SaveDir = lines[i++];
-            thread.SaveDir = thread.SaveDir.Length != 0 ? General.GetAbsoluteDirectoryPath(thread.SaveDir, Settings.AbsoluteDownloadDirectory) : null;
-            if (fileVersion >= 2) {
-                ParseStopReason(thread, lines[i++]);
-            }
-            if (fileVersion >= 3) {
-                ParseDescriptionAndDates(thread, lines, ref i);
-            }
-            else {
-                thread.Description = String.Empty;
-                thread.ExtraData.AddedOn = DateTime.Now;
-            }
-            if (fileVersion >= 4) {
-                thread.ExtraData.AddedFrom = lines[i++];
-                thread.Category = lines[i++];
-                thread.AutoFollow = lines[i++] == "1";
-            }
-            else {
-                thread.ExtraData.AddedFrom = String.Empty;
-                thread.Category = String.Empty;
-            }
-            return thread;
-        }
-
-        private static void ParseStopReason(ThreadInfo thread, string stopReasonLine) {
-            if (stopReasonLine.Length != 0) {
-                thread.StopReason = (StopReason)Int32.Parse(stopReasonLine);
-            }
-        }
-
-        private static void ParseDescriptionAndDates(ThreadInfo thread, string[] lines, ref int i) {
-            thread.Description = lines[i++];
-            thread.ExtraData.AddedOn = new DateTime(Int64.Parse(lines[i++]), DateTimeKind.Utc).ToLocalTime();
-            string lastImageOn = lines[i++];
-            if (lastImageOn.Length != 0) {
-                thread.ExtraData.LastImageOn = new DateTime(Int64.Parse(lastImageOn), DateTimeKind.Utc).ToLocalTime();
+            catch (Exception ex) {
+                Logger.Log("Unable to load thread " + thread.URL + Environment.NewLine + ex);
+                return false;
             }
         }
 
@@ -1448,12 +1416,29 @@ namespace JDP {
         }
 
         private static void LinkToParentThread(ThreadWatcher threadWatcher) {
-            ThreadWatcher parentThread;
-            _watchers.TryGetValue(((WatcherExtraData)threadWatcher.Tag).AddedFrom, out parentThread);
+            ThreadWatcher parentThread = FindLoadedParentThread(threadWatcher);
             threadWatcher.ParentThread = parentThread;
-            if (parentThread != null && !parentThread.ChildThreads.ContainsKey(threadWatcher.PageID) && !parentThread.ChildThreads.ContainsKey(parentThread.PageID)) {
+            if (parentThread != null && !parentThread.ChildThreads.ContainsKey(threadWatcher.PageID)) {
                 parentThread.ChildThreads.Add(threadWatcher.PageID, threadWatcher);
             }
+        }
+
+        // Returns null if the thread has no (known) parent, or if linking it to its parent
+        // would make a thread its own ancestor.
+        private static ThreadWatcher FindLoadedParentThread(ThreadWatcher threadWatcher) {
+            string addedFrom = ((WatcherExtraData)threadWatcher.Tag).AddedFrom;
+            ThreadWatcher parentThread;
+            if (String.IsNullOrEmpty(addedFrom) || !_watchers.TryGetValue(addedFrom, out parentThread)) return null;
+            return IsSelfOrAncestor(threadWatcher, parentThread) ? null : parentThread;
+        }
+
+        private static bool IsSelfOrAncestor(ThreadWatcher threadWatcher, ThreadWatcher descendantThread) {
+            // The step limit stops the walk even if the existing parent links already form a cycle.
+            int stepsLeft = _watchers.Count + 1;
+            for (ThreadWatcher thread = descendantThread; thread != null && stepsLeft-- > 0; thread = thread.ParentThread) {
+                if (thread == threadWatcher) return true;
+            }
+            return false;
         }
 
         private static bool IsRestartableAfterLoad(ThreadWatcher threadWatcher) {
@@ -1478,9 +1463,19 @@ namespace JDP {
 
         private static void MoveDescendantThreadDirectory(ThreadWatcher threadWatcher, ThreadWatcher descendantThread) {
             descendantThread.DoNotRename = true;
+            try {
+                TryMoveDescendantThreadDirectory(threadWatcher, descendantThread);
+            }
+            finally {
+                descendantThread.DoNotRename = false;
+            }
+        }
+
+        private static void TryMoveDescendantThreadDirectory(ThreadWatcher threadWatcher, ThreadWatcher descendantThread) {
             string sourceDir = descendantThread.ThreadDownloadDirectory;
+            if (!CanMoveDescendantThreadDirectory(threadWatcher, sourceDir)) return;
             string destDir = GetDescendantThreadDestDir(threadWatcher, descendantThread, sourceDir);
-            if (String.Equals(destDir, sourceDir, StringComparison.Ordinal) || !Directory.Exists(sourceDir)) return;
+            if (String.Equals(destDir, sourceDir, StringComparison.Ordinal)) return;
             try {
                 MoveThreadDirectory(sourceDir, destDir);
                 descendantThread.ThreadDownloadDirectory = destDir;
@@ -1488,12 +1483,16 @@ namespace JDP {
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
             }
-            descendantThread.DoNotRename = false;
+        }
+
+        private static bool CanMoveDescendantThreadDirectory(ThreadWatcher threadWatcher, string sourceDir) {
+            return !String.IsNullOrEmpty(sourceDir) && !String.IsNullOrEmpty(threadWatcher.ThreadDownloadDirectory) && Directory.Exists(sourceDir);
         }
 
         private static string GetDescendantThreadDestDir(ThreadWatcher threadWatcher, ThreadWatcher descendantThread, string sourceDir) {
+            // A folder directly inside the download folder is already in the new layout.
             if (General.RemoveLastDirectory(sourceDir) == descendantThread.MainDownloadDirectory) {
-                return Path.Combine(descendantThread.MainDownloadDirectory, General.RemoveLastDirectory(sourceDir));
+                return sourceDir;
             }
             return Path.Combine(General.RemoveLastDirectory(threadWatcher.ThreadDownloadDirectory),
                 General.GetRelativeDirectoryPath(descendantThread.ThreadDownloadDirectory, threadWatcher.ThreadDownloadDirectory));

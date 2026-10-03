@@ -118,6 +118,8 @@
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
     <Compile Include="Classes\Settings.cs" />
+    <Compile Include="Classes\TextFile.cs" />
+    <Compile Include="Classes\ThreadListFile.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="ChanThreadWatch.ico" />
