@@ -872,7 +872,7 @@ namespace JDP {
         private static readonly string[] _activeContentElements = { "script", "iframe", "frame", "object", "embed", "applet" };
 
         // Added to the saved page's head. Blocks anything the removal misses where a browser parses
-        // the markup differently from HTMLParser (for example inside noembed, xmp or svg title).
+        // the markup differently from HTMLParser (for example inside noembed or xmp).
         public const string ActiveContentPolicyMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\">";
 
         // Removes scripts, embedded content, event handler attributes and script URLs, so a saved

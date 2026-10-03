@@ -105,12 +105,67 @@ namespace JDP.Tests {
             Assert.AreEqual("<p>a</p>", Save("<p>a</p>"));
         }
 
-        // HTMLParser treats svg title as raw text where a browser parses tags, so only the policy blocks this handler
+        // HTMLParser reads xmp contents as markup where a browser reads text, so the comment it sees
+        // there hides this handler; only the policy blocks it
         [TestMethod]
-        public void PolicyCoversMarkupTheParserReadsAsText() {
-            string saved = Save("<head></head><body><svg><title><img src=x onerror=alert(1)></title></svg></body>");
+        public void PolicyCoversMarkupTheParserMisreads() {
+            string saved = Save("<head></head><body><xmp><!--</xmp><img src=x onerror=alert(1)>--></body>");
 
-            Assert.AreEqual("<head>" + General.ActiveContentPolicyMeta + "</head><body><svg><title><img src=x onerror=alert(1)></title></svg></body>", saved);
+            Assert.AreEqual("<head>" + General.ActiveContentPolicyMeta + "</head><body><xmp><!--</xmp><img src=x onerror=alert(1)>--></body>", saved);
+        }
+
+        // Comments end where a browser ends them, so a script after a comment is found
+        [TestMethod]
+        [DataRow("<!--><script>alert(1)</script>", "<!-->")]
+        [DataRow("<!---><script>alert(1)</script>-->", "<!--->-->")]
+        [DataRow("<!----><script>alert(1)</script>", "<!---->")]
+        [DataRow("<!-- a --!><script>alert(1)</script>-->", "<!-- a --!>-->")]
+        [DataRow("<!-- a --><script>alert(1)</script>", "<!-- a -->")]
+        public void RemovesScriptAfterComment(string html, string expected) {
+            Assert.AreEqual(expected, Save(html));
+        }
+
+        // A browser reads these scripts as part of the comment, so they don't run
+        [TestMethod]
+        [DataRow("<!-- a -- ><script>alert(1)</script>-->")]
+        [DataRow("<!-- a --!-><script>alert(1)</script>-->")]
+        [DataRow("<!-- never closed <script>alert(1)</script>")]
+        public void KeepsScriptTextInsideComment(string html) {
+            Assert.AreEqual(html, Save(html));
+        }
+
+        // In svg and math a browser reads the tags in title, style and textarea, and in an
+        // integration point (svg foreignObject, desc, title, MathML mi and an HTML annotation-xml)
+        // it reads these elements as HTML text again, which can end before a comment does
+        [TestMethod]
+        [DataRow("<svg><title><script>alert(1)</script></title></svg>", "<svg><title></title></svg>")]
+        [DataRow("<SVG><TITLE><script>alert(1)</script></TITLE></SVG>", "<SVG><TITLE></TITLE></SVG>")]
+        [DataRow("<math><title><img onerror=alert(1)></title></math>", "<math><title><img ></title></math>")]
+        [DataRow("<svg><style><script>alert(1)</script></style></svg>", "<svg><style></style></svg>")]
+        [DataRow("<svg><font><title><script>alert(1)</script></title></font></svg>", "<svg><font><title></title></font></svg>")]
+        [DataRow("<svg><g><textarea><img onerror=alert(1)></textarea></g></svg>", "<svg><g><textarea><img ></textarea></g></svg>")]
+        [DataRow("<svg><foreignObject><textarea><!--</textarea><script>alert(1)</script>--></textarea></foreignObject></svg>", "<svg><foreignObject><textarea><!--</textarea>--></textarea></foreignObject></svg>")]
+        [DataRow("<svg><desc><style><!--</style><script>alert(1)</script>--></style></desc></svg>", "<svg><desc><style><!--</style>--></style></desc></svg>")]
+        [DataRow("<math><mi><title><!--</title><script>alert(1)</script>--></title></mi></math>", "<math><mi><title><!--</title>--></title></mi></math>")]
+        [DataRow("<math><mi><mglyph><title><img onerror=alert(1)></title></mglyph></mi></math>", "<math><mi><mglyph><title><img ></title></mglyph></mi></math>")]
+        [DataRow("<math><annotation-xml encoding=\"text/html\"><textarea><!--</textarea><script>alert(1)</script>--></textarea></annotation-xml></math>", "<math><annotation-xml encoding=\"text/html\"><textarea><!--</textarea>--></textarea></annotation-xml></math>")]
+        [DataRow("<math><annotation-xml><svg><title><textarea><!--</textarea><script>alert(1)</script>--></textarea></title></svg></annotation-xml></math>", "<math><annotation-xml><svg><title><textarea><!--</textarea>--></textarea></title></svg></annotation-xml></math>")]
+        public void RemovesActiveContentInSvgAndMathText(string html, string expected) {
+            Assert.AreEqual(expected, Save(html));
+        }
+
+        // Outside svg and math, and after an HTML element ends them, title and textarea hold text
+        [TestMethod]
+        [DataRow("<title><script>alert(1)</script></title>")]
+        [DataRow("<textarea><script>alert(1)</script></textarea>")]
+        [DataRow("<style><img src=x onerror=alert(1)></style>")]
+        [DataRow("<svg></svg><title><script>alert(1)</script></title>")]
+        [DataRow("<svg/><textarea><img src=x onerror=alert(1)></textarea>")]
+        [DataRow("<svg><p><title><script>alert(1)</script></title></svg>")]
+        [DataRow("<svg><font color=\"red\"><title><script>alert(1)</script></title></font></svg>")]
+        [DataRow("<math><mi><title><script>alert(1)</script></title></mi></math>")]
+        public void KeepsTitleAndTextareaTextOutsideSvgAndMath(string html) {
+            Assert.AreEqual(html, Save(html));
         }
 
         [TestMethod]

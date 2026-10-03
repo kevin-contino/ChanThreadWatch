@@ -76,10 +76,9 @@ namespace JDP {
             return index < tags.Count && !tags[index].IsEnd && tags[index].NameEquals(name) && IsBlankBefore(htmlParser, index);
         }
 
-        // White space, a BOM, a plain doctype, and comments that end where both HTMLParser and a
-        // browser end them. A browser ends "<!-->" and "<!--->" right away and a comment at "--!>",
-        // where HTMLParser may read on to a later "-->" and miss the tags in between, so such
-        // comments, a comment inside a comment, and any other markup do not count as blank.
+        // White space, a BOM, a plain doctype, and plain comments. A browser ends "<!-->" and
+        // "<!--->" right away and a comment at "--!>"; such comments, a comment inside a comment,
+        // and any other markup do not count as blank.
         private static readonly Regex _blankMarkup = new Regex("^(?:\\s|\\uFEFF|<!doctype[^<>]*>|<!--(?!>|->)(?:(?!--!>|<!--|-->)[\\s\\S])*-->)*$", RegexOptions.IgnoreCase);
 
         // True if only white space, well-formed comments and the doctype come between the tag and

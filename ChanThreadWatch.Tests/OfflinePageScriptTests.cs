@@ -231,7 +231,7 @@ namespace JDP.Tests {
         [DataRow("text<html><head></head></html>")]
         [DataRow("<p>a</p><html><head></head></html>")]
         [DataRow("<!-- <head> --><p>a</p>")]
-        // A browser ends these comments earlier than HTMLParser does
+        // A browser ends these comments early, so they do not count as blank before the head
         [DataRow("<!---><html><head></head></html>")]
         [DataRow("<!--><html><head></head></html>")]
         [DataRow("<!-- a --!> <html><head></head></html>")]
@@ -260,25 +260,28 @@ namespace JDP.Tests {
             AssertHasOfflineScript(saved, "4chan");
         }
 
-        // HTMLParser reads "<!--->" as the start of a comment that ends at the next "-->", where a
-        // browser ends it at once and runs the script. Only the policy keeps it from running; this
-        // documents HTMLParser's behavior, which a separate change is to fix.
+        // A browser ends "<!--->" at once and runs the script after it, so the script is removed.
+        // The policy stays as the second layer.
         [TestMethod]
-        public void CommentThatABrowserEndsEarlyHidesAScriptFromTheRemoval() {
+        public void CommentThatABrowserEndsEarlyDoesNotHideAScriptFromTheRemoval() {
             string saved = Save("<html><head></head><body><!---><script>alert(1)</script>--></body></html>", "4chan");
 
-            StringAssert.Contains(saved, "<!---><script>alert(1)</script>-->");
+            StringAssert.Contains(saved, "<body><!--->--></body>");
+            Assert.DoesNotContain("alert(1)", saved);
             StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
+            AssertHasOfflineScript(saved, "4chan");
         }
 
-        // HTMLParser reads an svg title as text, so it finds no script tag there; a browser runs the
-        // svg script. Only the policy, which allows no script but ours, keeps it from running.
+        // A browser reads the tags in an svg title and runs the script, so the script is removed.
+        // The policy stays as the second layer.
         [TestMethod]
-        public void SvgTitleScriptIsNotRemovedButThePolicyBlocksIt() {
+        public void SvgTitleScriptIsRemoved() {
             string saved = Save("<html><head></head><body><svg><title><script>alert(1)</script></title></svg></body></html>", "4chan");
 
-            StringAssert.Contains(saved, "<svg><title><script>alert(1)</script></title></svg>");
+            StringAssert.Contains(saved, "<svg><title></title></svg>");
+            Assert.DoesNotContain("alert(1)", saved);
             StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
+            AssertHasOfflineScript(saved, "4chan");
         }
 
         [TestMethod]

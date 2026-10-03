@@ -216,6 +216,7 @@ namespace JDP {
         // Parsing helpers below return the position to continue from, or -1 (or null)
         // when the input ends before the construct is complete, which stops parsing.
         private static IEnumerable<HTMLTag> ParseTags(string html, int htmlStart, int htmlEnd) {
+            ForeignContent foreignContent = new ForeignContent();
             int pos;
             while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
                 htmlStart = pos + 1;
@@ -227,7 +228,7 @@ namespace JDP {
                     yield return tag;
 
                     // Skip contents of special tags whose contents are to be treated as raw text
-                    htmlStart = SkipRawTextContents(html, tag, htmlEnd);
+                    htmlStart = SkipRawTextContents(html, tag, foreignContent, htmlEnd);
                 }
                 else {
                     htmlStart = SkipNonTagMarkup(html, htmlStart, htmlEnd);
@@ -323,9 +324,11 @@ namespace JDP {
             return valueEnd;
         }
 
-        private static int SkipRawTextContents(string html, HTMLTag tag, int htmlEnd) {
+        private static int SkipRawTextContents(string html, HTMLTag tag, ForeignContent foreignContent, int htmlEnd) {
             int htmlStart = tag.EndOffset;
-            if (!IsRawTextStartTag(tag)) return htmlStart;
+            bool isRawText = IsRawTextStartTag(tag, foreignContent);
+            foreignContent.Update(tag);
+            if (!isRawText) return htmlStart;
             string endTagText = "/" + tag.Name;
             int pos;
             while ((pos = IndexOf(html, htmlStart, htmlEnd, '<')) != -1) {
@@ -335,8 +338,11 @@ namespace JDP {
             return -1;
         }
 
-        private static bool IsRawTextStartTag(HTMLTag tag) {
-            return !tag.IsEnd && !tag.IsSelfClosing && tag.NameEqualsAny("script", "style", "title", "textarea");
+        // In svg and math a browser reads the contents of title, style and textarea as markup.
+        // Script contents stay text here: the removal of scripts takes their contents with them.
+        private static bool IsRawTextStartTag(HTMLTag tag, ForeignContent foreignContent) {
+            if (tag.IsEnd || tag.IsSelfClosing) return false;
+            return tag.NameEquals("script") || (tag.NameEqualsAny("style", "title", "textarea") && foreignContent.IsReadAsHTML(tag));
         }
 
         private static bool StartsWithRawTextEndTag(string html, int htmlStart, int htmlEnd, string endTagText) {
@@ -359,8 +365,10 @@ namespace JDP {
             return htmlStart;
         }
 
+        // Browsers end "<!-->" and "<!--->" at once, as the bogus comment rule ends them
         private static bool StartsWithCommentStart(string html, int htmlStart, int htmlEnd) {
-            return StartsWith(html, htmlStart, htmlEnd, "!--", false) && !StartsWith(html, htmlStart + 3, htmlEnd, '>');
+            return StartsWith(html, htmlStart, htmlEnd, "!--", false) && !StartsWith(html, htmlStart + 3, htmlEnd, '>') &&
+                !StartsWith(html, htmlStart + 3, htmlEnd, "->", false);
         }
 
         private static int SkipComment(string html, int htmlStart, int htmlEnd) {
@@ -479,6 +487,104 @@ namespace JDP {
         public static bool ClassAttributeValueHas(HTMLTag tag, string targetClassName) {
             string attributeValue = tag.GetAttributeValue("class");
             return attributeValue != null && ClassAttributeValueHas(attributeValue, targetClassName);
+        }
+
+        // The svg and math elements open at a point of the page, as far as a browser's tree
+        // builder uses them to decide if it reads a start tag as HTML or as foreign content.
+        // Inside an integration point (svg foreignObject, desc and title, MathML mi, mo, mn, ms,
+        // mtext, and annotation-xml for HTML) a browser reads start tags as HTML again. HTML
+        // elements are not followed, so an end tag inside an integration point is matched against
+        // the foreign elements even where a browser ignores it for an HTML element still open.
+        private sealed class ForeignContent {
+            private static readonly string[] _breakoutNames = {
+                "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt", "em", "embed",
+                "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li", "listing", "menu", "meta",
+                "nobr", "ol", "p", "pre", "ruby", "s", "small", "span", "strong", "strike", "sub", "sup", "table",
+                "tt", "u", "ul", "var"
+            };
+
+            private readonly List<ForeignElement> _openElements = new List<ForeignElement>();
+
+            public bool IsReadAsHTML(HTMLTag startTag) {
+                if (_openElements.Count == 0) return true;
+                ForeignElement current = _openElements[_openElements.Count - 1];
+                return current.IsHTMLIntegrationPoint || (current.IsTextIntegrationPoint && !startTag.NameEqualsAny("mglyph", "malignmark"));
+            }
+
+            public void Update(HTMLTag tag) {
+                if (tag.IsEnd) {
+                    Close(tag);
+                }
+                else if (IsReadAsHTML(tag)) {
+                    OpenRoot(tag);
+                }
+                else {
+                    OpenChild(tag);
+                }
+            }
+
+            private void OpenRoot(HTMLTag tag) {
+                if (!tag.IsSelfClosing && tag.NameEqualsAny("svg", "math")) {
+                    _openElements.Add(new ForeignElement(tag, tag.NameEquals("svg")));
+                }
+            }
+
+            // An HTML element such as a div or p ends the foreign content it appears in
+            private void OpenChild(HTMLTag tag) {
+                if (IsBreakoutTag(tag)) {
+                    CloseToHTML();
+                }
+                else if (!tag.IsSelfClosing) {
+                    _openElements.Add(new ForeignElement(tag, IsSvgChild(tag)));
+                }
+            }
+
+            private bool IsSvgChild(HTMLTag tag) {
+                ForeignElement current = _openElements[_openElements.Count - 1];
+                return current.IsSvg || (tag.NameEquals("svg") && current.Name == "annotation-xml");
+            }
+
+            private static bool IsBreakoutTag(HTMLTag tag) {
+                return tag.NameEqualsAny(_breakoutNames) || (tag.NameEquals("font") && IsBreakoutFont(tag));
+            }
+
+            private static bool IsBreakoutFont(HTMLTag tag) {
+                return tag.GetAttribute("color") != null || tag.GetAttribute("face") != null || tag.GetAttribute("size") != null;
+            }
+
+            private void Close(HTMLTag tag) {
+                if (tag.NameEqualsAny("br", "p")) {
+                    CloseToHTML();
+                    return;
+                }
+                int i = _openElements.FindLastIndex(e => e.Name == tag.Name);
+                if (i != -1) _openElements.RemoveRange(i, _openElements.Count - i);
+            }
+
+            private void CloseToHTML() {
+                int i = _openElements.FindLastIndex(e => e.IsHTMLIntegrationPoint || e.IsTextIntegrationPoint);
+                _openElements.RemoveRange(i + 1, _openElements.Count - (i + 1));
+            }
+        }
+
+        private sealed class ForeignElement {
+            public ForeignElement(HTMLTag tag, bool isSvg) {
+                Name = tag.Name;
+                IsSvg = isSvg;
+                IsHTMLIntegrationPoint = isSvg ? tag.NameEqualsAny("foreignobject", "desc", "title") : IsHTMLAnnotation(tag);
+                IsTextIntegrationPoint = !isSvg && tag.NameEqualsAny("mi", "mo", "mn", "ms", "mtext");
+            }
+
+            public string Name { get; private set; }
+            public bool IsSvg { get; private set; }
+            public bool IsHTMLIntegrationPoint { get; private set; }
+            public bool IsTextIntegrationPoint { get; private set; }
+
+            private static bool IsHTMLAnnotation(HTMLTag tag) {
+                string encoding = tag.GetAttributeValueOrEmpty("encoding");
+                return tag.NameEquals("annotation-xml") &&
+                    (encoding.Equals("text/html", StringComparison.OrdinalIgnoreCase) || encoding.Equals("application/xhtml+xml", StringComparison.OrdinalIgnoreCase));
+            }
         }
     }
 
