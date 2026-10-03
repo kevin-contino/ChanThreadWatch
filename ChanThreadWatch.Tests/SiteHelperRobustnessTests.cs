@@ -240,6 +240,27 @@ namespace JDP.Tests {
             Assert.DoesNotContain("duplicate deleted", html);
         }
 
+        // Consecutive deleted posts after the same surviving post are all inserted at one offset.
+        // More than 16 of them makes List.Sort leave insertion sort, so only a stable sort keeps
+        // them in thread order.
+        [TestMethod]
+        public void FourChanResurrectDeadPostsKeepsOrderOfManyConsecutiveDeletedPosts() {
+            string[] deletedIDs = System.Linq.Enumerable.Range(2, 40).Select(n => "pc" + n).ToArray();
+            string previous = FourChanThread(FourChanContainer("pc1", "first") + String.Concat(deletedIDs.Select(id => FourChanContainer(id, id))));
+            SiteHelper helper = CreateHelper(FourChanURL, FourChanThread(FourChanContainer("pc1", "first")));
+            var replaces = new List<ReplaceInfo>();
+
+            helper.ResurrectDeadPosts(new HTMLParser(previous), replaces);
+            General.AddOtherReplaces(helper.GetHTMLParser(), FourChanURL, replaces);
+            var savedPage = new StringWriter();
+            General.WriteReplacedString(helper.GetHTMLParser().PreprocessedHTML, replaces, savedPage);
+
+            string html = savedPage.ToString();
+            int[] positions = deletedIDs.Select(id => html.IndexOf("id=\"" + id + "\"", StringComparison.Ordinal)).ToArray();
+            CollectionAssert.DoesNotContain(positions, -1);
+            CollectionAssert.AreEqual(positions.OrderBy(p => p).ToArray(), positions, "resurrected posts are out of thread order");
+        }
+
         // B16
         [TestMethod]
         public void InfinitechanResurrectDeadPostsToleratesDuplicateAndMissingIDs() {

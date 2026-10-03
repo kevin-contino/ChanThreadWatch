@@ -709,7 +709,7 @@ namespace JDP {
 
         public static void WriteReplacedString(string str, List<ReplaceInfo> replaceList, TextWriter outStream) {
             int offset = 0;
-            replaceList.Sort((x, y) => x.Offset.CompareTo(y.Offset));
+            SortByOffset(replaceList);
             for (int iReplace = 0; iReplace < replaceList.Count; iReplace++) {
                 ReplaceInfo replace = replaceList[iReplace];
                 if (IsSkippedReplace(replace, offset)) continue;
@@ -720,6 +720,16 @@ namespace JDP {
             if (str.Length > offset) {
                 outStream.Write(str.Substring(offset));
             }
+        }
+
+        // List.Sort is unstable, so replacements at the same offset are kept in the order they were
+        // added. Several posts resurrected after the same post are inserted at one offset.
+        private static void SortByOffset(List<ReplaceInfo> replaceList) {
+            Dictionary<ReplaceInfo, int> addedOrder = new Dictionary<ReplaceInfo, int>();
+            for (int i = 0; i < replaceList.Count; i++) {
+                addedOrder[replaceList[i]] = i;
+            }
+            replaceList.Sort((x, y) => x.Offset != y.Offset ? x.Offset.CompareTo(y.Offset) : addedOrder[x].CompareTo(addedOrder[y]));
         }
 
         // Overlapping and negative length replacements are ignored
