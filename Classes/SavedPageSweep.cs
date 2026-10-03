@@ -32,8 +32,11 @@ namespace JDP {
 
         private static readonly string[] _removedHttpEquivs = { "refresh", "set-cookie" };
 
+        // An escape character has no use in a page. In a page a browser decodes as ISO-2022-JP it
+        // switches character sets, so it is written as a replacement character.
         public static string Sweep(string html) {
-            return new Sweeper(html).Run();
+            string text = html.IndexOf('\u001B') == -1 ? html : html.Replace('\u001B', '\uFFFD');
+            return new Sweeper(text).Run();
         }
 
         private sealed class Edit {
@@ -228,11 +231,11 @@ namespace JDP {
 
         private static bool IsRemovedHttpEquiv(TagSpan span, TagAttribute attribute) {
             if (span.Name != "meta" || attribute.Name != "http-equiv") return false;
-            return Array.IndexOf(_removedHttpEquivs, attribute.Value.Trim().ToLowerInvariant()) != -1;
+            return Array.IndexOf(_removedHttpEquivs, General.DecodeAttributeValue(attribute.Value).Trim().ToLowerInvariant()) != -1;
         }
 
         private static bool IsHrefName(string value) {
-            string name = value.Trim().ToLowerInvariant();
+            string name = General.DecodeAttributeValue(value).Trim().ToLowerInvariant();
             return name == "href" || name == "xlink:href";
         }
 

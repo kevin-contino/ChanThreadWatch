@@ -49,6 +49,9 @@ namespace JDP.Tests {
         [DataRow("<a title=\"<script>\">x</a>", "<a title=\"&lt;script>\">x</a>")]
         [DataRow("<img src=x\nonerror=alert(1)>", "<img src=x\ndata-ctw-removed-onerror=alert(1)>")]
         [DataRow("<img src=\"x onerror=alert(1)", "<img src=\"x onerror=alert(1)")]
+        [DataRow("<\u001B(Bb>x</b>", "<\uFFFD(Bb>x</b>")]
+        [DataRow("<meta http-equiv=\"re&#102;resh\" content=\"0;url=x\">", "<meta data-ctw-removed-http-equiv=\"re&#102;resh\" content=\"0;url=x\">")]
+        [DataRow("<svg><animate attributeName=\"hr&#101;f\" values=\"x\"/></svg>", "<svg>&lt;animate attributeName=\"hr&#101;f\" values=\"x\"/></svg>")]
         public void MakesActiveTagsAndAttributesInert(string html, string expected) {
             string swept = SavedPageSweep.Sweep(html);
 

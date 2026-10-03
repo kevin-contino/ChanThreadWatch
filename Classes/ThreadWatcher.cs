@@ -1021,7 +1021,7 @@ namespace JDP {
             if (pageInfo.ReplaceList != null) return;
             HTMLParser htmlParser = siteHelper.GetHTMLParser();
             List<ReplaceInfo> replaces = General.GetActiveContentReplaces(htmlParser, siteHelper.GetOfflinePageScriptSite());
-            using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
+            using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, General.SavedPageEncoding)) {
                 General.WriteSavedPage(htmlParser.PreprocessedHTML, replaces, sw);
             }
             DeleteBackupIfPageComplete(htmlParser, pageInfo.Path);
@@ -1497,7 +1497,7 @@ namespace JDP {
                 }
             }
             General.AddOtherReplaces(htmlParser, pageInfo.URL, pageInfo.ReplaceList, siteHelper.GetOfflinePageScriptSite());
-            using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
+            using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, General.SavedPageEncoding)) {
                 General.WriteSavedPage(htmlParser.PreprocessedHTML, pageInfo.ReplaceList, sw);
             }
             DeleteBackupIfPageComplete(htmlParser, pageInfo.Path);

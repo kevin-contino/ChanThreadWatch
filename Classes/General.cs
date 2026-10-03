@@ -787,6 +787,11 @@ namespace JDP {
             return result;
         }
 
+        // Saved pages are written as UTF-8 with a byte order mark. A browser that opens the file
+        // decodes it by the mark before any charset the page declares, so it reads the same text
+        // that SavedPageSweep checked.
+        public static readonly Encoding SavedPageEncoding = new UTF8Encoding(true);
+
         // Writes a page as it is saved: with the replacements applied, then through the last pass
         // of SavedPageSweep, which does not depend on how HTMLParser read the page
         public static void WriteSavedPage(string str, List<ReplaceInfo> replaceList, TextWriter outStream) {
@@ -997,14 +1002,20 @@ namespace JDP {
         // character references. HttpUtility doesn't know the HTML5-only names used here, and leaves
         // numeric references without a semicolon undecoded, which browsers decode.
         public static bool IsScriptURL(string value) {
-            string terminated = Regex.Replace(value, "&#([0-9]+|[xX][0-9a-fA-F]+);?", "&#$1;");
-            string decoded = HttpUtility.HtmlDecode(terminated.Replace("&Tab;", "\t").Replace("&NewLine;", "\n").Replace("&colon;", ":"));
+            string decoded = DecodeAttributeValue(value);
             StringBuilder url = new StringBuilder(decoded.Length);
             foreach (char c in decoded) {
                 if (c > ' ') url.Append(Char.ToLowerInvariant(c));
             }
             string scheme = url.ToString();
             return scheme.StartsWith("javascript:", StringComparison.Ordinal) || scheme.StartsWith("vbscript:", StringComparison.Ordinal);
+        }
+
+        // Decodes character references the way a browser does in an attribute value, including
+        // numeric references without a semicolon and the named references for tab, newline and colon
+        public static string DecodeAttributeValue(string value) {
+            string terminated = Regex.Replace(value, "&#([0-9]+|[xX][0-9a-fA-F]+);?", "&#$1;");
+            return HttpUtility.HtmlDecode(terminated.Replace("&Tab;", "\t").Replace("&NewLine;", "\n").Replace("&colon;", ":"));
         }
 
         private static void AddNewLineReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {
