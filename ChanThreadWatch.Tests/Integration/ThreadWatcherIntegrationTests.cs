@@ -90,6 +90,93 @@ namespace JDP.Tests.Integration {
             Assert.DoesNotContain("onload", html);
         }
 
+        // With thumbnails off the page is otherwise saved as downloaded: its file links stay live and
+        // no thumbnail is downloaded
+        [TestMethod]
+        public void SavedPageHasNoActiveContentWithThumbnailsOff() {
+            Settings.SaveThumbnails = false;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+
+            RunToStop(watcher);
+
+            string html = File.ReadAllText(SavedPagePath(watcher));
+            StringAssert.Contains(html, "<head>" + General.ActiveContentPolicyMeta + "<title>/wg/ - Fixture</title></head>");
+            StringAssert.Contains(html, "<body >");
+            Assert.DoesNotContain("<script", html);
+            Assert.DoesNotContain("var board", html);
+            Assert.DoesNotContain("onload", html);
+            StringAssert.Contains(html, "<img src=\"" + server.BaseURL() + "/wg/1700000000001s.jpg\"");
+            StringAssert.Contains(html, "href=\"" + server.BaseURL() + "/wg/1700000000001.jpg\"");
+            StringAssert.Contains(html, "</html>\r\n");
+            Assert.IsEmpty(server.RequestsTo(FourChanThreadFixture.ThumbPaths[0]));
+            Assert.IsFalse(Directory.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "thumbs")));
+        }
+
+        // The setting is read once per check: turned off after the page is downloaded, the page is
+        // still processed with local links
+        [TestMethod]
+        public void ThumbnailsTurnedOffDuringCheckStillProcessesPage() {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            SetSaveThumbnailsAfterPageDownload(watcher, false);
+
+            StopReason reason = RunToStop(watcher);
+
+            Assert.AreEqual(StopReason.DownloadComplete, reason);
+            string html = File.ReadAllText(SavedPagePath(watcher));
+            StringAssert.Contains(html, "<img src=\"thumbs/1700000000001s.jpg\"");
+            Assert.DoesNotContain("<script", html);
+        }
+
+        // Turned on after the page is downloaded, the page has no replace list and is not processed
+        [TestMethod]
+        public void ThumbnailsTurnedOnDuringCheckLeavesPageUnprocessed() {
+            Settings.SaveThumbnails = false;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            SetSaveThumbnailsAfterPageDownload(watcher, true);
+
+            StopReason reason = RunToStop(watcher);
+
+            Assert.AreEqual(StopReason.DownloadComplete, reason);
+            string html = File.ReadAllText(SavedPagePath(watcher));
+            StringAssert.Contains(html, "<img src=\"" + server.BaseURL() + "/wg/1700000000001s.jpg\"");
+            Assert.DoesNotContain("<script", html);
+            Assert.IsEmpty(server.RequestsTo(FourChanThreadFixture.ThumbPaths[0]));
+        }
+
+        private static void SetSaveThumbnailsAfterPageDownload(ThreadWatcher watcher, bool saveThumbnails) {
+            watcher.DownloadStatus += (s, e) => {
+                if (e.DownloadType == DownloadType.Page && e.CompleteCount == 1) Settings.SaveThumbnails = saveThumbnails;
+            };
+        }
+
+        // The second download moves the saved page to the backup, which is deleted once the new
+        // page is saved complete
+        [TestMethod]
+        public void RedownloadWithThumbnailsOffDeletesBackup() {
+            Settings.SaveThumbnails = false;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            string url = server.URL(FourChanThreadFixture.ThreadPath);
+            RunToStop(CreateWatcher(url));
+
+            ThreadWatcher second = CreateWatcher(url);
+            RunToStop(second);
+
+            Assert.HasCount(2, server.RequestsTo(FourChanThreadFixture.ThreadPath));
+            Assert.IsTrue(File.Exists(SavedPagePath(second)));
+            Assert.IsFalse(File.Exists(SavedPagePath(second) + ".bak"));
+        }
+
         [TestMethod]
         public void MissingThreadStopsWithPageNotFound() {
             LoopbackHttpServer server = StartServer();

@@ -241,9 +241,9 @@
             this.chkSaveThumbnails.AutoSize = true;
             this.chkSaveThumbnails.Location = new System.Drawing.Point(6, 19);
             this.chkSaveThumbnails.Name = "chkSaveThumbnails";
-            this.chkSaveThumbnails.Size = new System.Drawing.Size(221, 17);
+            this.chkSaveThumbnails.Size = new System.Drawing.Size(246, 17);
             this.chkSaveThumbnails.TabIndex = 6;
-            this.chkSaveThumbnails.Text = "Save thumbnails and post-process HTML";
+            this.chkSaveThumbnails.Text = "Save thumbnails and rewrite links to local files";
             this.chkSaveThumbnails.UseVisualStyleBackColor = true;
             // 
             // chkRenameDownloadFolderWithDescription
