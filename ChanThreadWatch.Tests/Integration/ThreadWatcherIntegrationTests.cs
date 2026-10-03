@@ -115,6 +115,25 @@ namespace JDP.Tests.Integration {
             Assert.IsFalse(Directory.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "thumbs")));
         }
 
+        // The second download moves the saved page to the backup, which is deleted once the new
+        // page is saved complete
+        [TestMethod]
+        public void RedownloadWithThumbnailsOffDeletesBackup() {
+            Settings.SaveThumbnails = false;
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            string url = server.URL(FourChanThreadFixture.ThreadPath);
+            RunToStop(CreateWatcher(url));
+
+            ThreadWatcher second = CreateWatcher(url);
+            RunToStop(second);
+
+            Assert.HasCount(2, server.RequestsTo(FourChanThreadFixture.ThreadPath));
+            Assert.IsTrue(File.Exists(SavedPagePath(second)));
+            Assert.IsFalse(File.Exists(SavedPagePath(second) + ".bak"));
+        }
+
         [TestMethod]
         public void MissingThreadStopsWithPageNotFound() {
             LoopbackHttpServer server = StartServer();

@@ -936,6 +936,7 @@ namespace JDP {
             using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
                 General.WriteReplacedString(htmlParser.PreprocessedHTML, General.GetActiveContentReplaces(htmlParser), sw);
             }
+            DeleteBackupIfPageComplete(htmlParser, pageInfo.Path);
         }
 
         private void EnqueuePageFiles(SiteHelper siteHelper, PageInfo pageInfo, string imageDir, string thumbDir, Queue<ImageInfo> pendingImages, Queue<ThumbnailInfo> pendingThumbs) {
