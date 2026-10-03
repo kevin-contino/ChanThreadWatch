@@ -1493,7 +1493,7 @@ namespace JDP {
                     pageInfo.ReplaceList.RemoveAt(i--);
                 }
             }
-            General.AddOtherReplaces(htmlParser, pageInfo.URL, pageInfo.ReplaceList);
+            General.AddOtherReplaces(htmlParser, pageInfo.URL, pageInfo.ReplaceList, siteHelper.GetOfflinePageScriptSite());
             using (StreamWriter sw = new StreamWriter(pageInfo.Path, false, pageInfo.Encoding)) {
                 General.WriteReplacedString(htmlParser.PreprocessedHTML, pageInfo.ReplaceList, sw);
             }

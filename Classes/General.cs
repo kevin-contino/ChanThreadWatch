@@ -827,6 +827,12 @@ namespace JDP {
         }
 
         public static void AddOtherReplaces(HTMLParser htmlParser, string pageURL, List<ReplaceInfo> replaceList) {
+            AddOtherReplaces(htmlParser, pageURL, replaceList, null);
+        }
+
+        // offlineScriptSite is one of the OfflinePageScript site names to add our script for that
+        // site's markup, or null for no script
+        public static void AddOtherReplaces(HTMLParser htmlParser, string pageURL, List<ReplaceInfo> replaceList, string offlineScriptSite) {
             HashSet<int> existingOffsets = new HashSet<int>();
 
             foreach (ReplaceInfo replace in replaceList) {
@@ -847,7 +853,7 @@ namespace JDP {
                     });
             }
 
-            AddActiveContentReplaces(htmlParser, replaceList, existingOffsets);
+            AddActiveContentReplaces(htmlParser, replaceList, existingOffsets, offlineScriptSite);
             AddURLAttributeReplaces(htmlParser, pageURL, replaceList, existingOffsets);
         }
 
@@ -871,8 +877,8 @@ namespace JDP {
 
         // Removes scripts, embedded content, event handler attributes and script URLs, so a saved
         // page can't run code when it is opened from disk
-        private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets) {
-            AddContentPolicyReplace(htmlParser, replaceList);
+        private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets, string offlineScriptSite) {
+            AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite);
             foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
                 replaceList.Add(CreateRemoveReplace(tag.Offset, GetActiveElementLength(htmlParser, tag)));
             }
@@ -891,8 +897,10 @@ namespace JDP {
         }
 
         // Replaces the head start tag, or the html start tag when the head is implied, so no other
-        // replacement can share its offset. A page with neither gets no policy.
-        private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {
+        // replacement can share its offset. A page with neither gets no policy, and no script.
+        // Our script is part of the replacement value, which the removal of the page's scripts
+        // never reads, and follows the policy that allows it.
+        private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
             HTMLTag tag = htmlParser.FindStartTag("head") ?? htmlParser.FindStartTag("html");
             if (tag == null) return;
             replaceList.Add(
@@ -900,8 +908,13 @@ namespace JDP {
                     Offset = tag.Offset,
                     Length = tag.Length,
                     Type = ReplaceType.Other,
-                    Value = "<" + tag.Name + ">" + ActiveContentPolicyMeta
+                    Value = "<" + tag.Name + ">" + GetPageHeadStart(offlineScriptSite)
                 });
+        }
+
+        private static string GetPageHeadStart(string offlineScriptSite) {
+            if (offlineScriptSite == null) return ActiveContentPolicyMeta;
+            return OfflinePageScript.PolicyMeta + OfflinePageScript.CreateElement(offlineScriptSite);
         }
 
         // Attributes already replaced by the site helper hold values the program wrote, so they are kept

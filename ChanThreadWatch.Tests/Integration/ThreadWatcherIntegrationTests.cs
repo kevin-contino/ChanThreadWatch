@@ -83,9 +83,10 @@ namespace JDP.Tests.Integration {
             RunToStop(watcher);
 
             string html = File.ReadAllText(SavedPagePath(watcher));
-            StringAssert.Contains(html, "<head>" + General.ActiveContentPolicyMeta + "<title>/wg/ - Fixture</title></head>");
+            StringAssert.Contains(html, "<head>" + OfflinePageScript.PolicyMeta + OfflinePageScript.CreateElement("4chan") + "<title>/wg/ - Fixture</title></head>");
             StringAssert.Contains(html, "<body >");
-            Assert.DoesNotContain("<script", html);
+            // The only script left is our own offline script
+            OfflinePageScriptTests.AssertHasOfflineScript(html, "4chan");
             Assert.DoesNotContain("var board", html);
             Assert.DoesNotContain("onload", html);
         }
