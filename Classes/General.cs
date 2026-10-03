@@ -864,7 +864,7 @@ namespace JDP {
             if (Environment.NewLine != "\n") {
                 AddNewLineReplaces(htmlParser, replaceList);
             }
-            AddActiveContentReplaces(htmlParser, replaceList, new HashSet<int>());
+            AddActiveContentReplaces(htmlParser, replaceList, new HashSet<int>(), null);
             return replaceList;
         }
 

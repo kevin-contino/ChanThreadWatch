@@ -131,7 +131,8 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(StopReason.DownloadComplete, reason);
             string html = File.ReadAllText(SavedPagePath(watcher));
             StringAssert.Contains(html, "<img src=\"thumbs/1700000000001s.jpg\"");
-            Assert.DoesNotContain("<script", html);
+            // The only script left is our own offline script
+            OfflinePageScriptTests.AssertHasOfflineScript(html, "4chan");
         }
 
         // Turned on after the page is downloaded, the page has no replace list and is not processed
