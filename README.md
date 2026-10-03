@@ -17,6 +17,8 @@ msbuild ChanThreadWatch.sln -restore -p:Configuration=Release
 dotnet test ChanThreadWatch.sln -c Release --no-build
 ```
 
+The second command runs every test, including the UI smoke test in `ChanThreadWatch.UITests`. That test launches the built app, so it needs an interactive desktop session. Each run uses a copy of the exe in a temporary folder with its own settings, so it does not change your own settings or thread list. To skip it, add `--filter "TestCategory!=UI"`.
+
 `dotnet build` alone does not work: the SDK's MSBuild cannot compile the forms' non-string `.resx` resources.
 
 ## License

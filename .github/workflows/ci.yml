@@ -35,7 +35,11 @@ jobs:
         run: msbuild ChanThreadWatch.sln -restore -p:Configuration=Release -v:minimal -nologo
 
       - name: Test
-        run: dotnet test ChanThreadWatch.sln -c Release --no-build --logger trx --results-directory TestResults
+        run: dotnet test ChanThreadWatch.sln -c Release --no-build --filter "TestCategory!=UI" --logger trx --results-directory TestResults
+
+      # Launches the built app and drives its window; the hosted Windows runner has an interactive desktop
+      - name: UI test
+        run: dotnet test ChanThreadWatch.UITests/ChanThreadWatch.UITests.csproj -c Release --no-build --filter "TestCategory=UI" --logger trx --results-directory TestResults
 
       - name: Upload test results
         if: failure()
@@ -58,4 +62,4 @@ jobs:
 
       # Maintainer decision: every app function stays at CCN <= 5 (Designer files and tests excluded)
       - name: Check CCN <= 5
-        run: lizard -l csharp -x "*Designer.cs" -x "./ChanThreadWatch.Tests/*" -C 5 -w .
+        run: lizard -l csharp -x "*Designer.cs" -x "./ChanThreadWatch.Tests/*" -x "./ChanThreadWatch.UITests/*" -C 5 -w .

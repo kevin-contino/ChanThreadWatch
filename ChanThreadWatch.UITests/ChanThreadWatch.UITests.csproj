@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>JDP.UITests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="MSTest.TestAdapter" Version="4.4.1" />
+    <PackageReference Include="MSTest.TestFramework" Version="4.4.1" />
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Builds the app first and copies ChanThreadWatch.exe next to the tests, which launch it -->
+    <ProjectReference Include="..\ChanThreadWatch.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\ChanThreadWatch.Tests\Integration\LoopbackHttpServer.cs" Link="LoopbackHttpServer.cs" />
+  </ItemGroup>
+
+</Project>
