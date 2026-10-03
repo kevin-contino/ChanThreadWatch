@@ -50,6 +50,8 @@ const SITES = {
         serverBacklinks: false
     },
     foolfuuka: {
+        // The OP holds the replies
+        opId: '7770000004',
         posts: 'article',
         site: 'foolfuuka',
         post: (doc, id) => doc.getElementById(id),
@@ -59,6 +61,8 @@ const SITES = {
         serverBacklinks: true
     },
     'foolfuuka-archivedmoe': {
+        // The OP holds the replies
+        opId: '7770000004',
         posts: 'article',
         site: 'foolfuuka',
         post: (doc, id) => doc.getElementById(id),
@@ -68,6 +72,8 @@ const SITES = {
         serverBacklinks: true
     },
     'foolfuuka-desuarchive': {
+        // The OP holds the replies
+        opId: '7770000002',
         posts: 'article',
         site: 'foolfuuka',
         post: (doc, id) => doc.getElementById(id),
@@ -77,6 +83,8 @@ const SITES = {
         serverBacklinks: true
     },
     lynxchan: {
+        // The OP holds the replies
+        opId: '7770000001',
         posts: 'div.postCell, div.opCell',
         site: 'lynxchan',
         post: (doc, id) => doc.getElementById(id),
@@ -110,23 +118,25 @@ function rewriteThumbnailLinks(doc, pageURL, thumbs) {
     }
 }
 
-function savedPage(name, scriptSite) {
+// prepare changes the saved page before the script runs; scripts is how often the page holds it
+function savedPage(name, scriptSite, { prepare = null, scripts = 1 } = {}) {
     const config = SITES[name];
     const pageURL = BASE_URL + MANIFEST[name].pagePath;
     const dom = new JSDOM(readFixture(name), { url: pageURL });
     rewriteSamePageLinks(dom.window.document, pageURL);
     rewriteThumbnailLinks(dom.window.document, pageURL, config.thumbs);
+    if (prepare) prepare(dom.window.document, config);
     const html = dom.serialize();
-    const script = '<script data-site="' + scriptSite + '">' + SCRIPT + '</script>';
+    const script = ('<script data-site="' + scriptSite + '">' + SCRIPT + '</script>').repeat(scripts);
     return html.replace('<head>', () => '<head>' + script);
 }
 
 // Resolves once the page is parsed and the script, which waits for DOMContentLoaded, has run
-async function load(name, scriptSite = SITES[name].site) {
+async function load(name, scriptSite = SITES[name].site, options = {}) {
     const errors = [];
     const virtualConsole = new VirtualConsole();
     virtualConsole.on('jsdomError', (error) => errors.push(error));
-    const dom = new JSDOM(savedPage(name, scriptSite), { url: 'file:///C:/threads/thread.html', runScripts: 'dangerously', virtualConsole });
+    const dom = new JSDOM(savedPage(name, scriptSite, options), { url: 'file:///C:/threads/thread.html', runScripts: 'dangerously', virtualConsole });
     const page = { window: dom.window, doc: dom.window.document, config: SITES[name], errors };
     if (page.doc.readyState === 'loading') {
         await new Promise((resolve) => page.doc.addEventListener('DOMContentLoaded', resolve));
@@ -140,12 +150,28 @@ function assertNoErrors(page) {
 }
 
 function quoteLink(page, fromId, toId) {
-    const links = [...page.config.post(page.doc, fromId).querySelectorAll('a[href="#' + page.config.prefix + toId + '"]')];
+    return findQuoteLink(page.doc, page.config, fromId, toId);
+}
+
+function findQuoteLink(doc, config, fromId, toId) {
+    const links = [...config.post(doc, fromId).querySelectorAll('a[href="#' + config.prefix + toId + '"]')];
     return links.find((link) => !link.hasAttribute('data-ctw-backlink'));
 }
 
-function mouse(page, element, type, related = null) {
-    element.dispatchEvent(new page.window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: 20, clientY: 30, relatedTarget: related }));
+// Points the first listed quote at another post before the script runs
+function requote(toId) {
+    return (doc, config) => {
+        const [fromId, quotedId] = config.quotes[0];
+        findQuoteLink(doc, config, fromId, quotedId).setAttribute('href', '#' + config.prefix + toId(fromId, config));
+    };
+}
+
+function backlinkCount(page) {
+    return [...page.doc.querySelectorAll('[data-ctw-backlink]')].filter((link) => !link.closest('[data-ctw-preview]')).length;
+}
+
+function mouse(page, element, type, related = null, clientX = 20, clientY = 30) {
+    element.dispatchEvent(new page.window.MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY, relatedTarget: related }));
     assertNoErrors(page);
 }
 
@@ -221,18 +247,125 @@ for (const name of Object.keys(MANIFEST)) {
             assert.equal(previews(page).length, 0);
         });
 
-        // Each fixture's quoting post has a link to its own number in its header
-        test.it('a link to its own post shows no preview', async () => {
-            const page = await load(name);
+        // The quote is changed to quote its own post, so only the check for the link's own post
+        // keeps the preview and the backlink away
+        test.it('a quote of its own post shows no preview and adds no backlink', async () => {
+            const page = await load(name, undefined, { prepare: requote((fromId) => fromId) });
             const [fromId] = page.config.quotes[0];
             const post = page.config.post(page.doc, fromId);
-            const link = [...post.querySelectorAll('a[href="#' + page.config.prefix + fromId + '"]')].find((l) => !l.hasAttribute('data-ctw-backlink'));
-            assert.ok(link, 'self link of ' + fromId);
+            const link = quoteLink(page, fromId, fromId);
+            assert.ok(link, 'self quote of ' + fromId);
 
             mouse(page, link, 'mouseover');
 
             assert.equal(previews(page).length, 0);
             assert.equal(backlinkIds(post).includes(fromId), false);
+        });
+
+        test.it('moving between a quote and the elements inside it keeps one preview', async () => {
+            const addChild = (doc, config) => {
+                const [fromId, toId] = config.quotes[0];
+                const child = doc.createElement('span');
+                child.setAttribute('data-test-child', '');
+                child.textContent = 'x';
+                findQuoteLink(doc, config, fromId, toId).appendChild(child);
+            };
+            const page = await load(name, undefined, { prepare: addChild });
+            const [fromId, toId] = page.config.quotes[0];
+            const link = quoteLink(page, fromId, toId);
+            const child = link.querySelector('[data-test-child]');
+
+            mouse(page, link, 'mouseover', page.doc.body);
+            const shown = previews(page)[0];
+            mouse(page, link, 'mouseout', child);
+            mouse(page, child, 'mouseover', link);
+            mouse(page, child, 'mouseout', link);
+            mouse(page, link, 'mouseover', child);
+
+            assert.equal(previews(page).length, 1);
+            assert.equal(previews(page)[0], shown, 'the same preview, not a new one');
+
+            mouse(page, child, 'mouseout', page.doc.body);
+
+            assert.equal(previews(page).length, 0);
+        });
+
+        test.it('hovering again or hovering another quote leaves one preview', async () => {
+            const page = await load(name);
+            const links = page.config.quotes.map(([fromId, toId]) => quoteLink(page, fromId, toId));
+            const backlinks = backlinkCount(page);
+
+            mouse(page, links[0], 'mouseover');
+            const shown = previews(page)[0];
+            mouse(page, links[0], 'mouseover');
+            mouse(page, links[0], 'mouseover');
+
+            assert.equal(previews(page).length, 1);
+            assert.equal(previews(page)[0], shown);
+
+            mouse(page, links[links.length - 1], 'mouseover');
+
+            assert.equal(previews(page).length, 1);
+            assert.equal(backlinkCount(page), backlinks);
+        });
+
+        test.it('a page that holds the script twice runs it once', async () => {
+            const once = await load(name);
+            const twice = await load(name, undefined, { scripts: 2 });
+            const [fromId, toId] = twice.config.quotes[0];
+
+            mouse(twice, quoteLink(twice, fromId, toId), 'mouseover');
+
+            assert.equal(backlinkCount(twice), backlinkCount(once));
+            assert.equal(previews(twice).length, 1);
+        });
+
+        test.it('a preview stays inside the window', async () => {
+            const page = await load(name);
+            const [fromId, toId] = page.config.quotes[0];
+
+            mouse(page, quoteLink(page, fromId, toId), 'mouseover', null, 5000, 5000);
+
+            const style = previews(page)[0].style;
+            assert.ok(parseFloat(style.left) <= page.window.innerWidth, style.left);
+            assert.ok(parseFloat(style.top) <= page.window.innerHeight, style.top);
+            assert.ok(parseFloat(style.left) >= 0 && parseFloat(style.top) >= 0);
+        });
+
+        // In a browser, elements named like document properties shadow them, and a form's fields
+        // shadow the form's properties. jsdom does not shadow them, so this only shows that such
+        // markup does not stop the script; a browser is needed to see the shadowing itself.
+        test.it('works when the markup shadows document and form properties', async () => {
+            const clobber = (doc, config) => {
+                for (const [tag, name] of [['img', 'createElement'], ['form', 'body'], ['img', 'getElementById'], ['img', 'querySelectorAll'],
+                    ['img', 'readyState'], ['img', 'documentElement'], ['img', 'addEventListener'], ['img', 'URL']]) {
+                    const element = doc.createElement(tag);
+                    element.setAttribute('name', name);
+                    doc.body.appendChild(element);
+                }
+                const [fromId] = config.quotes[0];
+                const post = config.post(doc, fromId);
+                const form = doc.createElement('form');
+                for (const name of ['parentElement', 'querySelectorAll', 'contains', 'closest', 'matches', 'remove', 'getAttribute', 'appendChild', 'insertBefore']) {
+                    const input = doc.createElement('input');
+                    input.setAttribute('name', name);
+                    form.appendChild(input);
+                }
+                post.parentNode.insertBefore(form, post);
+                form.appendChild(post);
+            };
+            const reference = await load(name);
+            const page = await load(name, undefined, { prepare: clobber });
+            const [fromId, toId] = page.config.quotes[0];
+            markPost(page, toId);
+
+            mouse(page, quoteLink(page, fromId, toId), 'mouseover');
+
+            assert.equal(previews(page).length, 1);
+            assert.equal(previews(page)[0].firstElementChild.getAttribute('data-test-post'), toId);
+            assert.equal(backlinkCount(page), backlinkCount(reference));
+            const thumb = [...page.doc.querySelectorAll(page.config.thumbs)].find((image) => isLocalImage(image.closest('a').getAttribute('href')));
+            assert.equal(click(page, thumb), true);
         });
 
         test.it('a preview copies the post without the replies nested in it', async () => {
@@ -245,6 +378,28 @@ for (const name of Object.keys(MANIFEST)) {
                 assert.equal(copy.querySelectorAll('[data-test-nested]').length, 0, toId);
             }
         });
+
+        if (SITES[name] && SITES[name].opId) {
+            // The OP's element holds the replies; a reply's quote is the reply's, not the OP's
+            test.it('a reply inside the OP that quotes the OP previews it and is listed by it', async () => {
+                const opId = SITES[name].opId;
+                const page = await load(name, undefined, { prepare: requote(() => opId) });
+                const [fromId] = page.config.quotes[0];
+                for (const post of page.doc.querySelectorAll(page.config.posts)) post.setAttribute('data-test-nested', '');
+                const op = page.config.post(page.doc, opId);
+                assert.ok(op.contains(page.config.post(page.doc, fromId)), 'the reply is inside the OP');
+
+                mouse(page, quoteLink(page, fromId, opId), 'mouseover');
+
+                assert.equal(previews(page).length, 1);
+                const copy = previews(page)[0].firstElementChild;
+                assert.equal(copy.querySelectorAll('[data-test-nested]').length, 0);
+                if (!page.config.serverBacklinks) {
+                    assert.ok(backlinkIds(op).includes(fromId));
+                    assert.equal(backlinkIds(op).includes(opId), false);
+                }
+            });
+        }
 
         if (SITES[name] && SITES[name].serverBacklinks) {
             test.it('adds no backlinks, because the site lists them in the page', async () => {
@@ -310,10 +465,22 @@ for (const name of Object.keys(MANIFEST)) {
             const page = await load(name);
             const thumb = page.doc.querySelector(page.config.thumbs);
             const link = thumb.closest('a');
-            for (const href of ['file-1.webm', 'file-1.mp4', 'http://media.test/file-1.jpg', '//media.test/file-1.jpg', '/file-1.jpg']) {
+            for (const href of ['file-1.webm', 'file-1.mp4', 'http://media.test/file-1.jpg', '//media.test/file-1.jpg', '\t//host/a.png', ' //host/a.png',
+                'java\tscript:x.png', 'javascript:x.png', 'data:image/png;base64,AAAA', 'file://host/a.png', 'file-1.png\n']) {
                 link.setAttribute('href', href);
                 assert.equal(click(page, thumb), false, href);
                 assert.equal(link.querySelector('[data-ctw-full]'), null, href);
+            }
+        });
+
+        test.it('a thumbnail of an image in a folder next to the page expands', async () => {
+            const page = await load(name);
+            const thumb = page.doc.querySelector(page.config.thumbs);
+            const link = thumb.closest('a');
+            for (const href of ['images/file-1.png', '../file-1.jpeg', 'file%201.webp', 'file-1.GIF']) {
+                link.setAttribute('href', href);
+                assert.equal(click(page, thumb), true, href);
+                assert.equal(click(page, link.querySelector('[data-ctw-full]')), true, href);
             }
         });
 

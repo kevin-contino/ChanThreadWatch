@@ -879,6 +879,7 @@ namespace JDP {
         // page can't run code when it is opened from disk
         private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets, string offlineScriptSite) {
             AddContentPolicyReplace(htmlParser, replaceList, offlineScriptSite);
+            AddEarlierPolicyRemoveReplaces(htmlParser, replaceList);
             foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
                 replaceList.Add(CreateRemoveReplace(tag.Offset, GetActiveElementLength(htmlParser, tag)));
             }
@@ -896,25 +897,43 @@ namespace JDP {
             return tagRange != null ? tagRange.Length : tag.Length;
         }
 
-        // Replaces the head start tag, or the html start tag when the head is implied, so no other
-        // replacement can share its offset. A page with neither gets no policy, and no script.
-        // Our script is part of the replacement value, which the removal of the page's scripts
-        // never reads, and follows the policy that allows it.
+        // Adds our script and the policy that allows it where the browser reads them in the head
+        // (see OfflinePageScript.CreateHeadReplace). A page without a script, or without a head
+        // the browser would see as such, gets the policy that allows no script instead.
         private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList, string offlineScriptSite) {
-            HTMLTag tag = htmlParser.FindStartTag("head") ?? htmlParser.FindStartTag("html");
-            if (tag == null) return;
-            replaceList.Add(
-                new ReplaceInfo {
-                    Offset = tag.Offset,
-                    Length = tag.Length,
-                    Type = ReplaceType.Other,
-                    Value = "<" + tag.Name + ">" + GetPageHeadStart(offlineScriptSite)
-                });
+            ReplaceInfo replace = (offlineScriptSite != null ? OfflinePageScript.CreateHeadReplace(htmlParser, offlineScriptSite) : null) ?? CreateNoScriptPolicyReplace(htmlParser);
+            if (replace != null) replaceList.Add(replace);
         }
 
-        private static string GetPageHeadStart(string offlineScriptSite) {
-            if (offlineScriptSite == null) return ActiveContentPolicyMeta;
-            return OfflinePageScript.PolicyMeta + OfflinePageScript.CreateElement(offlineScriptSite);
+        // Replaces the head start tag, or the html start tag when the head is implied, so no other
+        // replacement can share its offset. A page with neither gets no policy.
+        private static ReplaceInfo CreateNoScriptPolicyReplace(HTMLParser htmlParser) {
+            HTMLTag tag = htmlParser.FindStartTag("head") ?? htmlParser.FindStartTag("html");
+            if (tag == null) return null;
+            return new ReplaceInfo {
+                Offset = tag.Offset,
+                Length = tag.Length,
+                Type = ReplaceType.Other,
+                Value = "<" + tag.Name + ">" + ActiveContentPolicyMeta
+            };
+        }
+
+        // The policies this program wrote into pages: the one without a script, and the one that
+        // allows our script by its hash
+        private static readonly Regex _earlierPolicy = new Regex("^(?:script-src 'none'; object-src 'none'; frame-src 'none'|script-src 'sha256-[A-Za-z0-9+/]{43}='; object-src 'none'; frame-src 'none'; connect-src 'none')$");
+
+        // A saved page that is saved again (a reparse) loses the policy written the last time,
+        // since every policy applies and an old one would block the new script. A policy that the
+        // site wrote is kept.
+        private static void AddEarlierPolicyRemoveReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {
+            foreach (HTMLTag tag in htmlParser.FindStartTags("meta")) {
+                if (IsEarlierPolicyMeta(tag)) replaceList.Add(CreateRemoveReplace(tag.Offset, tag.Length));
+            }
+        }
+
+        private static bool IsEarlierPolicyMeta(HTMLTag tag) {
+            return String.Equals(tag.GetAttributeValue("http-equiv"), "Content-Security-Policy", StringComparison.OrdinalIgnoreCase) &&
+                _earlierPolicy.IsMatch(tag.GetAttributeValueOrEmpty("content"));
         }
 
         // Attributes already replaced by the site helper hold values the program wrote, so they are kept

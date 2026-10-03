@@ -51,49 +51,146 @@
         }
     };
 
-    var LOCAL_IMAGE = /^(?![a-z][a-z0-9+.\-]*:)(?![\/\\])[^?#]*\.(?:jpe?g|png|gif|webp)$/i;
+    var IMAGE_PATH = /\.(?:jpe?g|png|gif|webp)$/i;
+    var CONTROL_OR_SPACE = /[\x00-\x20\x7f]/;
     var QUOTE_NUMBER = /^#q(\d+)$/;
+    var READY = 'data-ctw-ready';
+
+    // The page's markup can shadow document properties by name (an element named "body" or
+    // "createElement"), and a form's properties by its fields' names, so page nodes are only
+    // used through the functions captured here
+    var doc = document;
+    var win = window;
+    var getComputedStyle = win.getComputedStyle;
+
+    function getter(proto, name) {
+        return Object.getOwnPropertyDescriptor(proto, name).get;
+    }
+
+    var dom = {
+        currentScript: getter(Document.prototype, 'currentScript'),
+        documentElement: getter(Document.prototype, 'documentElement'),
+        body: getter(Document.prototype, 'body'),
+        readyState: getter(Document.prototype, 'readyState'),
+        url: getter(Document.prototype, 'URL'),
+        createElement: Document.prototype.createElement,
+        getElementById: Document.prototype.getElementById,
+        queryDocument: Document.prototype.querySelectorAll,
+        addEventListener: EventTarget.prototype.addEventListener,
+        parentElement: getter(Node.prototype, 'parentElement'),
+        contains: Node.prototype.contains,
+        cloneNode: Node.prototype.cloneNode,
+        appendChild: Node.prototype.appendChild,
+        insertBefore: Node.prototype.insertBefore,
+        queryElement: Element.prototype.querySelectorAll,
+        closest: Element.prototype.closest,
+        matches: Element.prototype.matches,
+        getAttribute: Element.prototype.getAttribute,
+        setAttribute: Element.prototype.setAttribute,
+        hasAttribute: Element.prototype.hasAttribute,
+        removeAttribute: Element.prototype.removeAttribute,
+        remove: Element.prototype.remove
+    };
 
     var site = null;
     var quoteHref = null;
     var postsById = Object.create(null);
     var postIds = new Map();
     var preview = null;
+    var previewLink = null;
 
     function each(list, action) {
         Array.prototype.forEach.call(list, action);
     }
 
+    function queryAll(root, selector) {
+        return root === doc ? dom.queryDocument.call(doc, selector) : dom.queryElement.call(root, selector);
+    }
+
+    function attribute(element, name) {
+        return dom.getAttribute.call(element, name);
+    }
+
+    function hasAttribute(element, name) {
+        return dom.hasAttribute.call(element, name);
+    }
+
+    function matches(element, selector) {
+        return dom.matches.call(element, selector);
+    }
+
+    function closest(element, selector) {
+        return dom.closest.call(element, selector);
+    }
+
+    function parentOf(node) {
+        return dom.parentElement.call(node);
+    }
+
+    function create(tagName) {
+        return dom.createElement.call(doc, tagName);
+    }
+
+    function listen(target, type, listener) {
+        dom.addEventListener.call(target, type, listener);
+    }
+
     function findSite() {
-        var script = document.currentScript;
-        var name = script ? script.getAttribute('data-site') : null;
+        var script = dom.currentScript.call(doc);
+        var name = script ? attribute(script, 'data-site') : null;
         return name && Object.prototype.hasOwnProperty.call(SITES, name) ? SITES[name] : null;
     }
 
     // Posts
 
+    function idAttribute(element) {
+        var match = site.postId.exec(attribute(element, 'id') || '');
+        return match ? match[1] : null;
+    }
+
+    // A post inside another one (a LynxChan or FoolFuuka OP holds its replies) has an id of its
+    // own. A Fuuka post is a td that can hold a div with the same id.
+    function isNestedPost(element, postId) {
+        var id = matches(element, site.posts) ? idAttribute(element) : null;
+        return id !== null && id !== postId;
+    }
+
+    function isOwnElement(element, post, postId) {
+        var node = parentOf(element);
+        while (node && node !== post && !isNestedPost(node, postId)) {
+            node = parentOf(node);
+        }
+        return node === post;
+    }
+
+    // The post's elements, without those of the posts nested in it
+    function ownElements(post, selector) {
+        var postId = idAttribute(post);
+        return Array.prototype.filter.call(queryAll(post, selector), function (element) {
+            return isOwnElement(element, post, postId);
+        });
+    }
+
     function readPostId(post) {
-        var match = site.postId.exec(post.id);
-        if (match) return match[1];
+        var id = idAttribute(post);
+        if (id !== null) return id;
         return site.idFromQuoteNumber ? readQuoteNumberId(post) : null;
     }
 
     // vichan's OP has no post id, only the link that quotes its number
     function readQuoteNumberId(post) {
         var link = findQuoteNumberLink(post, null);
-        return link ? QUOTE_NUMBER.exec(link.getAttribute('href'))[1] : null;
+        return link ? QUOTE_NUMBER.exec(attribute(link, 'href'))[1] : null;
     }
 
     function findQuoteNumberLink(post, id) {
-        var links = post.querySelectorAll('a[href^="#q"]');
-        return Array.prototype.find.call(links, function (link) {
-            var match = QUOTE_NUMBER.exec(link.getAttribute('href'));
+        return ownElements(post, 'a[href^="#q"]').find(function (link) {
+            var match = QUOTE_NUMBER.exec(attribute(link, 'href'));
             return match !== null && (id === null || match[1] === id);
         }) || null;
     }
 
-    // The first element with an id is the post; for example a Fuuka post is a td that can hold
-    // a div with the same id
+    // The first post with an id keeps it
     function registerPost(post) {
         var id = readPostId(post);
         if (id === null || postsById[id]) return;
@@ -104,64 +201,53 @@
     function closestPost(element) {
         var node = element;
         while (node && !postIds.has(node)) {
-            node = node.parentElement;
+            node = parentOf(node);
         }
         return node;
-    }
-
-    // Links inside a post nested in this one (a LynxChan or FoolFuuka OP holds its replies)
-    // belong to the nested post
-    function ownElements(post, selector) {
-        return Array.prototype.filter.call(post.querySelectorAll(selector), function (element) {
-            return closestPost(element) === post;
-        });
     }
 
     // Quotes
 
     // Returns the post the link quotes, or null if it is not on the page or is the link's own post
     function quotedPost(link) {
-        var match = quoteHref.exec(link.getAttribute('href') || '');
+        var match = quoteHref.exec(attribute(link, 'href') || '');
         var post = match ? postsById[match[1]] : null;
         return post && post !== closestPost(link) ? post : null;
     }
 
     function previewTarget(link) {
-        if (!link.hasAttribute('data-ctw-backlink') && !link.matches(site.quotes)) return null;
+        if (!hasAttribute(link, 'data-ctw-backlink') && !matches(link, site.quotes)) return null;
         return quotedPost(link);
     }
 
     // Preview
 
     function pageBackground() {
-        var color = window.getComputedStyle(document.body).backgroundColor;
+        var color = getComputedStyle.call(win, dom.body.call(doc)).backgroundColor;
         return !color || color === 'transparent' || color === 'rgba(0, 0, 0, 0)' ? '#fff' : color;
     }
 
     // A copy of the post without the posts nested in it and without ids, so the page keeps
     // unique ids
     function clonePost(post) {
-        var id = postIds.get(post);
-        var copy = post.cloneNode(true);
-        each(copy.querySelectorAll(site.posts), function (element) {
-            var nestedId = readPostId(element);
-            if (nestedId !== null && nestedId !== id) element.remove();
+        var postId = idAttribute(post);
+        var copy = dom.cloneNode.call(post, true);
+        each(queryAll(copy, site.posts), function (element) {
+            if (isNestedPost(element, postId)) dom.remove.call(element);
         });
-        copy.removeAttribute('id');
-        each(copy.querySelectorAll('[id]'), function (element) {
-            element.removeAttribute('id');
+        dom.removeAttribute.call(copy, 'id');
+        each(queryAll(copy, '[id]'), function (element) {
+            dom.removeAttribute.call(element, 'id');
         });
         return copy;
     }
 
-    function createPreview(post, event) {
-        var box = document.createElement('div');
+    function createPreview(post) {
+        var box = create('div');
         var style = box.style;
         box.setAttribute('data-ctw-preview', '');
         style.position = 'absolute';
         style.zIndex = '2147483647';
-        style.left = (event.clientX + window.pageXOffset + 12) + 'px';
-        style.top = (event.clientY + window.pageYOffset + 12) + 'px';
         style.maxWidth = '60%';
         style.padding = '4px';
         style.border = '1px solid #888';
@@ -170,19 +256,52 @@
         return box;
     }
 
-    function hidePreview() {
-        if (preview) preview.remove();
-        preview = null;
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(value, max));
     }
 
-    function onMouseOver(event) {
-        var link = event.target.closest ? event.target.closest('a') : null;
-        var post = link ? previewTarget(link) : null;
-        if (!post) return;
+    // Next to the cursor, inside the window: above the cursor when there is no room below it
+    function placePreview(box, event) {
+        var size = box.getBoundingClientRect();
+        var below = event.clientY + 12;
+        var top = below + size.height > win.innerHeight ? event.clientY - 12 - size.height : below;
+        var left = event.clientX + 12;
+        box.style.left = (clamp(left, 0, win.innerWidth - size.width - 4) + win.pageXOffset) + 'px';
+        box.style.top = (clamp(top, 0, win.innerHeight - size.height - 4) + win.pageYOffset) + 'px';
+    }
+
+    function showPreview(post, link, event) {
         hidePreview();
-        preview = createPreview(post, event);
-        document.body.appendChild(preview);
-        link.addEventListener('mouseout', hidePreview, { once: true });
+        preview = createPreview(post);
+        previewLink = link;
+        dom.appendChild.call(dom.body.call(doc), preview);
+        placePreview(preview, event);
+    }
+
+    function hidePreview() {
+        if (preview) dom.remove.call(preview);
+        preview = null;
+        previewLink = null;
+    }
+
+    function eventLink(event) {
+        return event.target instanceof Element ? closest(event.target, 'a') : null;
+    }
+
+    // Moving between the link and the elements inside it keeps the preview
+    function onMouseOver(event) {
+        var link = eventLink(event);
+        var post = link && link !== previewLink ? previewTarget(link) : null;
+        if (post) showPreview(post, link, event);
+    }
+
+    function isInPreviewLink(node) {
+        return node instanceof Node && dom.contains.call(previewLink, node);
+    }
+
+    // Only leaving the link hides the preview, not moving between it and the elements inside it
+    function onMouseOut(event) {
+        if (previewLink && isInPreviewLink(event.target) && !isInPreviewLink(event.relatedTarget)) hidePreview();
     }
 
     // Backlinks
@@ -192,17 +311,17 @@
     }
 
     function fourChanBacklinks(post, id) {
-        return insertion(document.getElementById('pi' + id), null);
+        return insertion(dom.getElementById.call(doc, 'pi' + id), null);
     }
 
     function afterQuoteNumber(post, id) {
         var link = findQuoteNumberLink(post, id);
-        return link ? insertion(link.parentNode, link.nextSibling) : null;
+        return link ? insertion(parentOf(link), link.nextSibling) : null;
     }
 
     function beforeMessage(post) {
         var message = ownElements(post, 'blockquote')[0];
-        return message ? insertion(message.parentNode, message) : insertion(post, null);
+        return message ? insertion(parentOf(message), message) : insertion(post, null);
     }
 
     function lynxChanBacklinks(post, id) {
@@ -211,7 +330,7 @@
     }
 
     function createBacklink(id) {
-        var link = document.createElement('a');
+        var link = create('a');
         link.setAttribute('href', '#' + site.prefix + id);
         link.setAttribute('data-ctw-backlink', '');
         link.textContent = '>>' + id;
@@ -220,7 +339,7 @@
     }
 
     function createBacklinkList(ids) {
-        var list = document.createElement('span');
+        var list = create('span');
         list.setAttribute('data-ctw-backlinks', '');
         list.style.fontSize = 'smaller';
         ids.forEach(function (id) {
@@ -247,26 +366,47 @@
     function addBacklinks() {
         var quotedBy = collectQuotes();
         Object.keys(quotedBy).forEach(function (id) {
-            var post = postsById[id];
-            var place = site.backlinks(post, id);
-            if (place) place.parent.insertBefore(createBacklinkList(quotedBy[id]), place.before);
+            var place = site.backlinks(postsById[id], id);
+            if (place) dom.insertBefore.call(place.parent, createBacklinkList(quotedBy[id]), place.before);
         });
     }
 
     // Images
 
+    function parseURL(href, base) {
+        try {
+            return new URL(href, base);
+        }
+        catch (error) {
+            return null;
+        }
+    }
+
+    function isSameFileHost(url, page) {
+        return url !== null && url.protocol === 'file:' && page.protocol === 'file:' && url.host === page.host;
+    }
+
+    // True if the link is an image file on the same disk as the page. A video, an image that
+    // was not downloaded and is linked online, or anything else opens as usual.
+    function isLocalImage(href) {
+        if (!href || CONTROL_OR_SPACE.test(href)) return false;
+        var page = new URL(dom.url.call(doc));
+        var url = parseURL(href, page);
+        return isSameFileHost(url, page) && IMAGE_PATH.test(url.pathname);
+    }
+
     function expandImage(thumb, href) {
-        var full = document.createElement('img');
+        var full = create('img');
         full.setAttribute('data-ctw-full', '');
         full.setAttribute('src', href);
         full.style.maxWidth = '100%';
         thumb.style.display = 'none';
-        thumb.parentNode.insertBefore(full, thumb.nextSibling);
+        dom.insertBefore.call(parentOf(thumb), full, thumb.nextSibling);
     }
 
     function collapseImage(full) {
         var thumb = full.previousElementSibling;
-        full.remove();
+        dom.remove.call(full);
         if (thumb) thumb.style.removeProperty('display');
     }
 
@@ -279,45 +419,53 @@
         return event.button === 0 && !event.defaultPrevented && !hasModifierKey(event);
     }
 
-    // Returns the link of a thumbnail whose image is a file on disk, or null. A video, or an
-    // image that was not downloaded and is linked online, opens as usual.
-    function localImageHref(thumb) {
-        var link = thumb.closest('a');
-        var href = link ? link.getAttribute('href') : null;
-        return href && thumb.matches(site.thumbs) && LOCAL_IMAGE.test(href) ? href : null;
+    function thumbnailHref(thumb) {
+        var link = matches(thumb, site.thumbs) ? closest(thumb, 'a') : null;
+        var href = link ? attribute(link, 'href') : null;
+        return isLocalImage(href) ? href : null;
     }
 
     // Returns true if the click expanded or collapsed an image
     function toggleImage(image) {
-        if (image.hasAttribute('data-ctw-full')) {
+        if (hasAttribute(image, 'data-ctw-full')) {
             collapseImage(image);
             return true;
         }
-        var href = localImageHref(image);
+        var href = thumbnailHref(image);
         if (href === null) return false;
         expandImage(image, href);
         return true;
     }
 
     function onClick(event) {
-        var image = isPlainClick(event) && event.target.closest ? event.target.closest('img') : null;
+        var image = isPlainClick(event) && event.target instanceof Element ? closest(event.target, 'img') : null;
         if (image && toggleImage(image)) event.preventDefault();
     }
 
+    // Listeners come first, so a failure while adding backlinks leaves the rest working
     function start() {
-        each(document.querySelectorAll(site.posts), registerPost);
+        listen(doc, 'mouseover', onMouseOver);
+        listen(doc, 'mouseout', onMouseOut);
+        listen(doc, 'click', onClick);
+        each(queryAll(doc, site.posts), registerPost);
         if (site.backlinks) addBacklinks();
-        document.addEventListener('mouseover', onMouseOver);
-        document.addEventListener('click', onClick);
+    }
+
+    // Runs once per page, also when the page holds the script twice
+    function claimPage() {
+        var root = dom.documentElement.call(doc);
+        if (!root || hasAttribute(root, READY)) return false;
+        dom.setAttribute.call(root, READY, '');
+        return true;
     }
 
     // The script runs in the head, before the posts are parsed
     function main() {
         site = findSite();
-        if (!site) return;
+        if (!site || !claimPage()) return;
         quoteHref = new RegExp('^#' + site.prefix + '(\\d+)$');
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', start);
+        if (dom.readyState.call(doc) === 'loading') {
+            listen(doc, 'DOMContentLoaded', start);
         }
         else {
             start();

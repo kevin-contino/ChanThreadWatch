@@ -39,7 +39,8 @@ namespace JDP.Tests.Integration {
             AssertThumbnailsSaved(name, server, fixture, watcher.ThreadDownloadDirectory);
             string savedPagePath = Path.Combine(watcher.ThreadDownloadDirectory, General.CleanFileName(watcher.ThreadName) + ".html");
             AssertSavedPageLinksLocalFiles(name, fixture, savedPagePath);
-            OfflinePageScriptTests.AssertHasOfflineScript(File.ReadAllText(savedPagePath), ((SiteHelper)Activator.CreateInstance(helperType)).GetOfflinePageScriptSite(), name);        }
+            OfflinePageScriptTests.AssertHasOfflineScript(File.ReadAllText(savedPagePath), ((SiteHelper)Activator.CreateInstance(helperType)).GetOfflinePageScriptSite(), name);
+        }
 
         // Each image is requested once, so its hash matched the first time (a mismatch is retried),
         // and is saved under its URL file name with exactly the served bytes

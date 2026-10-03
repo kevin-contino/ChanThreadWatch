@@ -131,6 +131,127 @@ namespace JDP.Tests {
             string saved = Save(Save("<html><head></head><body></body></html>", "lynxchan"), "lynxchan");
 
             Assert.HasCount(1, _scriptElement.Matches(saved));
+            AssertHasOfflineScript(saved, "lynxchan");
+        }
+
+        private static int CountPolicies(string html) {
+            return Regex.Matches(html, "http-equiv=\"Content-Security-Policy\"", RegexOptions.IgnoreCase).Count;
+        }
+
+        // Every policy applies, so one left from the last save would block the new script
+        [TestMethod]
+        [DataRow("4chan")]
+        [DataRow(null)]
+        public void SavingTwiceLeavesOnePolicy(string site) {
+            const string html = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>t</title>\n</head>\n<body></body>\n</html>";
+
+            string saved = Save(Save(Save(html, site), site), site);
+
+            Assert.AreEqual(1, CountPolicies(saved));
+            if (site != null) AssertHasOfflineScript(saved, site);
+        }
+
+        // A page saved before the script existed has the policy that allows no script
+        [TestMethod]
+        [DataRow("<html><head>" + General.ActiveContentPolicyMeta + "<title>t</title></head><body></body></html>")]
+        [DataRow("<html><head>" + General.ActiveContentPolicyMeta + General.ActiveContentPolicyMeta + "\n<meta charset=\"utf-8\"></head><body></body></html>")]
+        [DataRow("<html><head><META HTTP-EQUIV=\"content-security-policy\" CONTENT=\"script-src 'none'; object-src 'none'; frame-src 'none'\"></head></html>")]
+        public void PageSavedWithTheOldPolicyGetsOnlyTheNewOne(string html) {
+            string saved = Save(html, "fuuka");
+
+            Assert.AreEqual(1, CountPolicies(saved));
+            AssertHasOfflineScript(saved, "fuuka");
+        }
+
+        [TestMethod]
+        public void PolicyThatTheSiteWroteIsKept() {
+            const string sitePolicy = "<meta http-equiv=\"Content-Security-Policy\" content=\"img-src 'self'\">";
+            const string otherHash = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'sha256-abc='; object-src 'none'; frame-src 'none'; connect-src 'none'\">";
+
+            string saved = Save("<html><head>" + sitePolicy + otherHash + "</head><body></body></html>", "4chan");
+
+            StringAssert.Contains(saved, sitePolicy);
+            StringAssert.Contains(saved, otherHash);
+            Assert.AreEqual(3, CountPolicies(saved));
+        }
+
+        // A page opened from disk has no HTTP charset, and the browser only looks for a charset
+        // declaration in the first 1024 bytes
+        [TestMethod]
+        [DataRow("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>t</title>", "utf-8")]
+        [DataRow("<html><head><title>t</title><link rel=\"stylesheet\" href=\"a.css\"><meta http-equiv=\"Content-Type\" content=\"text/html; charset=Shift_JIS\">", "Shift_JIS")]
+        [DataRow("<html><head><script>var a = '<meta>';</script><style>p { }</style><meta name=\"x\" content=\"y\"><meta charset=UTF-8 onload=\"x()\">", "UTF-8")]
+        [DataRow("<html><title>t</title><meta charset=\"windows-1252\">", "windows-1252")]
+        public void CharsetDeclarationStaysInTheFirst1024Bytes(string head, string charset) {
+            string html = head + "</head><body><p>a</p></body></html>";
+
+            foreach (string saved in new[] { Save(html, "4chan"), Save(Save(html, "4chan"), "4chan") }) {
+                byte[] bytes = Encoding.UTF8.GetBytes(saved);
+                string start = Encoding.ASCII.GetString(bytes, 0, Math.Min(1024, bytes.Length));
+                StringAssert.Contains(start, "<meta charset=\"" + charset + "\">");
+                Assert.IsLessThan(saved.IndexOf("<script data-site", StringComparison.Ordinal), saved.IndexOf("Content-Security-Policy", StringComparison.Ordinal));
+                Assert.DoesNotContain("onload", saved);
+                AssertHasOfflineScript(saved, "4chan");
+            }
+        }
+
+        // A charset declaration after other content, or one with a label that is not a charset
+        // name, is not moved; the script then goes right after the head start tag
+        [TestMethod]
+        [DataRow("<html><head><title>t</title><p>x</p><meta charset=\"utf-8\"></head></html>")]
+        [DataRow("<html><head><noscript></noscript><meta charset=\"utf-8\"></head></html>")]
+        [DataRow("<html><head><meta charset=\"utf-8&quot;&gt;\"></head></html>")]
+        public void CharsetDeclarationThatIsNotInTheHeadIsLeft(string html) {
+            string saved = Save(html, "4chan");
+
+            StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
+            AssertHasOfflineScript(saved, "4chan");
+        }
+
+        // The browser's head starts at the first tags of the page only. A head start tag that the
+        // parser finds elsewhere is not the head: the page then gets the policy that allows no
+        // script where it always did, and no script.
+        [TestMethod]
+        [DataRow("<noscript><head></head></noscript><p>a</p>")]
+        [DataRow("<noembed><head></head></noembed>")]
+        [DataRow("<xmp><head></head></xmp>")]
+        [DataRow("<template><head></head></template>")]
+        [DataRow("<svg><head></head></svg>")]
+        [DataRow("<math><head></head></math>")]
+        [DataRow("<body><head></head></body>")]
+        [DataRow("text<html><head></head></html>")]
+        [DataRow("<p>a</p><html><head></head></html>")]
+        [DataRow("<!-- <head> --><p>a</p>")]
+        public void HeadThatTheBrowserDoesNotSeeGetsNoScript(string html) {
+            string saved = Save(html, "4chan");
+
+            Assert.DoesNotContain("<script", saved);
+            Assert.DoesNotContain(OfflinePageScript.PolicyMeta, saved);
+            Assert.AreEqual(SaveWithoutSite(html), saved);
+        }
+
+        [TestMethod]
+        [DataRow("<!DOCTYPE html>\n<!-- c -->\n<html>\n<!-- d -->\n<head>\n<title>t</title></head></html>", "<head>")]
+        [DataRow("\uFEFF<html><head></head></html>", "<head>")]
+        [DataRow("<HEAD><title>t</title></HEAD><body></body>", "<head>")]
+        [DataRow("<html><title>t</title></html>", "<html>")]
+        [DataRow("<html>\n<svg><head></head></svg></html>", "<html>")]
+        [DataRow("<html><body><head></head></body></html>", "<html>")]
+        public void HeadAtTheStartOfThePageGetsTheScript(string html, string anchor) {
+            string saved = Save(html, "4chan");
+
+            StringAssert.Contains(saved, anchor + OfflinePageScript.PolicyMeta);
+            AssertHasOfflineScript(saved, "4chan");
+        }
+
+        // HTMLParser reads an svg title as text, so it finds no script tag there; a browser runs the
+        // svg script. Only the policy, which allows no script but ours, keeps it from running.
+        [TestMethod]
+        public void SvgTitleScriptIsNotRemovedButThePolicyBlocksIt() {
+            string saved = Save("<html><head></head><body><svg><title><script>alert(1)</script></title></svg></body></html>", "4chan");
+
+            StringAssert.Contains(saved, "<svg><title><script>alert(1)</script></title></svg>");
+            StringAssert.StartsWith(saved, "<html><head>" + OfflinePageScript.PolicyMeta);
         }
 
         [TestMethod]
