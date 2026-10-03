@@ -6,6 +6,7 @@ using System.Net;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web;
 
@@ -764,7 +765,7 @@ namespace JDP {
         private static readonly string[] _activeContentElements = { "script", "iframe", "frame", "object", "embed", "applet" };
 
         // Added to the saved page's head. Blocks anything the removal misses where a browser parses
-        // the markup differently from HTMLParser (for example inside noembed or noframes).
+        // the markup differently from HTMLParser (for example inside noembed, xmp or svg title).
         public const string ActiveContentPolicyMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; object-src 'none'; frame-src 'none'\">";
 
         // Removes scripts, embedded content, event handler attributes and script URLs, so a saved
@@ -772,8 +773,7 @@ namespace JDP {
         private static void AddActiveContentReplaces(HTMLParser htmlParser, List<ReplaceInfo> replaceList, HashSet<int> existingOffsets) {
             AddContentPolicyReplace(htmlParser, replaceList);
             foreach (HTMLTag tag in htmlParser.FindStartTags(_activeContentElements)) {
-                HTMLTagRange tagRange = htmlParser.CreateTagRange(tag);
-                replaceList.Add(CreateRemoveReplace(tag.Offset, tagRange != null ? tagRange.Length : tag.Length));
+                replaceList.Add(CreateRemoveReplace(tag.Offset, GetActiveElementLength(htmlParser, tag)));
             }
             foreach (HTMLTag tag in htmlParser.Tags) {
                 AddActiveAttributeReplaces(tag.Attributes, replaceList, existingOffsets);
@@ -781,16 +781,25 @@ namespace JDP {
             }
         }
 
-        // Replaces the head start tag, so no other replacement can share its offset
+        // Void elements have no contents; matching a stray end tag would remove everything up to it.
+        // An element without an end tag loses only its start tag.
+        private static int GetActiveElementLength(HTMLParser htmlParser, HTMLTag tag) {
+            if (tag.NameEqualsAny("embed", "frame")) return tag.Length;
+            HTMLTagRange tagRange = htmlParser.CreateTagRange(tag);
+            return tagRange != null ? tagRange.Length : tag.Length;
+        }
+
+        // Replaces the head start tag, or the html start tag when the head is implied, so no other
+        // replacement can share its offset. A page with neither gets no policy.
         private static void AddContentPolicyReplace(HTMLParser htmlParser, List<ReplaceInfo> replaceList) {
-            HTMLTag headTag = htmlParser.FindStartTag("head");
-            if (headTag == null) return;
+            HTMLTag tag = htmlParser.FindStartTag("head") ?? htmlParser.FindStartTag("html");
+            if (tag == null) return;
             replaceList.Add(
                 new ReplaceInfo {
-                    Offset = headTag.Offset,
-                    Length = headTag.Length,
+                    Offset = tag.Offset,
+                    Length = tag.Length,
                     Type = ReplaceType.Other,
-                    Value = "<head>" + ActiveContentPolicyMeta
+                    Value = "<" + tag.Name + ">" + ActiveContentPolicyMeta
                 });
         }
 
@@ -817,9 +826,11 @@ namespace JDP {
         }
 
         // Browsers ignore tabs, newlines and leading spaces in a URL scheme, also when written as
-        // character references. HttpUtility doesn't know the HTML5-only names used here.
+        // character references. HttpUtility doesn't know the HTML5-only names used here, and leaves
+        // numeric references without a semicolon undecoded, which browsers decode.
         public static bool IsScriptURL(string value) {
-            string decoded = HttpUtility.HtmlDecode(value.Replace("&Tab;", "\t").Replace("&NewLine;", "\n").Replace("&colon;", ":"));
+            string terminated = Regex.Replace(value, "&#([0-9]+|[xX][0-9a-fA-F]+);?", "&#$1;");
+            string decoded = HttpUtility.HtmlDecode(terminated.Replace("&Tab;", "\t").Replace("&NewLine;", "\n").Replace("&colon;", ":"));
             StringBuilder url = new StringBuilder(decoded.Length);
             foreach (char c in decoded) {
                 if (c > ' ') url.Append(Char.ToLowerInvariant(c));

@@ -69,6 +69,9 @@ namespace JDP.Tests {
         [DataRow("java&Tab;script:alert(1)")]
         [DataRow("java&NewLine;script:alert(1)")]
         [DataRow("javascript&colon;alert(1)")]
+        [DataRow("&#106avascript:alert(1)")]
+        [DataRow("jav&#97script:alert(1)")]
+        [DataRow("java&#x0Ascript:alert(1)")]
         [DataRow("vbscript:msgbox(1)")]
         public void DetectsScriptURLs(string value) {
             Assert.IsTrue(General.IsScriptURL(value));
@@ -93,8 +96,26 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        public void PageWithoutHeadGetsNoPolicy() {
+        public void PageWithImpliedHeadGetsPolicyAfterHtmlTag() {
+            Assert.AreEqual("<html>" + General.ActiveContentPolicyMeta + "<p>a</p></html>", Save("<html lang=\"en\" onclick=\"x()\"><p>a</p></html>"));
+        }
+
+        [TestMethod]
+        public void FragmentGetsNoPolicy() {
             Assert.AreEqual("<p>a</p>", Save("<p>a</p>"));
+        }
+
+        // HTMLParser treats svg title as raw text where a browser parses tags, so only the policy blocks this handler
+        [TestMethod]
+        public void PolicyCoversMarkupTheParserReadsAsText() {
+            string saved = Save("<head></head><body><svg><title><img src=x onerror=alert(1)></title></svg></body>");
+
+            Assert.AreEqual("<head>" + General.ActiveContentPolicyMeta + "</head><body><svg><title><img src=x onerror=alert(1)></title></svg></body>", saved);
+        }
+
+        [TestMethod]
+        public void VoidElementIgnoresStrayEndTag() {
+            Assert.AreEqual("<p>a</p><p>b</p></embed>", Save("<embed src=\"x.swf\"><p>a</p><p>b</p></embed>"));
         }
 
         // The head start tag is replaced as a whole, so a newline right after it can't displace the policy
@@ -117,7 +138,7 @@ namespace JDP.Tests {
 
         [TestMethod]
         public void KeepsOrdinaryMarkup() {
-            const string html = "<html><body><div class=\"post\" id=\"p1\" data-md5=\"abc\"><a class=\"quotelink\" href=\"#p2\">&gt;&gt;2</a><img src=\"http://a.com/t.jpg\" alt=\"one\" style=\"width: 1px\"></div><noscript>enable</noscript><style>.a { color: red; }</style></body></html>";
+            const string html = "<body><div class=\"post\" id=\"p1\" data-md5=\"abc\"><a class=\"quotelink\" href=\"#p2\">&gt;&gt;2</a><img src=\"http://a.com/t.jpg\" alt=\"one\" style=\"width: 1px\"></div><noscript>enable</noscript><style>.a { color: red; }</style></body>";
 
             Assert.AreEqual(html, Save(html));
         }
