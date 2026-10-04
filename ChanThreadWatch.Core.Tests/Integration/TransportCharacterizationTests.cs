@@ -4,14 +4,15 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests.Integration {
-    // MP-5a: pins what the HttpWebRequest transport sends and how it reacts, as seen from the
-    // server, so that the HttpClient rewrite (MP-5b) can be checked against it. Behaviors that
+    // MP-5a: pins what the transport sends and how it reacts, as seen from the server. Written
+    // against HttpWebRequest, so that the HttpClient rewrite (MP-5b) could be checked against it. Behaviors that
     // other tests already pin are not repeated here.
     [TestClass]
     public class TransportCharacterizationTests : ThreadWatcherIntegrationTestBase {
@@ -191,10 +192,10 @@ namespace JDP.Tests.Integration {
             Assert.AreEqual(url, server.RequestsTo("/moved.jpg")[0].Header("Referer"));
         }
 
-        // A same-origin HTTP redirect drops the Authorization header too (the framework removes
-        // it on every automatic redirect). SecurityTests.MetaRefreshToSameOriginKeepsCredentials
+        // A same-origin HTTP redirect drops the Authorization header too (HttpWebRequest removed it on
+        // every automatic redirect, and MP-5b kept that). SecurityTests.MetaRefreshToSameOriginKeepsCredentials
         // pins the meta refresh counterpart.
-        // Characterizes current behavior, not a security requirement: MP-5b may change it by decision.
+        // Characterizes behavior, not a security requirement.
         [TestMethod]
         public void SameOriginHttpRedirectDropsCredentials() {
             var fixture = new FourChanThreadFixture();
@@ -212,14 +213,13 @@ namespace JDP.Tests.Integration {
             Assert.IsNull(server.RequestsTo("/moved")[0].Header("Authorization"));
         }
 
-        // HTTP redirects are followed for these status codes, but not for 308.
-        // Characterizes current behavior (the 308 row especially): MP-5b may change it by decision.
+        // HTTP redirects are followed for these status codes
         [TestMethod]
         [DataRow(301, "Moved Permanently", "ok")]
         [DataRow(302, "Found", "ok")]
         [DataRow(303, "See Other", "ok")]
         [DataRow(307, "Temporary Redirect", "ok")]
-        // MP-2c (W2): .NET Framework's HttpWebRequest did not follow 308 ("HTTP 308"); .NET 10's does. MP-5b decides.
+        // .NET Framework's HttpWebRequest did not follow 308 ("HTTP 308"); .NET 10's did, and MP-5b follows it (standard)
         [DataRow(308, "Permanent Redirect", "ok")]
         public void RedirectStatusesThatAreFollowed(int status, string reason, string expected) {
             LoopbackHttpServer server = StartServer();
@@ -342,10 +342,7 @@ namespace JDP.Tests.Integration {
             Assert.HasCount(2, pageRequests);
             Assert.AreNotEqual(pageRequests[0].ConnectionId, pageRequests[1].ConnectionId);
             Assert.HasCount(2 + 4 + 3, server.Requests);
-            // MP-2c (W2): .NET 10's HttpWebRequest opens one connection per request (no keep-alive reuse) until the
-            // HttpClient transport (MP-5b). On .NET Framework there were fewer connections than requests:
-            // Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
-            Assert.AreEqual(server.Requests.Count, server.ConnectionCount);
+            Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
         }
 
         // A retry of a file goes out on a new connection
@@ -570,7 +567,7 @@ namespace JDP.Tests.Integration {
 
         // A chain that leaves the origin and comes back to it: the return hop gets no
         // credentials either. Characterizes current behavior (the framework drops Authorization
-        // on the first redirect); MP-5b may change it by decision.
+        // on the first redirect, and MP-5b drops it on every redirect).
         [TestMethod]
         public void RedirectChainBackToTheOriginSendsNoCredentials() {
             LoopbackHttpServer a = StartServer();
@@ -717,29 +714,19 @@ namespace JDP.Tests.Integration {
             var done = new ManualResetEvent(false);
             var data = new MemoryStream();
             Exception error = null;
-            General.DownloadAsync(url, auth, null, null, null, r => { }, (b, n) => { lock (data) data.Write(b, 0, n); }, () => done.Set(), ex => { error = ex; done.Set(); });
+            General.DownloadAsync(url, auth, null, false, null, r => { }, (b, n) => { lock (data) data.Write(b, 0, n); }, () => done.Set(), ex => { error = ex; done.Set(); });
             Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download did not end");
             lock (data) body = Encoding.UTF8.GetString(data.ToArray());
             return error == null ? "ok" : DescribeFailure(error);
         }
 
-        // The only code that knows how the current transport reports failures: "timeout",
-        // "HTTP <status>" for an HTTP error answer, or "failed" for anything else. MP-5b replaces
-        // this mapping, not the tests that use it.
+        // The only code that knows how the transport reports failures: "timeout", "HTTP <status>"
+        // for an HTTP error answer, or "failed" for anything else. MP-5b replaced this mapping (it was
+        // HttpWebRequest's WebException), not the tests that use it.
         private static string DescribeFailure(Exception ex) {
-            WebException webEx = ex as WebException;
-            if (webEx != null && webEx.Status == WebExceptionStatus.Timeout) return "timeout";
-            if (ex.Message.StartsWith("Timed out", StringComparison.Ordinal)) return "timeout";
-            // MP-2c: on .NET 10 the read timeout of HttpWebRequest ends a blocking read with an IOException around a
-            // timed out SocketException instead of a WebException with status Timeout (.NET Framework). The app
-            // reports both with the same text.
-            if (ThreadWatcher.DescribeDownloadError(ex, "http://example.com/").StartsWith("timed out connecting to ", StringComparison.Ordinal)) return "timeout";
-            HttpWebResponse response = webEx?.Response as HttpWebResponse;
-            if (response != null) return "HTTP " + (int)response.StatusCode;
-            // MP-2c: a protocol error now carries its status as the message ("HTTP 302 Found") instead of
-            // the closed response, which .NET 10 cannot read (General.WithoutResponse)
-            Match status = Regex.Match(ex.Message, @"^HTTP \d{3}\b");
-            if (webEx != null && webEx.Status == WebExceptionStatus.ProtocolError && status.Success) return status.Value;
+            if (ex is TimeoutException && ex.Message.StartsWith("Timed out", StringComparison.Ordinal)) return "timeout";
+            HTTPStatusException status = ex as HTTPStatusException;
+            if (status != null) return "HTTP " + status.StatusCode;
             return "failed";
         }
 

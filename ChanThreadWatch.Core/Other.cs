@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Net;
 using System.Security.Cryptography;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace JDP {
     public class ReplaceInfo {
@@ -89,6 +89,18 @@ namespace JDP {
     public class HTTP404Exception : Exception { }
 
     public class HTTP304Exception : Exception { }
+
+    // An HTTP answer that is not a success and has no exception type of its own. The message is
+    // the status, e.g. "HTTP 403 Forbidden", which is what the user sees.
+    public class HTTPStatusException : Exception {
+        public HTTPStatusException(int statusCode, string message)
+            : base(message)
+        {
+            StatusCode = statusCode;
+        }
+
+        public int StatusCode { get; private set; }
+    }
 
     // A request was not sent because requests to Host are paused by a rate limit
     public class RateLimitException : Exception {
@@ -179,7 +191,6 @@ namespace JDP {
         private static Dictionary<string, ConnectionManager> _connectionManagers = new Dictionary<string, ConnectionManager>(StringComparer.OrdinalIgnoreCase);
 
         private FIFOSemaphore _semaphore = new FIFOSemaphore(MaxConnectionsPerHost, MaxConnectionsPerHost);
-        private Stack<string> _groupNames = new Stack<string>();
         private readonly string _host;
         private readonly object _pauseSync = new object();
         private long _pausedUntilTicks;
@@ -290,38 +301,14 @@ namespace JDP {
             }
         }
 
-        // Waits for a free connection to the host. Returns null, without taking one, if
+        // Waits for a free connection to the host. Returns false, without taking one, if
         // isCanceled returns true while waiting; it is called every SlotWaitPollMS.
-        public string ObtainConnectionGroupName(Func<bool> isCanceled) {
-            if (!_semaphore.WaitOne(SlotWaitPollMS, isCanceled)) return null;
-            return GetConnectionGroupName();
+        public bool ObtainConnection(Func<bool> isCanceled) {
+            return _semaphore.WaitOne(SlotWaitPollMS, isCanceled);
         }
 
-        public void ReleaseConnectionGroupName(string name) {
-            lock (_groupNames) {
-                _groupNames.Push(name);
-            }
+        public void ReleaseConnection() {
             _semaphore.Release();
-        }
-
-        public string SwapForFreshConnection(string name, string url) {
-            // SYSLIB0014: HttpWebRequest and ServicePointManager stay until the HttpClient transport (MP-5b)
-#pragma warning disable SYSLIB0014
-            ServicePoint servicePoint = ServicePointManager.FindServicePoint(new Uri(url));
-#pragma warning restore SYSLIB0014
-            try {
-                servicePoint.CloseConnectionGroup(name);
-            }
-            catch (NotImplementedException) {
-                // Workaround for Mono
-            }
-            return GetConnectionGroupName();
-        }
-
-        private string GetConnectionGroupName() {
-            lock (_groupNames) {
-                return _groupNames.Count != 0 ? _groupNames.Pop() : Guid.NewGuid().ToString();
-            }
         }
     }
 
@@ -935,6 +922,13 @@ namespace JDP {
         public override int Read(byte[] buffer, int offset, int count) {
             Throttle(count);
             return _baseStream.Read(buffer, offset, count);
+        }
+
+        // Sleeps for the speed limit before it returns the read's task, so a reader can start the
+        // read's time limit once the sleep is over
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) {
+            Throttle(count);
+            return _baseStream.ReadAsync(buffer, offset, count, cancellationToken);
         }
 
         public override int ReadByte() {

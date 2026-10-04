@@ -94,11 +94,11 @@ namespace JDP.Tests {
         // Resetting forgets the hosts, so a connection slot a test leaked is free again
         [TestMethod]
         public void ResetForTestingFreesConnectionSlots() {
-            Assert.IsNotNull(Manager("slots").ObtainConnectionGroupName(() => true));
+            Assert.IsTrue(Manager("slots").ObtainConnection(() => true));
 
             ConnectionManager.ResetForTesting();
 
-            Assert.IsNotNull(Manager("slots").ObtainConnectionGroupName(() => true));
+            Assert.IsTrue(Manager("slots").ObtainConnection(() => true));
         }
 
         [TestMethod]

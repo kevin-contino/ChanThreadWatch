@@ -3,11 +3,14 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web;
 
 namespace JDP {
@@ -69,8 +72,47 @@ namespace JDP {
             get { return "https://github.com/SuperGouge/ChanThreadWatch/wiki"; }
         }
 
-        public static Action DownloadAsync(string url, string auth, string referer, string connectionGroupName, DateTime? cacheLastModifiedTime, Action<HttpWebResponse> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
-            AsyncDownload download = new AsyncDownload(auth, connectionGroupName, cacheLastModifiedTime, onResponse, onDownloadChunk, onComplete, onException);
+        // How long a pooled connection may be reused, so that a changed DNS answer is picked up
+        // (declared before the clients, which the static initializer creates in order)
+        private static readonly TimeSpan PooledConnectionLifetime = TimeSpan.FromMinutes(5);
+        // The one HTTP client every download goes through. Connections are pooled per host, so
+        // consecutive requests to a host reuse one (ConnectionManager allows one at a time per host).
+        private static readonly HttpClient _httpClient = CreateHttpClient(PooledConnectionLifetime);
+        // A retry goes out on a new connection, never on one the failed try may have left in the
+        // pool: this client keeps no connection after its response.
+        private static readonly HttpClient _freshConnectionHttpClient = CreateHttpClient(TimeSpan.Zero);
+        // The limit of the transport before HttpClient, which the characterization tests pin
+        internal const int MaxRedirects = 50;
+
+        private static HttpClient CreateHttpClient(TimeSpan pooledConnectionLifetime) {
+            // Each phase has its own timeout (RequestTimeoutMS, ReadTimeoutMS), so the client has none
+            return new HttpClient(CreateHttpHandler(pooledConnectionLifetime), true) { Timeout = Timeout.InfiniteTimeSpan };
+        }
+
+        internal static SocketsHttpHandler CreateHttpHandler(TimeSpan pooledConnectionLifetime) {
+            return new SocketsHttpHandler {
+                UseCookies = false,
+                // Redirects are followed in SendAsync, so that every hop is checked
+                AllowAutoRedirect = false,
+                // No Accept-Encoding is sent, and files are saved as the server sends them
+                AutomaticDecompression = DecompressionMethods.None,
+                // The system proxy (HttpClient.DefaultProxy), as before; the SSRF guard refuses a
+                // proxied connection in service mode
+                UseProxy = true,
+                PooledConnectionLifetime = pooledConnectionLifetime,
+                // ConnectTimeout stays infinite: the connect is bounded by RequestTimeoutMS like the
+                // rest of the request. ConnectionManager decides how many requests go to a host at a
+                // time; a second limit here could only hold a request behind a connection that is
+                // still being drained.
+                MaxConnectionsPerServer = Int32.MaxValue,
+                // Every connection, so every redirect and meta refresh hop, goes through the SSRF guard.
+                // TLS is left to the OS (1.2 and 1.3), with the default certificate validation.
+                ConnectCallback = SSRFGuard.ConnectAsync
+            };
+        }
+
+        public static Action DownloadAsync(string url, string auth, string referer, bool freshConnection, DateTime? cacheLastModifiedTime, Action<HttpResponseMessage> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
+            AsyncDownload download = new AsyncDownload(auth, freshConnection, cacheLastModifiedTime, onResponse, onDownloadChunk, onComplete, onException);
             download.Start(url, referer);
             return download.Abort;
         }
@@ -79,55 +121,36 @@ namespace JDP {
             return new ThrottledStream(stream, Settings.MaximumBytesPerSecond ?? ThrottledStream.Infinite);
         }
 
-        // Maps 404, 304 and rate limit (429, or 503 with Retry-After) protocol errors to their own
-        // exception types. Closes the error response so its connection is released. Never throws.
-        internal static Exception TranslateWebException(Exception ex) {
-            HttpWebResponse response = GetProtocolErrorResponse(ex as WebException);
-            if (response == null) return ex;
-            try {
-                return TranslateProtocolError(response, ex);
+        // Maps a response that is not a success to its exception: 404, 304 and rate limit (429, or
+        // 503 with Retry-After) have their own types, any other status (a redirect that was not
+        // followed included) gives an HTTPStatusException. Disposes the response, so its connection
+        // is released. Never throws.
+        internal static Exception TranslateErrorResponse(HttpResponseMessage response) {
+            using (response) {
+                HttpStatusCode status = response.StatusCode;
+                if (status == HttpStatusCode.NotFound) return new HTTP404Exception();
+                if (status == HttpStatusCode.NotModified) return new HTTP304Exception();
+                var statusException = new HTTPStatusException((int)status, FormatHTTPStatus(response));
+                string retryAfter = GetRawHeader(response.Headers, "Retry-After");
+                if (!IsRateLimitStatus(status, retryAfter != null)) return statusException;
+                return new HTTPRateLimitedException(response.RequestMessage.RequestUri.Host, ParseRetryAfter(retryAfter, DateTime.UtcNow), statusException);
             }
-            catch (ObjectDisposedException) {
-                // .NET 10 cannot read the status of a response that is already closed
-                return new WebException(ex.Message, ex, WebExceptionStatus.ProtocolError, null);
-            }
-            catch {
-                return ex;
-            }
-            finally {
-                CloseQuietly(response);
-            }
-        }
-
-        // Returns null for any failure other than a protocol error, or when the error has no HTTP response
-        private static HttpWebResponse GetProtocolErrorResponse(WebException webEx) {
-            if (webEx == null || webEx.Status != WebExceptionStatus.ProtocolError) return null;
-            return webEx.Response as HttpWebResponse;
-        }
-
-        private static Exception TranslateProtocolError(HttpWebResponse response, Exception ex) {
-            if (response.StatusCode == HttpStatusCode.NotFound) return new HTTP404Exception();
-            if (response.StatusCode == HttpStatusCode.NotModified) return new HTTP304Exception();
-            string retryAfter = response.Headers["Retry-After"];
-            if (IsRateLimitStatus(response.StatusCode, retryAfter != null)) return new HTTPRateLimitedException(response.ResponseUri.Host, ParseRetryAfter(retryAfter, DateTime.UtcNow), ex);
-            return WithStatusText(response, ex);
-        }
-
-        // Returns the protocol error as an exception that keeps the HTTP status as its message, without
-        // the response; other failures are returned as they are. The response is closed once the error is
-        // handled, and .NET 10 cannot read the status of a closed response (.NET Framework could).
-        internal static WebException WithoutResponse(WebException ex) {
-            HttpWebResponse response = GetProtocolErrorResponse(ex);
-            return response == null ? ex : WithStatusText(response, ex);
-        }
-
-        private static WebException WithStatusText(HttpWebResponse response, Exception ex) {
-            return new WebException(FormatHTTPStatus(response), ex, WebExceptionStatus.ProtocolError, null);
         }
 
         // For example "HTTP 403 Forbidden"
-        internal static string FormatHTTPStatus(HttpWebResponse response) {
-            return String.Format("HTTP {0} {1}", (int)response.StatusCode, response.StatusDescription).TrimEnd();
+        internal static string FormatHTTPStatus(HttpResponseMessage response) {
+            return String.Format("HTTP {0} {1}", (int)response.StatusCode, response.ReasonPhrase).TrimEnd();
+        }
+
+        // The header as the server sent it (several values joined by ", "), or null if it is missing
+        private static string GetRawHeader(HttpHeaders headers, string name) {
+            HeaderStringValues values;
+            return headers.NonValidated.TryGetValues(name, out values) ? values.ToString() : null;
+        }
+
+        // The Content-Type header as the server sent it, or an empty string (as the transport before HttpClient gave)
+        internal static string GetContentType(HttpResponseMessage response) {
+            return GetRawHeader(response.Content.Headers, "Content-Type") ?? String.Empty;
         }
 
         private static bool IsRateLimitStatus(HttpStatusCode code, bool hasRetryAfter) {
@@ -169,9 +192,9 @@ namespace JDP {
             catch { }
         }
 
-        private static void CloseQuietly(WebResponse response) {
+        private static void CloseQuietly(HttpResponseMessage response) {
             if (response == null) return;
-            try { response.Close(); }
+            try { response.Dispose(); }
             catch { }
         }
 
@@ -260,59 +283,135 @@ namespace JDP {
         // pauses the host if it answers with one (throws HTTPRateLimitedException). Not paced by
         // MinRequestStartIntervalMS: callers (e.g. a new watcher's constructor) run on the UI thread.
         public static string DownloadPageToString(string url) {
-            ConnectionManager connectionManager = ConnectionManager.GetInstance(url);
-            connectionManager.ThrowIfPaused();
+            ConnectionManager.GetInstance(url).ThrowIfPaused();
             try {
-                return DownloadPageToStringUnchecked(url);
+                // On the thread pool, where no synchronization context (the UI thread's) can deadlock the wait
+                return Task.Run(() => DownloadPageToStringAsync(url)).GetAwaiter().GetResult();
             }
-            catch (WebException ex) {
-                // Read before TranslateWebException closes the response
-                WebException withoutResponse = WithoutResponse(ex);
-                HTTPRateLimitedException rateLimited = TranslateWebException(ex) as HTTPRateLimitedException;
-                if (rateLimited == null && withoutResponse == ex) throw;
-                if (rateLimited == null) throw withoutResponse;
-                connectionManager.PauseAndLog(rateLimited.RetryAfter);
-                throw rateLimited;
+            catch (HTTPRateLimitedException ex) {
+                // The host that answered, which a redirect may have made another one
+                ConnectionManager.GetInstanceForHost(ex.Host).PauseAndLog(ex.RetryAfter);
+                throw;
             }
         }
 
-        private static string DownloadPageToStringUnchecked(string url) {
-            HttpWebRequest request = BuildWebRequest(url: url);
-            HttpWebResponse response = null;
-            try {
-                response = (HttpWebResponse)request.GetResponse();
-                string contentType = response.ContentType;
-                byte[] pageBytes = ReadPageBytes(response.GetResponseStream());
+        private static async Task<string> DownloadPageToStringAsync(string url) {
+            using (HttpResponseMessage response = await GetResponseAsync(url, null, null, null, false, CancellationToken.None).ConfigureAwait(false)) {
+                string contentType = GetContentType(response);
+                Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                byte[] pageBytes = await ReadPageBytesAsync(stream, CancellationToken.None).ConfigureAwait(false);
                 Encoding encoding = DetectHTMLEncoding(pageBytes, contentType);
                 return encoding.GetString(pageBytes);
             }
-            finally {
-                CloseQuietly(response);
+        }
+
+        // Sends a GET (following redirects) and returns the response once its headers have arrived;
+        // the caller disposes it. Throws TimeoutException if that takes longer than RequestTimeoutMS,
+        // and the translated error (TranslateErrorResponse) for a response that is not a success.
+        private static async Task<HttpResponseMessage> GetResponseAsync(string url, string auth, string referer, DateTime? cacheLastModifiedTime, bool freshConnection, CancellationToken cancellationToken) {
+            using (CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)) {
+                timeout.CancelAfter(RequestTimeoutMS);
+                HttpResponseMessage response;
+                try {
+                    response = await SendAsync(url, auth, referer, cacheLastModifiedTime, freshConnection, timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) {
+                    throw new TimeoutException("Timed out while waiting for response.");
+                }
+                catch (HttpRequestException ex) {
+                    throw UnwrapBlockedAddress(ex);
+                }
+                if (!response.IsSuccessStatusCode) throw TranslateErrorResponse(response);
+                return response;
             }
         }
 
-        private static HttpWebRequest BuildWebRequest(string url, string auth = null, string connectionGroupName = null, string referer = null, DateTime? cacheLastModifiedTime = null) {
-            // SYSLIB0014: HttpWebRequest and ServicePointManager stay until the HttpClient transport (MP-5b)
-#pragma warning disable SYSLIB0014
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-#pragma warning restore SYSLIB0014
-            if (connectionGroupName != null) {
-                request.ConnectionGroupName = connectionGroupName;
+        // The SSRF guard's refusal, which the handler wraps as a connection failure, or the failure itself
+        private static Exception UnwrapBlockedAddress(HttpRequestException ex) {
+            for (Exception inner = ex; inner != null; inner = inner.InnerException) {
+                if (inner is BlockedAddressException) return inner;
             }
+            return ex;
+        }
+
+        // Sends a GET and follows up to MaxRedirects redirects, each as a request of its own, so that
+        // every hop is checked: only http(s), no credentials (dropped on every redirect, as
+        // the transport before HttpClient did, so none can reach another origin), nothing to a host paused by a rate
+        // limit, and the SSRF guard when the hop connects. Returns the last response, which may be an
+        // error or a redirect that was not followed.
+        private static async Task<HttpResponseMessage> SendAsync(string url, string auth, string referer, DateTime? cacheLastModifiedTime, bool freshConnection, CancellationToken cancellationToken) {
+            HttpClient client = freshConnection ? _freshConnectionHttpClient : _httpClient;
+            Uri uri = ToHTTPUri(url);
+            for (int redirects = 0; ; redirects++) {
+                HttpRequestMessage request = BuildWebRequest(uri, auth, referer, cacheLastModifiedTime);
+                HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                Uri target = GetRedirectTargetOrDispose(response);
+                if (target == null || redirects == MaxRedirects) return response;
+                response.Dispose();
+                uri = ToHTTPUri(target.AbsoluteUri);
+                auth = null;
+                ConnectionManager.GetInstanceForHost(uri.Host).ThrowIfPaused();
+            }
+        }
+
+        // Disposes the response if its Location cannot be read (a malformed URL throws)
+        private static Uri GetRedirectTargetOrDispose(HttpResponseMessage response) {
+            try {
+                return GetRedirectTarget(response);
+            }
+            catch {
+                response.Dispose();
+                throw;
+            }
+        }
+
+        // The absolute URL a redirect response points to, or null if it is not a redirect that is
+        // followed: no Location, or a redirect from https to http (a downgrade, which HttpClient's own
+        // redirect handling refuses too)
+        internal static Uri GetRedirectTarget(HttpResponseMessage response) {
+            Uri location = IsRedirectStatus(response.StatusCode) ? response.Headers.Location : null;
+            if (location == null) return null;
+            Uri requestUri = response.RequestMessage.RequestUri;
+            // A relative Location resolves against the URL of this hop
+            Uri target = new Uri(requestUri, location);
+            return IsDowngrade(requestUri, target) ? null : target;
+        }
+
+        private static bool IsDowngrade(Uri from, Uri to) {
+            return from.Scheme == Uri.UriSchemeHttps && to.Scheme == Uri.UriSchemeHttp;
+        }
+
+        // The statuses HttpClient's own redirect handling follows. 308 is one of them, although the
+        // .NET Framework transport did not follow it.
+        private static bool IsRedirectStatus(HttpStatusCode status) {
+            int code = (int)status;
+            return (code >= 300 && code <= 303) || code == 307 || code == 308;
+        }
+
+        // Only http and https URLs are ever requested, so a link, redirect or meta refresh can never
+        // read a local file or reach an FTP server
+        private static Uri ToHTTPUri(string url) {
+            Uri uri = new Uri(url);
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) {
+                throw new NotSupportedException("Only http and https URLs can be downloaded, not " + uri.Scheme + ".");
+            }
+            return uri;
+        }
+
+        private static HttpRequestMessage BuildWebRequest(Uri uri, string auth, string referer, DateTime? cacheLastModifiedTime) {
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri);
             // 4chan blocks (HTTP 403) non-browser user agents, so default to a browser-like one
-            request.UserAgent = GetUserAgent();
-            // Bound the synchronous GetResponse and response stream reads (the meta refresh path and DownloadPageToString)
-            request.Timeout = RequestTimeoutMS;
-            request.ReadWriteTimeout = ReadTimeoutMS;
+            request.Headers.TryAddWithoutValidation("User-Agent", GetUserAgent());
             if (cacheLastModifiedTime != null) {
-                request.IfModifiedSince = cacheLastModifiedTime.Value;
+                request.Headers.IfModifiedSince = cacheLastModifiedTime.Value;
             }
             if (!String.IsNullOrEmpty(auth)) {
                 Encoding encoding = Encoding.GetEncoding("iso-8859-1");
-                request.Headers.Add("Authorization", "Basic " + Convert.ToBase64String(encoding.GetBytes(auth)));
+                request.Headers.TryAddWithoutValidation("Authorization", "Basic " + Convert.ToBase64String(encoding.GetBytes(auth)));
             }
-            if (!String.IsNullOrEmpty(referer)) {
-                request.Referer = RemoveUserInfo(referer);
+            string refererWithoutLogin = RemoveUserInfo(referer);
+            if (!String.IsNullOrEmpty(refererWithoutLogin)) {
+                request.Headers.TryAddWithoutValidation("Referer", refererWithoutLogin);
             }
             return request;
         }
@@ -333,22 +432,37 @@ namespace JDP {
         // Reads the stream to its end and closes it. Throws PageTooLargeException as soon as the
         // data grows past MaxPageBytes, so an oversized page never gets buffered in full, and
         // times out once reading has taken longer than MaxPageReadMS (not counting the speed limit).
-        internal static byte[] ReadPageBytes(Stream stream) {
+        internal static async Task<byte[]> ReadPageBytesAsync(Stream stream, CancellationToken cancellationToken) {
             long startTicks = TickCount.Now;
             using (stream)
             using (MemoryStream memoryStream = new MemoryStream()) {
                 byte[] data = new byte[8192];
                 int dataLen;
-                while ((dataLen = stream.Read(data, 0, data.Length)) != 0) {
+                while ((dataLen = await ReadAsync(stream, data, cancellationToken).ConfigureAwait(false)) != 0) {
                     if (memoryStream.Length + dataLen > MaxPageBytes) {
                         throw new PageTooLargeException(MaxPageBytes);
                     }
                     if (GetActiveReadMS(startTicks, stream) > MaxPageReadMS) {
-                        throw new Exception("Timed out while reading response.");
+                        throw new TimeoutException("Timed out while reading response.");
                     }
                     memoryStream.Write(data, 0, dataLen);
                 }
                 return memoryStream.ToArray();
+            }
+        }
+
+        // One read, which must return within ReadTimeoutMS. A ThrottledStream sleeps for the speed
+        // limit before its ReadAsync returns the read's task, so the sleep does not count.
+        private static async Task<int> ReadAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken) {
+            using (CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)) {
+                Task<int> read = stream.ReadAsync(buffer, 0, buffer.Length, timeout.Token);
+                timeout.CancelAfter(ReadTimeoutMS);
+                try {
+                    return await read.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) {
+                    throw new TimeoutException("Timed out while reading response.");
+                }
             }
         }
 
@@ -365,13 +479,13 @@ namespace JDP {
             return GetActiveReadMS(startTicks, stream) > FileReadGraceMS + bytesRead * 1000 / MinFileBytesPerSecond;
         }
 
-        public static DateTime? GetResponseLastModifiedTime(HttpWebResponse response) {
+        public static DateTime? GetResponseLastModifiedTime(HttpResponseMessage response) {
             DateTime? lastModified = null;
-            if (response.Headers["Last-Modified"] != null) {
+            string lastModifiedHeader = GetRawHeader(response.Content.Headers, "Last-Modified");
+            if (lastModifiedHeader != null) {
                 try {
-                    // Parse the time string ourself instead of using .LastModified because
-                    // older versions of Mono don't convert it from GMT to local.
-                    lastModified = DateTime.ParseExact(response.Headers["Last-Modified"],
+                    // Parse the time string ourself, in the three forms HTTP allows, to local time
+                    lastModified = DateTime.ParseExact(lastModifiedHeader,
                         new[] { "r", "dddd, dd-MMM-yy HH:mm:ss G\\MT", "ddd MMM d HH:mm:ss yyyy" },
                         CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal);
                 }
@@ -1229,40 +1343,40 @@ namespace JDP {
             return !checkSize || !backupInfo.Exists || new FileInfo(path).Length >= backupInfo.Length;
         }
 
-        // Holds the state shared by the asynchronous callbacks of a single DownloadAsync call.
+        // Holds the state shared by the asynchronous steps of a single DownloadAsync call.
         // All state changes and all callbacks happen while holding _sync. Callback guarantees:
         // onComplete is called at most once; onException is called at most once; nothing is
         // called after onException; onException is never called after an onComplete that
         // returned normally, but it does follow an onComplete that threw (with that exception),
         // which ThreadWatcher uses to retry corrupt downloads.
-        // Blocking work (BeginGetResponse's DNS lookup, buffering an HTML page, the synchronous
-        // meta refresh request, and BeginRead, which can sleep in ThrottledStream) runs without
-        // holding _sync, so AbortInternal can always take the lock and abort the request or close
-        // the response or stream that the blocked thread is waiting on.
+        // Waiting work (the request, buffering an HTML page, the meta refresh request, and each
+        // read, which can sleep in ThrottledStream) runs without holding _sync, so AbortInternal can
+        // always take the lock, cancel the request or read, and close the response or stream that
+        // the waiting step uses. The reads run in a loop, one at a time, never by recursion.
         private sealed class AsyncDownload {
             private const int ReadBufferSize = 8192;
 
             private readonly object _sync = new object();
+            // Canceled when the download ends; ends whatever request or read is in progress
+            private readonly CancellationTokenSource _cancel = new CancellationTokenSource();
             private readonly string _auth;
-            private readonly string _connectionGroupName;
+            private readonly bool _freshConnection;
             private readonly DateTime? _cacheLastModifiedTime;
-            private readonly Action<HttpWebResponse> _onResponse;
+            private readonly Action<HttpResponseMessage> _onResponse;
             private readonly Action<byte[], int> _onDownloadChunk;
             private readonly Action _onComplete;
             private readonly Action<Exception> _onException;
             private bool _aborting;
-            private bool _completed;
-            private HttpWebRequest _request;
-            private HttpWebResponse _response;
+            private HttpResponseMessage _response;
             private Stream _responseStream;
-            private byte[] _buff;
+            private readonly byte[] _buff = new byte[ReadBufferSize];
             private string _url;
             private long _readStartTicks;
             private long _totalBytesRead;
 
-            public AsyncDownload(string auth, string connectionGroupName, DateTime? cacheLastModifiedTime, Action<HttpWebResponse> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
+            public AsyncDownload(string auth, bool freshConnection, DateTime? cacheLastModifiedTime, Action<HttpResponseMessage> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
                 _auth = auth;
-                _connectionGroupName = connectionGroupName;
+                _freshConnection = freshConnection;
                 _cacheLastModifiedTime = cacheLastModifiedTime;
                 _onResponse = onResponse;
                 _onDownloadChunk = onDownloadChunk;
@@ -1270,53 +1384,24 @@ namespace JDP {
                 _onException = onException;
             }
 
-            // Unfortunately BeginGetResponse blocks until the DNS lookup (and proxy detection) has
-            // finished, so it runs on a thread pool thread and the caller gets the abort delegate
-            // right away. HttpWebRequest.Abort would also wait for the lookup, so the request is
-            // only published for AbortInternal once BeginGetResponse has returned.
+            // Runs on the thread pool, so the caller gets the abort delegate right away, however long
+            // the DNS lookup and proxy detection take
             public void Start(string url, string referer) {
+                _url = url;
+                Task.Run(() => RunAsync(url, referer));
+            }
+
+            private async Task RunAsync(string url, string referer) {
                 try {
-                    HttpWebRequest request = CreateRequest(url, referer);
-                    ThreadPool.QueueUserWorkItem((s) => BeginGetResponse(request));
+                    HttpResponseMessage response = await GetResponseAsync(url, _auth, referer, _cacheLastModifiedTime, _freshConnection, _cancel.Token).ConfigureAwait(false);
+                    SetResponse(response);
+                    Stream responseStream = await OpenResponseStreamAsync(response).ConfigureAwait(false);
+                    if (!StartReading(responseStream)) return;
+                    await ReadToEndAsync(responseStream).ConfigureAwait(false);
                 }
                 catch (Exception ex) {
+                    // Does nothing once the download has ended
                     AbortInternal(ex);
-                }
-            }
-
-            private void BeginGetResponse(HttpWebRequest request) {
-                try {
-                    IAsyncResult requestResult = request.BeginGetResponse(OnGetResponse, request);
-                    PublishRequest(request);
-                    AbortOnTimeout(requestResult, RequestTimeoutMS, "Timed out while waiting for response.");
-                }
-                catch (Exception ex) {
-                    AbortInternal(ex);
-                }
-            }
-
-            private HttpWebRequest CreateRequest(string url, string referer) {
-                lock (_sync) {
-                    _url = url;
-                    HttpWebRequest request = BuildWebRequest(url: url, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime, referer: referer);
-                    // AbortOnTimeout bounds the wait for the response. On .NET 10 request.Timeout also
-                    // bounds BeginGetResponse and would race it with a different error message.
-                    request.Timeout = Timeout.Infinite;
-                    return request;
-                }
-            }
-
-            // If the download was aborted during BeginGetResponse, the request is aborted here
-            // instead (but not once completed, which would close a reusable connection). A meta
-            // refresh request may already have replaced it.
-            private void PublishRequest(HttpWebRequest request) {
-                lock (_sync) {
-                    if (!_aborting) {
-                        if (_request == null) _request = request;
-                    }
-                    else if (!_completed) {
-                        request.Abort();
-                    }
                 }
             }
 
@@ -1355,21 +1440,11 @@ namespace JDP {
                 }
             }
 
-            private void AbortOnTimeout(IAsyncResult asyncResult, int timeoutMS, string message) {
-                ThreadPool.RegisterWaitForSingleObject(asyncResult.AsyncWaitHandle,
-                    (state, timedOut) => {
-                        if (!timedOut) return;
-                        AbortInternal(new Exception(message));
-                    }, null, timeoutMS, true);
-            }
-
-            // Aborting the request and closing the response also fails any read or GetResponse
-            // that another thread is blocked in without holding _sync.
+            // Canceling ends the request or read another thread is waiting for without holding _sync;
+            // closing the stream also ends a ThrottledStream sleep. Called while holding _sync, with
+            // _aborting set, so a step that the cancellation ends right here does nothing more.
             private void Cleanup() {
-                if (_request != null) {
-                    _request.Abort();
-                    _request = null;
-                }
+                _cancel.Cancel();
                 CloseQuietly(_responseStream);
                 _responseStream = null;
                 CloseQuietly(_response);
@@ -1380,93 +1455,67 @@ namespace JDP {
                 if (_aborting) throw new OperationCanceledException("Download has been aborted.");
             }
 
-            private void OnGetResponse(IAsyncResult requestResultParam) {
-                try {
-                    HttpWebResponse response = EndGetResponse(requestResultParam);
-                    if (response == null) return;
-                    if (!StartReading(OpenResponseStream(response))) return;
-                }
-                catch (Exception ex) {
-                    // Once aborted, this only releases the error response (if any)
-                    AbortInternal(TranslateWebException(ex));
-                    return;
-                }
-                OnRead(null);
-            }
-
-            // Returns null if the download has already been aborted, after releasing any
-            // response that completed just before the abort
-            private HttpWebResponse EndGetResponse(IAsyncResult requestResult) {
-                HttpWebRequest request = (HttpWebRequest)requestResult.AsyncState;
+            // Closes the response if the download has already been aborted
+            private void SetResponse(HttpResponseMessage response) {
                 lock (_sync) {
-                    if (!_aborting) {
-                        _response = (HttpWebResponse)request.EndGetResponse(requestResult);
-                        return _response;
-                    }
-                }
-                CloseQuietly(EndGetResponseQuietly(request, requestResult));
-                return null;
-            }
-
-            private static WebResponse EndGetResponseQuietly(HttpWebRequest request, IAsyncResult requestResult) {
-                try {
-                    return request.EndGetResponse(requestResult);
-                }
-                catch (Exception ex) {
-                    // Translating closes the error response of a protocol error
-                    TranslateWebException(ex);
-                    return null;
+                    if (_aborting) CloseQuietly(response);
+                    ThrowIfAborting();
+                    _response = response;
                 }
             }
 
-            // Runs without holding _sync; the HTML path blocks on the network
-            private Stream OpenResponseStream(HttpWebResponse response) {
-                if (GetMIMETypeFromContentType(response.ContentType) == "text/html") {
-                    return OpenHTMLResponseStream(response);
+            // Runs without holding _sync; the HTML path waits for the network
+            private async Task<Stream> OpenResponseStreamAsync(HttpResponseMessage response) {
+                Stream stream = await response.Content.ReadAsStreamAsync(_cancel.Token).ConfigureAwait(false);
+                if (GetMIMETypeFromContentType(GetContentType(response)) == "text/html") {
+                    return await OpenHTMLResponseStreamAsync(response, stream).ConfigureAwait(false);
                 }
-                return CreateThrottledStream(response.GetResponseStream());
+                return CreateThrottledStream(stream);
             }
 
             // Buffers the page so it can be checked for a meta refresh redirect, and follows it if present
-            private Stream OpenHTMLResponseStream(HttpWebResponse response) {
-                string contentType = response.ContentType;
-                string pageUrl = response.ResponseUri.AbsoluteUri;
-                byte[] pageBytes = ReadPageBytes(CreateThrottledStream(response.GetResponseStream()));
+            private async Task<Stream> OpenHTMLResponseStreamAsync(HttpResponseMessage response, Stream stream) {
+                string contentType = GetContentType(response);
+                string pageUrl = response.RequestMessage.RequestUri.AbsoluteUri;
+                byte[] pageBytes = await ReadPageBytesAsync(PublishStream(CreateThrottledStream(stream)), _cancel.Token).ConfigureAwait(false);
                 string html = DetectHTMLEncoding(pageBytes, contentType).GetString(pageBytes);
                 string redirectUrl = GetRedirectUrl(html, pageUrl);
                 if (string.IsNullOrEmpty(redirectUrl)) {
                     return new MemoryStream(pageBytes);
                 }
-                return FollowMetaRefresh(redirectUrl);
+                return await FollowMetaRefreshAsync(redirectUrl).ConfigureAwait(false);
             }
 
-            // The redirect request is published in _request before GetResponse blocks, so
-            // AbortInternal can abort it. Request.Timeout bounds the wait otherwise.
-            private Stream FollowMetaRefresh(string redirectUrl) {
+            // Only one meta refresh is followed. Its request is sent like any other (each redirect hop
+            // checked), and its response headers must arrive within RequestTimeoutMS.
+            private async Task<Stream> FollowMetaRefreshAsync(string redirectUrl) {
                 // Sends nothing to a host that is paused by a rate limit
-                ConnectionManager.GetInstance(redirectUrl).ThrowIfPaused();
-                HttpWebRequest redirectionRequest = BuildWebRequest(url: redirectUrl, auth: GetAuthForURL(_auth, _url, redirectUrl), connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime);
-                ReplaceRequest(redirectionRequest);
-                HttpWebResponse redirectionResponse = (HttpWebResponse)redirectionRequest.GetResponse();
+                ConnectionManager.GetInstanceForHost(ToHTTPUri(redirectUrl).Host).ThrowIfPaused();
+                ReleaseReplacedResponse();
+                HttpResponseMessage redirectionResponse = await GetResponseAsync(redirectUrl, GetAuthForURL(_auth, _url, redirectUrl), null, _cacheLastModifiedTime, _freshConnection, _cancel.Token).ConfigureAwait(false);
                 SetResponse(redirectionResponse);
-                return CreateThrottledStream(redirectionResponse.GetResponseStream());
+                Stream stream = await redirectionResponse.Content.ReadAsStreamAsync(_cancel.Token).ConfigureAwait(false);
+                return CreateThrottledStream(stream);
             }
 
-            // Closes the meta refresh page's response, which the redirect replaces
-            private void ReplaceRequest(HttpWebRequest request) {
+            // Closes the meta refresh page's response, which the redirect replaces; it has been read
+            // to its end, so its connection goes back to the pool for the redirect to reuse
+            private void ReleaseReplacedResponse() {
                 lock (_sync) {
                     ThrowIfAborting();
                     CloseQuietly(_response);
                     _response = null;
-                    _request = request;
                 }
             }
 
-            private void SetResponse(HttpWebResponse response) {
+            // Makes the stream that is about to be read closable by an abort, which also ends a
+            // ThrottledStream sleep in it; closes it and throws if the download has been aborted
+            private Stream PublishStream(Stream stream) {
                 lock (_sync) {
-                    if (_aborting) CloseQuietly(response);
+                    if (_aborting) CloseQuietly(stream);
                     ThrowIfAborting();
-                    _response = response;
+                    _responseStream = stream;
+                    return stream;
                 }
             }
 
@@ -1479,54 +1528,27 @@ namespace JDP {
                     }
                     _responseStream = responseStream;
                     _onResponse(_response);
-                    _buff = new byte[ReadBufferSize];
                     _readStartTicks = TickCount.Now;
                     return true;
                 }
             }
 
-            // BeginRead runs without holding _sync because ThrottledStream may sleep in it. If an
-            // abort closes the stream meanwhile, the sleep ends and BeginRead (or the later EndRead)
-            // fails; AbortInternal then does nothing. Only one read is ever in flight, so _buff is
-            // not shared between reads. A read that completed synchronously (on .NET 10, whenever the
-            // data is already buffered) is handled by the loop in ReadLoop, not by this callback, so
-            // the reads never nest on the stack.
-            private void OnRead(IAsyncResult readResultParam) {
-                if (readResultParam != null && readResultParam.CompletedSynchronously) return;
-                ReadLoop(readResultParam);
-            }
-
-            private void ReadLoop(IAsyncResult readResult) {
-                try {
-                    while (true) {
-                        Stream responseStream = HandleReadResult(readResult);
-                        if (responseStream == null) return;
-                        readResult = responseStream.BeginRead(_buff, 0, _buff.Length, OnRead, null);
-                        if (!readResult.CompletedSynchronously) break;
+            // Each read runs without holding _sync because ThrottledStream may sleep in it. If an
+            // abort cancels it or closes the stream meanwhile, the read fails and AbortInternal then
+            // does nothing. Only one read is ever in flight, so _buff is not shared between reads.
+            private async Task ReadToEndAsync(Stream responseStream) {
+                while (true) {
+                    int bytesRead = await ReadAsync(responseStream, _buff, _cancel.Token).ConfigureAwait(false);
+                    lock (_sync) {
+                        if (_aborting || !ReadChunk(bytesRead)) return;
                     }
-                    AbortOnTimeout(readResult, ReadTimeoutMS, "Timed out while reading response.");
-                }
-                catch (Exception ex) {
-                    AbortInternal(ex);
-                }
-            }
-
-            // Returns the stream to read next, or null when the download has ended (completed or aborted)
-            private Stream HandleReadResult(IAsyncResult readResultParam) {
-                lock (_sync) {
-                    if (_aborting) return null;
-                    if (readResultParam == null || ReadChunk(readResultParam)) return _responseStream;
-                    return null;
                 }
             }
 
             // Called while holding _sync. Returns false when the download has completed. Each
             // read is limited by ReadTimeoutMS, and the whole download by the stream read deadline.
-            private bool ReadChunk(IAsyncResult readResultParam) {
-                int bytesRead = _responseStream.EndRead(readResultParam);
+            private bool ReadChunk(int bytesRead) {
                 if (bytesRead == 0) {
-                    _request = null;
-                    _completed = true;
                     _onComplete();
                     _aborting = true;
                     Cleanup();
@@ -1534,7 +1556,7 @@ namespace JDP {
                 }
                 _totalBytesRead += bytesRead;
                 if (IsPastStreamReadDeadline(_readStartTicks, _responseStream, _totalBytesRead)) {
-                    throw new Exception("Timed out while reading response.");
+                    throw new TimeoutException("Timed out while reading response.");
                 }
                 _onDownloadChunk(_buff, bytesRead);
                 return true;

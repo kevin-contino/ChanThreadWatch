@@ -51,10 +51,7 @@ namespace JDP.Tests.Integration {
             foreach (KeyValuePair<string, byte[]> image in fixture.Images) {
                 CollectionAssert.AreEqual(image.Value, File.ReadAllBytes(Path.Combine(watcher.ThreadDownloadDirectory, FourChanThreadFixture.FileName(image.Key))), image.Key);
             }
-            // MP-2c (W2): .NET 10's HttpWebRequest opens one connection per request (no keep-alive reuse) until the
-            // HttpClient transport (MP-5b). On .NET Framework there were fewer connections than requests:
-            // Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
-            Assert.AreEqual(server.Requests.Count, server.ConnectionCount);
+            Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
         }
 
         [TestMethod]

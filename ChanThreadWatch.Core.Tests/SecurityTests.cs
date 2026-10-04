@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
+using System.Security.Authentication;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using JDP.Tests.Integration;
@@ -17,15 +19,18 @@ namespace JDP.Tests {
             Settings.Load();
         }
 
-        // S1
+        // S1: the transport keeps the default certificate validation and lets the OS pick the TLS version
         [TestMethod]
         public void ThreadWatcherDoesNotDisableCertificateValidation() {
             RuntimeHelpers.RunClassConstructor(typeof(ThreadWatcher).TypeHandle);
 
-            // SYSLIB0014: the HttpWebRequest transport reads this callback until MP-5b
-#pragma warning disable SYSLIB0014
-            Assert.IsNull(ServicePointManager.ServerCertificateValidationCallback);
-#pragma warning restore SYSLIB0014
+            using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero)) {
+                Assert.IsNull(handler.SslOptions.RemoteCertificateValidationCallback);
+                Assert.AreEqual(SslProtocols.None, handler.SslOptions.EnabledSslProtocols);
+                Assert.IsFalse(handler.UseCookies);
+                Assert.IsFalse(handler.AllowAutoRedirect);
+                Assert.AreEqual(DecompressionMethods.None, handler.AutomaticDecompression);
+            }
         }
 
         // S2
@@ -65,7 +70,7 @@ namespace JDP.Tests {
             }
         }
 
-        // Pins framework behavior S2 relies on: HttpWebRequest drops a manually added Authorization header on automatic redirects
+        // S2: an HTTP redirect drops the Authorization header (General.SendAsync drops it on every redirect)
         [TestMethod]
         public void HttpRedirectToOtherOriginDropsCredentials() {
             using (var target = new LoopbackHttpServer())
@@ -146,7 +151,7 @@ namespace JDP.Tests {
         private static void Download(string url, string auth, string referer) {
             var done = new ManualResetEvent(false);
             Exception error = null;
-            General.DownloadAsync(url, auth, referer, null, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
+            General.DownloadAsync(url, auth, referer, false, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
             Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download timed out");
             Assert.IsNull(error, error?.ToString());
         }
