@@ -109,9 +109,9 @@ namespace JDP.Tests {
                 DateTime resume = new DateTime(2026, 10, 3, 14, 32, 5);
 
                 Assert.AreEqual("Rate limited by i.4cdn.org until 14:32:05",
-                    frmChanThreadWatch.FormatWaitStatus(60, null, 0, "i.4cdn.org", resume));
+                    WatcherStatusText.FormatWaitStatus(60, null, 0, "i.4cdn.org", resume));
                 Assert.AreEqual("Error: HTTP 403 Forbidden, waiting 60 seconds",
-                    frmChanThreadWatch.FormatWaitStatus(60, "HTTP 403 Forbidden", 0, "i.4cdn.org", resume));
+                    WatcherStatusText.FormatWaitStatus(60, "HTTP 403 Forbidden", 0, "i.4cdn.org", resume));
             }
             finally {
                 Thread.CurrentThread.CurrentCulture = culture;

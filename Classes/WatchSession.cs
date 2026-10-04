@@ -6,9 +6,13 @@ namespace JDP {
     // The watched threads, the thread list file and the blacklist, without any user interface.
     // Work that has to run on the owner's thread (the UI thread for the main form) is passed to
     // runOnOwnerThread, which must run it synchronously. AddThread must be called on that thread.
+    // Threads that a watcher auto-follows are added through postToOwnerThread, which must queue the
+    // work for the owner's thread and return without waiting, so a watcher's thread never blocks
+    // on the owner's thread (which waits for the watchers when the program exits).
     // The events let the owner show the threads; they are raised on the owner's thread.
     internal class WatchSession {
         private readonly Action<Action> _runOnOwnerThread;
+        private readonly Action<Action> _postToOwnerThread;
         // Null to follow Settings.GetSettingsDirectory(), which can change while running
         private readonly string _settingsDirectory;
         private readonly ThreadListStore _threadListStore = new ThreadListStore();
@@ -18,9 +22,11 @@ namespace JDP {
         private readonly HashSet<string> _blacklist = new HashSet<string>();
         private bool _isLoadingThreadsFromFile;
 
-        internal WatchSession(Action<Action> runOnOwnerThread, string settingsDirectory = null) {
+        internal WatchSession(Action<Action> runOnOwnerThread, Action<Action> postToOwnerThread, string settingsDirectory = null) {
             if (runOnOwnerThread == null) throw new ArgumentNullException("runOnOwnerThread");
+            if (postToOwnerThread == null) throw new ArgumentNullException("postToOwnerThread");
             _runOnOwnerThread = runOnOwnerThread;
+            _postToOwnerThread = postToOwnerThread;
             _settingsDirectory = settingsDirectory;
         }
 
@@ -35,6 +41,10 @@ namespace JDP {
 
         // A loaded thread was linked to its parent thread
         internal event Action<ThreadWatcher> AddedFromChanged;
+
+        // RemoveThreads is removing the watcher: its pre-remove action has run, and it is
+        // unregistered right after
+        internal event Action<ThreadWatcher> ThreadWatcherRemoved;
 
         internal bool IsLoadingThreadsFromFile {
             get { return _isLoadingThreadsFromFile; }
@@ -111,6 +121,7 @@ namespace JDP {
 
             if (watcher == null) {
                 watcher = CreateThreadWatcher(thread, out parentThread);
+                watcher.AddThread += ThreadWatcher_AddThread;
                 OnThreadWatcherCreated(watcher);
             }
 
@@ -180,6 +191,106 @@ namespace JDP {
             else if (thread.StopReason != null) {
                 watcher.Stop(thread.StopReason.Value);
             }
+        }
+
+        // Called on the watcher's thread
+        private void ThreadWatcher_AddThread(object sender, AddThreadEventArgs args) {
+            ThreadWatcher watcher = (ThreadWatcher)sender;
+            ThreadWatcher rootThread = watcher.RootThread;
+            _postToOwnerThread(() => {
+                try {
+                    AddFollowedThread(watcher, args.PageURL);
+                }
+                finally {
+                    // The watcher reserved room for this thread under its root before raising
+                    // the event; the thread is now either added (and counted) or rejected
+                    rootThread.ReleaseDescendantSlot();
+                }
+            });
+        }
+
+        private void AddFollowedThread(ThreadWatcher watcher, string pageURL) {
+            ThreadInfo thread = watcher.CreateChildThreadInfo(pageURL, DateTime.Now, Settings.RecursiveAutoFollow != false);
+            if (IsThreadWatched(thread.URL)) return;
+            if (AddThread(thread)) {
+                SaveThreadListPending = true;
+            }
+        }
+
+        // Removes the given threads that this session watches and that are stopped and not reparsing, in the given order.
+        // preRemoveAction runs on each one first; a failure is logged and the thread is removed anyway.
+        internal void RemoveThreads(IEnumerable<ThreadWatcher> threads, Action<ThreadWatcher> preRemoveAction = null) {
+            foreach (ThreadWatcher watcher in threads) {
+                if (IsRegistered(watcher) && ShouldRemoveThread(watcher)) {
+                    RunPreRemoveAction(preRemoveAction, watcher);
+                    ThreadWatcherRemoved?.Invoke(watcher);
+                    UnregisterThreadWatcher(watcher);
+                }
+            }
+            SaveThreadListPending = true;
+        }
+
+        private bool IsRegistered(ThreadWatcher watcher) {
+            ThreadWatcher registered;
+            return TryGetThreadWatcher(watcher.PageID, out registered) && registered == watcher;
+        }
+
+        private static bool ShouldRemoveThread(ThreadWatcher watcher) {
+            return !watcher.IsRunning && !watcher.IsReparsing;
+        }
+
+        private static void RunPreRemoveAction(Action<ThreadWatcher> preRemoveAction, ThreadWatcher watcher) {
+            if (preRemoveAction == null) return;
+            try { preRemoveAction(watcher); }
+            catch (Exception ex) {
+                Logger.Log(ex.ToString());
+            }
+        }
+
+        // Removes the given threads like RemoveThreads, first moving their folders to the
+        // completed folder if the settings ask for it
+        internal void RemoveCompletedThreads(IEnumerable<ThreadWatcher> threads) {
+            if (Settings.MoveToCompletedFolder != true) {
+                RemoveThreads(threads);
+            }
+            else {
+                EnsureCompletedFolderExists();
+                RemoveThreads(threads, MoveThreadToCompletedFolder);
+            }
+        }
+
+        private static void EnsureCompletedFolderExists() {
+            if (!Directory.Exists(Settings.AbsoluteCompletedDirectory)) {
+                Settings.CompletedFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Completed Threads");
+                Settings.CompletedFolderIsRelative = false;
+            }
+        }
+
+        private static void MoveThreadToCompletedFolder(ThreadWatcher watcher) {
+            string destDir = Path.Combine(Settings.AbsoluteCompletedDirectory,
+                General.GetRelativeDirectoryPath(watcher.ThreadDownloadDirectory, watcher.MainDownloadDirectory));
+            if (Directory.Exists(watcher.ThreadDownloadDirectory)) {
+                if (Directory.Exists(destDir)) {
+                    Directory.Delete(destDir);
+                }
+                if (watcher.Category.Length != 0) {
+                    Directory.CreateDirectory(General.RemoveLastDirectory(destDir));
+                }
+                Directory.Move(watcher.ThreadDownloadDirectory, destDir);
+            }
+            DeleteCategoryFolderIfEmpty(watcher);
+        }
+
+        private static void DeleteCategoryFolderIfEmpty(ThreadWatcher watcher) {
+            string categoryPath = General.RemoveLastDirectory(watcher.ThreadDownloadDirectory);
+            if (categoryPath != watcher.MainDownloadDirectory && Directory.GetFiles(categoryPath).Length == 0 && Directory.GetDirectories(categoryPath).Length == 0) {
+                Directory.Delete(categoryPath);
+            }
+        }
+
+        internal static void DeleteThreadFolder(ThreadWatcher watcher) {
+            if (Directory.Exists(watcher.ThreadDownloadDirectory)) Directory.Delete(watcher.ThreadDownloadDirectory, true);
+            DeleteCategoryFolderIfEmpty(watcher);
         }
 
         private string ThreadListPath {

@@ -59,7 +59,7 @@ namespace JDP.Tests {
         }
 
         private WatchSession CreateSession() {
-            return new WatchSession(a => a(), _dir);
+            return new WatchSession(a => a(), a => a(), _dir);
         }
 
         [TestMethod]
@@ -142,6 +142,123 @@ namespace JDP.Tests {
             CollectionAssert.AreEqual(new[] { "4chan/a/9", "4chan/a/1" }, File.ReadAllLines(blacklistPath));
             Assert.IsTrue(session.IsBlacklisted("4chan/a/1"));
             Assert.IsFalse(session.AddThread(new ThreadInfo { URL = "https://boards.4chan.org/a/thread/1" }));
+            Assert.HasCount(0, session.ThreadWatchers);
+        }
+
+        // A watcher that is never started, with its folder (holding one file) in the download folder
+        private static ThreadWatcher CreateThreadWithFolder(string url, string category, string folderName) {
+            ThreadWatcher watcher = new ThreadWatcher(url) { Category = category };
+            string categoryDir = category.Length != 0 ? Path.Combine(watcher.MainDownloadDirectory, category) : watcher.MainDownloadDirectory;
+            watcher.ThreadDownloadDirectory = Path.Combine(categoryDir, folderName);
+            Directory.CreateDirectory(watcher.ThreadDownloadDirectory);
+            File.WriteAllText(Path.Combine(watcher.ThreadDownloadDirectory, "page.html"), folderName);
+            return watcher;
+        }
+
+        [TestMethod]
+        public void RemovingThreadsRemovesTheGivenThreadsInOrder() {
+            WatchSession session = CreateSession();
+            ThreadWatcher first = new ThreadWatcher("https://boards.4chan.org/a/thread/1");
+            ThreadWatcher second = new ThreadWatcher("https://boards.4chan.org/a/thread/2");
+            ThreadWatcher third = new ThreadWatcher("https://boards.4chan.org/a/thread/3");
+            foreach (ThreadWatcher watcher in new[] { first, second, third }) session.RegisterThreadWatcher(watcher, null);
+            List<string> events = new List<string>();
+            session.ThreadWatcherRemoved += w => events.Add("removed " + w.PageID + " registered=" + session.IsThreadWatched(w.PageURL));
+            session.SaveThreadListPending = false;
+
+            // The pre-remove action fails for the first thread, which is removed anyway
+            session.RemoveThreads(new[] { third, first }, w => {
+                events.Add("pre " + w.PageID);
+                if (w == third) throw new IOException("Locked");
+            });
+
+            CollectionAssert.AreEqual(new[] {
+                "pre 4chan/a/3", "removed 4chan/a/3 registered=True",
+                "pre 4chan/a/1", "removed 4chan/a/1 registered=True"
+            }, events);
+            CollectionAssert.AreEqual(new[] { second }, session.ThreadWatchers);
+            Assert.IsTrue(session.SaveThreadListPending);
+        }
+
+        [TestMethod]
+        public void RemovingCompletedThreadsMovesTheirFoldersToTheCompletedFolder() {
+            string completedFolder = Path.Combine(_dir, "completed");
+            Settings.MoveToCompletedFolder = true;
+            Settings.CompletedFolder = completedFolder;
+            Settings.CompletedFolderIsRelative = false;
+            // Debug builds add a subfolder; if it were missing, the session would switch to the real Documents folder
+            string completedDir = Settings.AbsoluteCompletedDirectory;
+            Directory.CreateDirectory(completedDir);
+            WatchSession session = CreateSession();
+            ThreadWatcher first = CreateThreadWithFolder("https://boards.4chan.org/a/thread/1", "Cat", "a_1");
+            ThreadWatcher second = CreateThreadWithFolder("https://boards.4chan.org/a/thread/2", "Cat", "a_2");
+            ThreadWatcher uncategorized = CreateThreadWithFolder("https://boards.4chan.org/a/thread/3", String.Empty, "a_3");
+            string categoryDir = Path.Combine(first.MainDownloadDirectory, "Cat");
+            foreach (ThreadWatcher watcher in new[] { first, second, uncategorized }) session.RegisterThreadWatcher(watcher, null);
+
+            session.RemoveCompletedThreads(new[] { first });
+
+            Assert.AreEqual("a_1", File.ReadAllText(Path.Combine(completedDir, "Cat", "a_1", "page.html")));
+            Assert.IsFalse(Directory.Exists(first.ThreadDownloadDirectory));
+            // The category folder still holds the second thread
+            Assert.IsTrue(Directory.Exists(categoryDir));
+            Assert.HasCount(2, session.ThreadWatchers);
+
+            session.RemoveCompletedThreads(new[] { second, uncategorized });
+
+            Assert.AreEqual("a_2", File.ReadAllText(Path.Combine(completedDir, "Cat", "a_2", "page.html")));
+            Assert.AreEqual("a_3", File.ReadAllText(Path.Combine(completedDir, "a_3", "page.html")));
+            Assert.IsFalse(Directory.Exists(categoryDir));
+            Assert.IsTrue(Directory.Exists(first.MainDownloadDirectory));
+            Assert.HasCount(0, session.ThreadWatchers);
+            Assert.AreEqual(completedFolder, Settings.CompletedFolder);
+        }
+
+        [TestMethod]
+        public void RemovingIgnoresAThreadTheSessionDoesNotWatch() {
+            WatchSession session = CreateSession();
+            ThreadWatcher watcher = CreateThreadWithFolder("https://boards.4chan.org/a/thread/1", "Cat", "a_1");
+            List<ThreadWatcher> removed = new List<ThreadWatcher>();
+            session.ThreadWatcherRemoved += removed.Add;
+
+            session.RemoveThreads(new[] { watcher }, WatchSession.DeleteThreadFolder);
+
+            Assert.IsTrue(File.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "page.html")));
+            Assert.HasCount(0, removed);
+        }
+
+        [TestMethod]
+        public void RemovingCompletedThreadsKeepsTheFoldersUnlessMovingIsOn() {
+            WatchSession session = CreateSession();
+            ThreadWatcher watcher = CreateThreadWithFolder("https://boards.4chan.org/a/thread/1", "Cat", "a_1");
+            session.RegisterThreadWatcher(watcher, null);
+
+            session.RemoveCompletedThreads(new[] { watcher });
+
+            Assert.IsTrue(File.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "page.html")));
+            Assert.HasCount(0, session.ThreadWatchers);
+        }
+
+        [TestMethod]
+        public void DeletingAThreadFolderDeletesItsEmptyCategoryFolder() {
+            WatchSession session = CreateSession();
+            ThreadWatcher first = CreateThreadWithFolder("https://boards.4chan.org/a/thread/1", "Cat", "a_1");
+            ThreadWatcher second = CreateThreadWithFolder("https://boards.4chan.org/a/thread/2", "Cat", "a_2");
+            ThreadWatcher uncategorized = CreateThreadWithFolder("https://boards.4chan.org/a/thread/3", String.Empty, "a_3");
+            string categoryDir = Path.Combine(first.MainDownloadDirectory, "Cat");
+            foreach (ThreadWatcher watcher in new[] { first, second, uncategorized }) session.RegisterThreadWatcher(watcher, null);
+
+            session.RemoveThreads(new[] { first }, WatchSession.DeleteThreadFolder);
+
+            Assert.IsFalse(Directory.Exists(first.ThreadDownloadDirectory));
+            Assert.IsTrue(Directory.Exists(second.ThreadDownloadDirectory));
+
+            session.RemoveThreads(new[] { second, uncategorized }, WatchSession.DeleteThreadFolder);
+
+            Assert.IsFalse(Directory.Exists(categoryDir));
+            Assert.IsFalse(Directory.Exists(uncategorized.ThreadDownloadDirectory));
+            // The download folder itself is never deleted
+            Assert.IsTrue(Directory.Exists(first.MainDownloadDirectory));
             Assert.HasCount(0, session.ThreadWatchers);
         }
     }

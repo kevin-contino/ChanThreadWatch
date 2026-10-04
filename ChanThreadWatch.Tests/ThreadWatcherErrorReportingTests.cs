@@ -52,27 +52,27 @@ namespace JDP.Tests {
 
         [TestMethod]
         public void WaitStatusShowsTheCheckErrorOrTheFailedFiles() {
-            Assert.AreEqual("Waiting 60 seconds", frmChanThreadWatch.FormatWaitStatus(60, null, 0));
-            Assert.AreEqual("Error: HTTP 403 Forbidden, waiting 60 seconds", frmChanThreadWatch.FormatWaitStatus(60, "HTTP 403 Forbidden", 2));
-            Assert.AreEqual("1 file failed, waiting 5 seconds", frmChanThreadWatch.FormatWaitStatus(5, null, 1));
-            Assert.AreEqual("2 files failed, waiting 5 seconds", frmChanThreadWatch.FormatWaitStatus(5, null, 2));
+            Assert.AreEqual("Waiting 60 seconds", WatcherStatusText.FormatWaitStatus(60, null, 0));
+            Assert.AreEqual("Error: HTTP 403 Forbidden, waiting 60 seconds", WatcherStatusText.FormatWaitStatus(60, "HTTP 403 Forbidden", 2));
+            Assert.AreEqual("1 file failed, waiting 5 seconds", WatcherStatusText.FormatWaitStatus(5, null, 1));
+            Assert.AreEqual("2 files failed, waiting 5 seconds", WatcherStatusText.FormatWaitStatus(5, null, 2));
         }
 
         [TestMethod]
         public void StopStatusShowsTheCheckErrorOrTheFailedFiles() {
-            Assert.AreEqual("Stopped: Download complete", frmChanThreadWatch.FormatStopStatus(StopReason.DownloadComplete, null, 0));
-            Assert.AreEqual("Stopped: Download complete, 2 files failed", frmChanThreadWatch.FormatStopStatus(StopReason.DownloadComplete, null, 2));
-            Assert.AreEqual("Stopped: Error: certificate not trusted for example.com", frmChanThreadWatch.FormatStopStatus(StopReason.Other, "certificate not trusted for example.com", 0));
-            Assert.AreEqual("Stopped: Unknown error", frmChanThreadWatch.FormatStopStatus(StopReason.Other, null, 0));
-            Assert.AreEqual("Stopped: User requested", frmChanThreadWatch.FormatStopStatus(StopReason.UserRequest, "HTTP 500 Internal Server Error", 1));
-            Assert.AreEqual("Stopped: Page not found", frmChanThreadWatch.FormatStopStatus(StopReason.PageNotFound, null, 3));
+            Assert.AreEqual("Stopped: Download complete", WatcherStatusText.FormatStopStatus(StopReason.DownloadComplete, null, 0));
+            Assert.AreEqual("Stopped: Download complete, 2 files failed", WatcherStatusText.FormatStopStatus(StopReason.DownloadComplete, null, 2));
+            Assert.AreEqual("Stopped: Error: certificate not trusted for example.com", WatcherStatusText.FormatStopStatus(StopReason.Other, "certificate not trusted for example.com", 0));
+            Assert.AreEqual("Stopped: Unknown error", WatcherStatusText.FormatStopStatus(StopReason.Other, null, 0));
+            Assert.AreEqual("Stopped: User requested", WatcherStatusText.FormatStopStatus(StopReason.UserRequest, "HTTP 500 Internal Server Error", 1));
+            Assert.AreEqual("Stopped: Page not found", WatcherStatusText.FormatStopStatus(StopReason.PageNotFound, null, 3));
         }
 
         [TestMethod]
         public void StopStatusShowsTheReparseError() {
-            Assert.AreEqual("Stopped: User requested, reparse failed: Access denied", frmChanThreadWatch.AppendReparseError("Stopped: User requested", "Access denied"));
-            Assert.AreEqual("Stopped: User requested", frmChanThreadWatch.AppendReparseError("Stopped: User requested", null));
-            Assert.AreEqual("Stopped: User requested", frmChanThreadWatch.AppendReparseError("Stopped: User requested", String.Empty));
+            Assert.AreEqual("Stopped: User requested, reparse failed: Access denied", WatcherStatusText.AppendReparseError("Stopped: User requested", "Access denied"));
+            Assert.AreEqual("Stopped: User requested", WatcherStatusText.AppendReparseError("Stopped: User requested", null));
+            Assert.AreEqual("Stopped: User requested", WatcherStatusText.AppendReparseError("Stopped: User requested", String.Empty));
         }
 
         // A bug's raw message (e.g. from Path.Combine with a null folder) is not shown; file errors are
