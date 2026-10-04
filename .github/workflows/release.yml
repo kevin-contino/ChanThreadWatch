@@ -3,13 +3,27 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Manual dry run: build, test and hash the release files without publishing.
+  # gh workflow run release.yml -f dry_run=true --ref <branch>
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, test and hash only. A manual run never publishes; false fails the run.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
+env:
+  # The files the release uploads, besides SHA256SUMS.txt
+  RELEASE_FILES: bin/Release/ChanThreadWatch.exe bin/Release/ChanThreadWatch.exe.config bin/Release/ChanThreadWatch.Core.dll
+
 jobs:
+  # Tag pushes only. This is the one job with write access, and the only place that creates a release.
   release:
     name: Build and publish release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     timeout-minutes: 20
     permissions:
@@ -43,18 +57,62 @@ jobs:
       - name: Test
         run: dotnet test ChanThreadWatch.sln -c Release --no-build
 
+      - name: Prepare release notes and checksums
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          DRY_RUN: 'false'
+        run: ./.github/scripts/prepare-release.ps1
+
       - name: Publish release
+        # Repeats the job condition so the publish step cannot run on any other event
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          # Release notes are the user-facing section of CHANGELOG.md for this tag
-          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## $([regex]::Escape($env:TAG))(?=[ \r\n])[^\r\n]*\r?\n(.*?)(?=^## |\z)")
-          if (-not $section.Success) { throw "CHANGELOG.md has no '## $env:TAG' section" }
-          $section.Groups[1].Value.Trim() | Set-Content RELEASE_NOTES.md
-          $files = 'bin/Release/ChanThreadWatch.exe', 'bin/Release/ChanThreadWatch.exe.config', 'bin/Release/ChanThreadWatch.Core.dll'
-          # LF line endings, so sha256sum -c also works on Linux
-          $sums = Get-FileHash $files -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
-          [IO.File]::WriteAllText('SHA256SUMS.txt', ($sums -join "`n") + "`n")
+          $files = $env:RELEASE_FILES -split ' ' | Where-Object { $_ }
           gh release create $env:TAG @files SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --verify-tag --notes-file RELEASE_NOTES.md --title $env:TAG --latest
+
+  # Manual runs only. Read-only token and no publish step: build code and test dependencies run in this job,
+  # and any process in a job can read that job's token, so a dry run never holds a token that can write.
+  dry-run:
+    name: Release dry run (no publish)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse to publish from a manual run
+        shell: pwsh
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if ($env:DRY_RUN -ne 'true') {
+            throw 'A manual run cannot publish a release. Push a v* tag to release, or run again with dry_run=true.'
+          }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - name: Build
+        run: msbuild ChanThreadWatch.sln -restore -p:RestoreLockedMode=true -p:Configuration=Release -v:minimal -nologo
+
+      - name: Test
+        run: dotnet test ChanThreadWatch.sln -c Release --no-build
+
+      # No TAG: the script derives the tag from AssemblyVersion and prints it
+      - name: Prepare release notes and checksums
+        shell: pwsh
+        env:
+          DRY_RUN: 'true'
+        run: ./.github/scripts/prepare-release.ps1
