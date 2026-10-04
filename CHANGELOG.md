@@ -2,6 +2,12 @@
 
 User-visible changes to Chan Thread Watch. Each merged change that users can see, or that changes how the app behaves, raises the minor version by one.
 
+## v1.40.0 (unreleased)
+
+### Security
+
+- A thread address that includes a login, such as `http://name:password@host/...`, no longer leaks that login. Before, image and thumbnail requests to other servers carried it in the Referer header, and links in saved thread pages included it, so sharing a saved thread shared the password. Pages saved before this version keep the old links until the thread is saved again.
+
 ## v1.39.0 (2026-10-03)
 
 This is the first release from the new maintainer (kevin-contino). It continues from SuperGouge's version 1.17.1. Version 1.17.1 cannot find this update by itself, so download it from the releases page.

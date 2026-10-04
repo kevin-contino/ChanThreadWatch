@@ -7,6 +7,18 @@ namespace JDP.Tests {
     [TestClass]
     public class GeneralTests {
         [TestMethod]
+        [DataRow("http://user:secret@boards.example.test/a/thread/1", "http://boards.example.test/a/thread/1")]
+        [DataRow("https://user@boards.example.test:8443/a/thread/1#p2", "https://boards.example.test:8443/a/thread/1#p2")]
+        [DataRow("http://user:p%40ss@127.0.0.1:8080/a/res/1.html?x=1", "http://127.0.0.1:8080/a/res/1.html?x=1")]
+        [DataRow("http://boards.example.test/a/thread/1", "http://boards.example.test/a/thread/1")]
+        [DataRow("not a url", "not a url")]
+        [DataRow("not a url@host", null)]
+        [DataRow(null, null)]
+        public void RemoveUserInfoDropsOnlyTheLogin(string url, string expected) {
+            Assert.AreEqual(expected, General.RemoveUserInfo(url));
+        }
+
+        [TestMethod]
         public void ParseVersionNumberPacksComponents() {
             Assert.AreEqual((1 << 24) | (17 << 16) | (2 << 8), General.ParseVersionNumber("1.17.2"));
             Assert.AreEqual((1 << 24) | (17 << 16) | (2 << 8) | 3, General.ParseVersionNumber("1.17.2.3"));

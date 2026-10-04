@@ -646,8 +646,8 @@ namespace JDP.Tests.Integration {
             Assert.IsEmpty(server.RequestsTo("/third"));
         }
 
-        // A thread URL may carry user:password@ (CleanPageURL keeps it). Pins what the requests
-        // carry: see the MP-5a report for the finding about the Referer.
+        // A thread URL may carry user:password@ (CleanPageURL keeps it). The login is not sent as
+        // credentials, and it never reaches the other host in the Referer.
         [TestMethod]
         public void ThreadURLWithUserInfo() {
             var fixture = new FourChanThreadFixture();
@@ -664,9 +664,11 @@ namespace JDP.Tests.Integration {
 
             Assert.IsNull(server.Requests[0].Header("Authorization"));
             Assert.HasCount(4 + 3, media.Requests);
+            string urlWithoutLogin = "http://127.0.0.1:" + server.Port + FourChanThreadFixture.ThreadPath;
             foreach (RecordedRequest request in media.Requests) {
-                Assert.AreEqual(url, request.Header("Referer"), request.ToString());
+                Assert.AreEqual(urlWithoutLogin, request.Header("Referer"), request.ToString());
                 Assert.IsNull(request.Header("Authorization"), request.ToString());
+                Assert.DoesNotContain("secret", request.Raw, request.ToString());
             }
         }
 
