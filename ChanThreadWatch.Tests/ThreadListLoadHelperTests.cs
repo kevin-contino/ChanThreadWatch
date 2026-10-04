@@ -61,6 +61,14 @@ namespace JDP.Tests {
             InvokeStatic("LinkToParentThread", watcher);
         }
 
+        [TestMethod]
+        public void ADuplicateThreadListEntryIsDetected() {
+            AddWatcher(1, null);
+
+            Assert.IsTrue((bool)InvokeStatic("IsThreadWatched", "https://boards.4chan.org/a/thread/1"));
+            Assert.IsFalse((bool)InvokeStatic("IsThreadWatched", "https://boards.4chan.org/a/thread/2"));
+        }
+
         // B4
         [TestMethod]
         public void LinkingToleratesAMissingAddedFrom() {
