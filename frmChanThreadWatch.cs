@@ -729,17 +729,23 @@ namespace JDP {
 
         private void tmrMaintenance_Tick(object sender, EventArgs e) {
             lock (_downloadProgresses) {
-                if (_downloadProgresses.Count == 0) return;
-                List<long> oldDownloadIDs = new List<long>();
-                long ticksNow = TickCount.Now;
-                foreach (DownloadProgressInfo info in _downloadProgresses.Values) {
-                    if (info.EndTicks != null && ticksNow - info.EndTicks.Value > 5000) {
-                        oldDownloadIDs.Add(info.DownloadID);
-                    }
+                RemoveExpiredDownloadProgresses(_downloadProgresses, TickCount.Now);
+            }
+        }
+
+        // How long a finished download stays in the list, so the Downloads window can show its result
+        internal const long FinishedDownloadHoldMilliseconds = 5000;
+
+        // Removes the downloads that finished more than the hold time ago; the caller holds the lock
+        internal static void RemoveExpiredDownloadProgresses(Dictionary<long, DownloadProgressInfo> downloadProgresses, long ticksNow) {
+            List<long> oldDownloadIDs = new List<long>();
+            foreach (DownloadProgressInfo info in downloadProgresses.Values) {
+                if (info.EndTicks != null && ticksNow - info.EndTicks.Value > FinishedDownloadHoldMilliseconds) {
+                    oldDownloadIDs.Add(info.DownloadID);
                 }
-                foreach (long downloadID in oldDownloadIDs) {
-                    _downloadProgresses.Remove(downloadID);
-                }
+            }
+            foreach (long downloadID in oldDownloadIDs) {
+                downloadProgresses.Remove(downloadID);
             }
         }
         
@@ -828,12 +834,7 @@ namespace JDP {
         }
 
         private void ThreadWatcher_DownloadStart(object sender, DownloadStartEventArgs args) {
-            DownloadProgressInfo info = new DownloadProgressInfo();
-            info.DownloadID = args.DownloadID;
-            info.URL = args.URL;
-            info.TryNumber = args.TryNumber;
-            info.StartTicks = TickCount.Now;
-            info.TotalSize = args.TotalSize;
+            DownloadProgressInfo info = StartDownloadProgress(args, TickCount.Now);
             lock (_downloadProgresses) {
                 _downloadProgresses[args.DownloadID] = info;
             }
@@ -852,11 +853,31 @@ namespace JDP {
             lock (_downloadProgresses) {
                 DownloadProgressInfo info;
                 if (!_downloadProgresses.TryGetValue(args.DownloadID, out info)) return;
-                info.EndTicks = TickCount.Now;
-                info.DownloadedSize = args.DownloadedSize;
-                info.TotalSize = args.DownloadedSize;
-                _downloadProgresses[args.DownloadID] = info;
+                _downloadProgresses[args.DownloadID] = EndDownloadProgress(info, args, TickCount.Now);
             }
+        }
+
+        internal static DownloadProgressInfo StartDownloadProgress(DownloadStartEventArgs args, long ticksNow) {
+            return new DownloadProgressInfo {
+                DownloadID = args.DownloadID,
+                URL = args.URL,
+                TryNumber = args.TryNumber,
+                StartTicks = ticksNow,
+                TotalSize = args.TotalSize
+            };
+        }
+
+        // The first end wins, so a later end of the same download cannot turn Done into Failed. A
+        // failed download keeps its announced size; a successful one gets its final size.
+        internal static DownloadProgressInfo EndDownloadProgress(DownloadProgressInfo info, DownloadEndEventArgs args, long ticksNow) {
+            if (info.EndTicks != null) return info;
+            info.EndTicks = ticksNow;
+            info.DownloadedSize = args.DownloadedSize;
+            if (args.IsSuccessful) {
+                info.TotalSize = args.DownloadedSize;
+            }
+            info.IsSuccessful = args.IsSuccessful;
+            return info;
         }
 
         private bool AddThread(string pageURL) {

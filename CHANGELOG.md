@@ -10,6 +10,10 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 - Windows 10 (version 1607 or later) or Windows 11 is required. On Windows on ARM, `ChanThreadWatch-win-arm64.exe` needs Windows 11, or Windows 10 version 21H2 or later, as listed in the .NET 10 supported systems. 32-bit Windows, Windows 7 and Windows 8.1 are no longer supported.
 - To upgrade, put the new exe in the folder of the old one. Your settings, thread list and saved logins carry over, also when the new exe has a different name. You can then delete the old `ChanThreadWatch.exe`, `ChanThreadWatch.exe.config` and `ChanThreadWatch.Core.dll`.
 
+### Changed
+
+- The Downloads window keeps each finished download listed for about 5 seconds, marked "Done" or "Failed" in the Progress column. A successful download shows its final size. Before, small files often finished between two updates of the list, so the list looked empty while the title showed a download speed. Downloads that fail before the transfer starts (for example a 404 or a connection error) are still not listed.
+
 ### Security
 
 - A thread address that includes a login, such as `http://name:password@host/...`, no longer leaks that login. Before, image and thumbnail requests to other servers carried it in the Referer header, and links in saved thread pages included it, so sharing a saved thread shared the password. Pages saved before this version keep the old links until the thread is saved again.
