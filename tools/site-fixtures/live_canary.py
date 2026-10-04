@@ -3,7 +3,7 @@
 
 For each site, fetches the board index, picks the first thread link, fetches that thread into a
 temporary folder outside the repository and runs sanitize_site_fixture.py --dry-run on it. That
-runs the real site helper (from bin/Release/ChanThreadWatch.exe) on the live page and on its
+runs the real site helper (from bin/Release/ChanThreadWatch.Core.dll) on the live page and on its
 sanitized form, and checks that the results correspond. A site fails if the fetch fails, the
 verification fails, the page is not a thread page, or the helper finds no images.
 

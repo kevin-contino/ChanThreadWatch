@@ -4,35 +4,34 @@
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
-    <RootNamespace>JDP.Tests</RootNamespace>
+    <AssemblyName>ChanThreadWatch.Core</AssemblyName>
+    <RootNamespace>JDP</RootNamespace>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- The explicit .net48 reference package is used everywhere, so the lock file does not depend on whether the machine has the targeting pack -->
     <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Provides .NET 4.8 reference assemblies so the build does not need the Developer Pack installed -->
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
-    <PackageReference Include="MSTest.TestAdapter" Version="4.4.1" />
-    <PackageReference Include="MSTest.TestFramework" Version="4.4.1" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- System.Drawing is used only for Settings.ClientSize -->
+    <Reference Include="System.Drawing" />
     <Reference Include="System.Security" />
     <Reference Include="System.Web" />
-    <Reference Include="System.Web.Extensions" />
-    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ChanThreadWatch.csproj" />
-    <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+    <EmbeddedResource Include="..\Resources\OfflinePageScript.js" LogicalName="OfflinePageScript.js" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Fixtures\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+    <!-- The forms and the tests use internal members of the session and the watchers -->
+    <InternalsVisibleTo Include="ChanThreadWatch" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Tests" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Core.Tests" />
   </ItemGroup>
 
 </Project>

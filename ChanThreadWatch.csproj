@@ -6,6 +6,8 @@
     <ProductVersion>9.0.30729</ProductVersion>
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{1DAC6953-5A72-45F4-8677-3F2B0A15F32A}</ProjectGuid>
+    <!-- Pinned so the locked restore in CI does not depend on the build tools' default -->
+    <RuntimeIdentifiers>win;win-arm64;win-x64;win-x86</RuntimeIdentifiers>
     <OutputType>WinExe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>JDP</RootNamespace>
@@ -13,6 +15,7 @@
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ApplicationIcon>ChanThreadWatch.ico</ApplicationIcon>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -50,14 +53,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Classes\GUI.cs" />
-    <Compile Include="Classes\HTMLParser.cs" />
-    <Compile Include="Classes\Logger.cs" />
-    <Compile Include="Classes\OfflinePageScript.cs" />
-    <Compile Include="Classes\SavedPageSweep.cs" />
-    <Compile Include="Classes\Other.cs" />
-    <Compile Include="Classes\SiteHelpers.cs" />
-    <Compile Include="Classes\General.cs" />
-    <Compile Include="Classes\ThreadWatcher.cs" />
     <Compile Include="frmChanThreadWatch.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -102,9 +97,6 @@
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
       <SubType>Designer</SubType>
     </EmbeddedResource>
-    <EmbeddedResource Include="Resources\OfflinePageScript.js">
-      <LogicalName>OfflinePageScript.js</LogicalName>
-    </EmbeddedResource>
     <Compile Include="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
       <DependentUpon>Resources.resx</DependentUpon>
@@ -123,12 +115,12 @@
       <DependentUpon>Settings.settings</DependentUpon>
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
-    <Compile Include="Classes\Settings.cs" />
-    <Compile Include="Classes\StoredAuth.cs" />
-    <Compile Include="Classes\TextFile.cs" />
-    <Compile Include="Classes\ThreadListFile.cs" />
-    <Compile Include="Classes\WatcherStatusText.cs" />
-    <Compile Include="Classes\WatchSession.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="ChanThreadWatch.Core\ChanThreadWatch.Core.csproj">
+      <Project>{6F0C2B5E-3D41-4C8A-9E27-1B5A8D3C7F90}</Project>
+      <Name>ChanThreadWatch.Core</Name>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <Content Include="ChanThreadWatch.ico" />

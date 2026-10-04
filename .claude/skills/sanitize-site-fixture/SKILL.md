@@ -18,7 +18,7 @@ Site fixtures are real thread markup with every value replaced by a placeholder.
 
 ## Steps
 
-1. **Build** the app in Release, because the sanitizer runs the real site helpers from `bin/Release/ChanThreadWatch.exe`. Use MSBuild, as described in the README.
+1. **Build** the app in Release, because the sanitizer runs the real site helpers from `bin/Release/ChanThreadWatch.Core.dll`. Use MSBuild, as described in the README.
 2. **Capture** the thread into the scratchpad:
    - Direct: `curl -s -A "<browser user agent>" "<thread URL>" -o <scratchpad>/<name>-raw.html`
    - Blocked: `cd <scratchpad> && firecrawl scrape "<thread URL>" -f rawHtml -o <name>-raw.html`

@@ -12,9 +12,13 @@ using System.Web;
 
 namespace JDP {
     public static class General {
+        // The version of the host app, set once at startup. This class lives in ChanThreadWatch.Core,
+        // whose own assembly version is not the app's.
+        public static Version HostVersion { get; set; }
+
         public static string Version {
             get {
-                Version ver = Assembly.GetExecutingAssembly().GetName().Version;
+                Version ver = HostVersion ?? throw new InvalidOperationException("General.HostVersion must be set by the host app at startup.");
                 return ver.Major + "." + ver.Minor + "." + ver.Revision;
             }
         }

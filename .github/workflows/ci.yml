@@ -32,7 +32,7 @@ jobs:
 
       # Visual Studio MSBuild is required: the SDK's MSBuild cannot build the forms' non-string resx resources
       - name: Build
-        run: msbuild ChanThreadWatch.sln -restore -p:Configuration=Release -v:minimal -nologo
+        run: msbuild ChanThreadWatch.sln -restore -p:RestoreLockedMode=true -p:Configuration=Release -v:minimal -nologo
 
       - name: Test
         run: dotnet test ChanThreadWatch.sln -c Release --no-build --filter "TestCategory!=UI" --logger trx --results-directory TestResults

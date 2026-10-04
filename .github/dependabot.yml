@@ -8,6 +8,7 @@ updates:
   - package-ecosystem: nuget
     directories:
       - /
+      - /ChanThreadWatch.Core
       - /ChanThreadWatch.Tests
     schedule:
       interval: weekly
