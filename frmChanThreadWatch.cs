@@ -659,7 +659,8 @@ namespace JDP {
 
         private void btnAbout_Click(object sender, EventArgs e) {
             MessageBox.Show(this, String.Format("Chan Thread Watch{0}Version {1} ({2}){0}{0}Original Author: JDP (jart1126@yahoo.com){0}http://sites.google.com/site/chanthreadwatch/" +
-                                                "{0}{0}Maintained by: SuperGouge (https://github.com/SuperGouge){0}{3}",
+                                                "{0}{0}Previously maintained by: SuperGouge (https://github.com/SuperGouge)" +
+                                                "{0}Maintained by: kevin-contino (https://github.com/kevin-contino){0}{3}",
                 Environment.NewLine, General.Version, General.ReleaseDate, General.ProgramURL), "About",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -1572,31 +1573,19 @@ namespace JDP {
         }
 
         private void CheckForUpdateThread() {
-            string html;
+            string json;
             try {
-                html = General.DownloadPageToString(General.ProgramURL);
+                json = General.DownloadPageToString(General.LatestReleaseAPIURL);
             }
             catch {
                 return;
             }
-            string latestStr = General.NormalizeUpdateVersion(ParseLatestVersionString(html), General.Version);
+            string latestStr = General.NormalizeUpdateVersion(General.ParseReleaseTagName(json), General.Version);
             if (latestStr == null) return;
             Settings.LastUpdateCheck = DateTime.Now.Date;
             if (General.ParseVersionNumber(latestStr) > GetCurrentVersionNumber()) {
                 PromptForUpdate(latestStr);
             }
-        }
-
-        // Returns the raw version tag text, or null if the latest release version can't be found in the page.
-        private static string ParseLatestVersionString(string html) {
-            var htmlParser = new HTMLParser(html);
-            HTMLTagRange labelLatestDivTagRange = htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                htmlParser.FindStartTags("div"), t => HTMLParser.ClassAttributeValueHas(t, "label-latest"))));
-            if (labelLatestDivTagRange == null) return null;
-            HTMLTagRange versionSpanTagRange = htmlParser.CreateTagRange(Enumerable.FirstOrDefault(Enumerable.Where(
-                htmlParser.FindStartTags(labelLatestDivTagRange, "span"), t => HTMLParser.ClassAttributeValueHas(t, "css-truncate-target"))));
-            if (versionSpanTagRange == null) return null;
-            return htmlParser.GetInnerHTML(versionSpanTagRange);
         }
 
         private static int GetCurrentVersionNumber() {

@@ -27,6 +27,16 @@ namespace JDP.Tests {
             Assert.IsGreaterThan(General.ParseVersionNumber("1.255.255"), General.ParseVersionNumber("2.0.0"));
         }
 
+        [TestMethod]
+        [DataRow("{\"url\":\"x\",\"tag_name\":\"v1.18.0\",\"name\":\"v1.18.0\"}", "v1.18.0")]
+        [DataRow("{\"tag_name\" : \"1.17.2\"}", "1.17.2")]
+        [DataRow("{\"message\":\"Not Found\"}", null)]
+        [DataRow("", null)]
+        [DataRow(null, null)]
+        public void ParseReleaseTagNameReadsTagFromReleasesApi(string json, string expected) {
+            Assert.AreEqual(expected, General.ParseReleaseTagName(json));
+        }
+
         // B5 / S7
         [TestMethod]
         [DataRow("v1.17.2", "1.17.2")]

@@ -44,11 +44,15 @@ namespace JDP {
         public const string DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
         public static string ReleaseDate {
-            get { return "2019-Jan-13"; }
+            get { return "2026-Oct-03"; }
         }
 
         public static string ProgramURL {
-            get { return "https://github.com/SuperGouge/ChanThreadWatch/releases"; }
+            get { return "https://github.com/kevin-contino/ChanThreadWatch/releases"; }
+        }
+
+        public static string LatestReleaseAPIURL {
+            get { return "https://api.github.com/repos/kevin-contino/ChanThreadWatch/releases/latest"; }
         }
 
         public static string WikiURL {
@@ -728,6 +732,13 @@ namespace JDP {
         private const int MaxUpdateMajorVersionJump = 1;
 
         private static readonly int[] _versionComponentMaximums = { 0x7F, 0xFF, 0xFF, 0xFF };
+
+        // Returns the tag_name of a GitHub releases API response, or null if it is missing.
+        public static string ParseReleaseTagName(string json) {
+            if (json == null) return null;
+            Match match = Regex.Match(json, @"""tag_name""\s*:\s*""([^""\\]*)""");
+            return match.Success ? match.Groups[1].Value : null;
+        }
 
         // Returns a release tag (e.g. "v1.17.2") as a plain version string ("1.17.2"), or null if
         // the tag is not a plausible version: one to four numeric components that each fit in
