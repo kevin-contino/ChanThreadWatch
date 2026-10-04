@@ -9,6 +9,7 @@ updates:
     directories:
       - /
       - /ChanThreadWatch.Core
+      - /ChanThreadWatch.Core.Tests
       - /ChanThreadWatch.Tests
     schedule:
       interval: weekly
