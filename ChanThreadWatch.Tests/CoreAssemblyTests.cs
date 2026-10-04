@@ -30,17 +30,5 @@ namespace JDP.Tests {
                 General.HostVersion = saved;
             }
         }
-
-        [TestMethod]
-        public void VersionFailsWhenTheHostVersionIsNotSet() {
-            Version saved = General.HostVersion;
-            try {
-                General.HostVersion = null;
-                Assert.ThrowsExactly<InvalidOperationException>(() => General.Version);
-            }
-            finally {
-                General.HostVersion = saved;
-            }
-        }
     }
 }

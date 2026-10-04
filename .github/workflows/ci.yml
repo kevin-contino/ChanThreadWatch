@@ -83,4 +83,4 @@ jobs:
 
       # Maintainer decision: every app function stays at CCN <= 5 (Designer files and tests excluded)
       - name: Check CCN <= 5
-        run: lizard -l csharp -x "*Designer.cs" -x "./ChanThreadWatch.Tests/*" -x "./ChanThreadWatch.UITests/*" -C 5 -w .
+        run: lizard -l csharp -x "*Designer.cs" -x "./ChanThreadWatch.Tests/*" -x "./ChanThreadWatch.UITests/*" -x "./ChanThreadWatch.*.Tests/*" -C 5 -w .

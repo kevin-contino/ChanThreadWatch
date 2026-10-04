@@ -4,7 +4,7 @@
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
-    <RootNamespace>JDP.UITests</RootNamespace>
+    <RootNamespace>JDP.Tests</RootNamespace>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- The explicit .net48 reference package is used everywhere, so the lock file does not depend on whether the machine has the targeting pack -->
     <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
@@ -15,16 +15,24 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageReference Include="MSTest.TestAdapter" Version="4.4.1" />
     <PackageReference Include="MSTest.TestFramework" Version="4.4.1" />
-    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+    <!-- Reads the site fixture manifest and allowlist -->
+    <PackageReference Include="System.Text.Json" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Builds the app first and copies ChanThreadWatch.exe next to the tests, which launch it -->
-    <ProjectReference Include="..\ChanThreadWatch.csproj" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Web" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\ChanThreadWatch.Core.Tests\Integration\LoopbackHttpServer.cs" Link="LoopbackHttpServer.cs" />
+    <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The fixtures stay in ChanThreadWatch.Tests (tools/site-fixtures and tools/offline-page-script use them there) -->
+    <None Include="..\ChanThreadWatch.Tests\Fixtures\**\*" Link="Fixtures\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

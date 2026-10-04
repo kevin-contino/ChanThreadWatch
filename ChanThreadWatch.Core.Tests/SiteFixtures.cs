@@ -5,9 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Web;
-using System.Web.Script.Serialization;
 
 namespace JDP.Tests {
     // The sanitized real-markup fixtures in Fixtures/sites (made by tools/site-fixtures), their
@@ -59,7 +59,29 @@ namespace JDP.Tests {
         }
 
         private static Dictionary<string, object> ReadJson(string fileName) {
-            return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(Directory, fileName)));
+            using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(Path.Combine(Directory, fileName)))) {
+                return (Dictionary<string, object>)ToObject(document.RootElement);
+            }
+        }
+
+        // The shapes JavaScriptSerializer returned: objects as dictionaries, arrays as object
+        // arrays and whole numbers as int (long if larger)
+        private static object ToObject(JsonElement element) {
+            switch (element.ValueKind) {
+                case JsonValueKind.Object: return element.EnumerateObject().ToDictionary(p => p.Name, p => ToObject(p.Value));
+                case JsonValueKind.Array: return element.EnumerateArray().Select(ToObject).ToArray();
+                case JsonValueKind.String: return element.GetString();
+                case JsonValueKind.Number: return ToNumber(element);
+                case JsonValueKind.True: return true;
+                case JsonValueKind.False: return false;
+                default: return null;
+            }
+        }
+
+        private static object ToNumber(JsonElement element) {
+            if (element.TryGetInt32(out int number)) return number;
+            if (element.TryGetInt64(out long longNumber)) return longNumber;
+            return element.GetDecimal();
         }
 
         public static string[] Strings(object list) => ((IEnumerable)list).Cast<string>().ToArray();
