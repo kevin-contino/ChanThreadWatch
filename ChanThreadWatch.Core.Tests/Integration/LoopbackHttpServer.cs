@@ -14,6 +14,9 @@ namespace JDP.Tests.Integration {
         public Dictionary<string, string> Headers { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public string Raw { get; set; }
 
+        // 1-based number of the TCP connection the request arrived on, in order of acceptance
+        public int ConnectionId { get; set; }
+
         public string Header(string name) {
             string value;
             return Headers.TryGetValue(name, out value) ? value : null;
@@ -56,6 +59,27 @@ namespace JDP.Tests.Integration {
 
         public static LoopbackResponse Text(string text) {
             return Bytes(Encoding.ASCII.GetBytes(text), "text/plain");
+        }
+
+        // A 200 response whose body is sent with chunked transfer encoding, so it has no
+        // Content-Length; the connection is closed afterwards
+        public static LoopbackResponse Chunked(byte[] body, string contentType, int chunkSize = 1000) {
+            if (chunkSize <= 0) throw new ArgumentOutOfRangeException(nameof(chunkSize));
+            var raw = new MemoryStream();
+            WriteASCII(raw, "HTTP/1.1 200 OK\r\nContent-Type: " + contentType + "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+            for (int offset = 0; offset < body.Length; offset += chunkSize) {
+                int length = Math.Min(chunkSize, body.Length - offset);
+                WriteASCII(raw, length.ToString("x") + "\r\n");
+                raw.Write(body, offset, length);
+                WriteASCII(raw, "\r\n");
+            }
+            WriteASCII(raw, "0\r\n\r\n");
+            return new LoopbackResponse { RawBytes = raw.ToArray() };
+        }
+
+        private static void WriteASCII(Stream stream, string text) {
+            byte[] bytes = Encoding.ASCII.GetBytes(text);
+            stream.Write(bytes, 0, bytes.Length);
         }
 
         public static LoopbackResponse StatusOnly(int status, string reason) {
@@ -183,8 +207,8 @@ namespace JDP.Tests.Integration {
                 while (!_disposed) {
                     TcpClient client = _listener.AcceptTcpClient();
                     lock (_clients) _clients.Add(client);
-                    Interlocked.Increment(ref _connectionCount);
-                    new Thread(() => ServeConnection(client)) { IsBackground = true }.Start();
+                    int connectionId = Interlocked.Increment(ref _connectionCount);
+                    new Thread(() => ServeConnection(client, connectionId)) { IsBackground = true }.Start();
                 }
             }
             catch (SocketException) { }
@@ -192,7 +216,7 @@ namespace JDP.Tests.Integration {
             catch (InvalidOperationException) { }
         }
 
-        private void ServeConnection(TcpClient client) {
+        private void ServeConnection(TcpClient client, int connectionId) {
             try {
                 using (client)
                 using (NetworkStream stream = client.GetStream()) {
@@ -200,6 +224,7 @@ namespace JDP.Tests.Integration {
                     while (keepGoing && !_disposed) {
                         RecordedRequest request = ReadRequest(stream);
                         if (request == null) break;
+                        request.ConnectionId = connectionId;
                         lock (_requests) _requests.Add(request);
                         keepGoing = Respond(client, stream, request);
                     }
