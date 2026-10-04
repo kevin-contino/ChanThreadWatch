@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -144,6 +146,27 @@ namespace JDP.Tests {
             General.DownloadAsync(url, auth, referer, null, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
             Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download timed out");
             Assert.IsNull(error, error?.ToString());
+        }
+
+        // A thread URL with a login: the links the saved page makes absolute leave the login out
+        private const string PageWithLogin = "http://user:pw-7Qz@boards.example.test/a/thread/1";
+
+        [TestMethod]
+        public void SavedPageLinksLeaveTheLoginOut() {
+            var replaces = new List<ReplaceInfo>();
+            General.AddOtherReplaces(new HTMLParser("<a href=\"2\">n</a><img src=\"i.jpg\"><link href=\"c.css\">"), PageWithLogin, replaces);
+
+            List<string> links = replaces.Select(r => r.Value).Where(v => v.Contains("boards.example.test")).ToList();
+            Assert.HasCount(3, links);
+            foreach (string link in links) {
+                Assert.DoesNotContain("pw-7Qz", link);
+                Assert.DoesNotContain("user@", link);
+            }
+        }
+
+        [TestMethod]
+        public void LiveFileLinksLeaveTheLoginOut() {
+            Assert.AreEqual("href=\"http://boards.example.test/a/thread/x.jpg\"", ThreadWatcher.GetLiveFileAttribute("href=\"x.jpg\"", PageWithLogin));
         }
     }
 }

@@ -1527,6 +1527,8 @@ namespace JDP {
 
         // Returns the attribute with its URL made absolute, or unchanged if it can't be resolved
         internal static string GetLiveFileAttribute(string attributeHTML, string baseURL) {
+            // The live link in the saved page never carries a login from the thread URL
+            baseURL = General.RemoveUserInfo(baseURL);
             HTMLAttribute attribute = ParseSingleAttribute(attributeHTML);
             string url = (attribute != null && baseURL != null) ? General.GetAbsoluteURL(baseURL, HttpUtility.HtmlDecode(attribute.Value)) : null;
             if (url == null) return attributeHTML;

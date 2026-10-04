@@ -279,9 +279,18 @@ namespace JDP {
                 request.Headers.Add("Authorization", "Basic " + Convert.ToBase64String(encoding.GetBytes(auth)));
             }
             if (!String.IsNullOrEmpty(referer)) {
-                request.Referer = referer;
+                request.Referer = RemoveUserInfo(referer);
             }
             return request;
+        }
+
+        // A thread URL may hold a login (user:password@host). It must never reach another server in the
+        // Referer or a saved page. A value that isn't a URL but might hold a login gives null.
+        public static string RemoveUserInfo(string url) {
+            Uri uri;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return (url != null && url.Contains("@")) ? null : url;
+            if (uri.UserInfo.Length == 0) return url;
+            return uri.GetComponents(UriComponents.AbsoluteUri & ~UriComponents.UserInfo, UriFormat.UriEscaped);
         }
 
         private static string GetUserAgent() {
@@ -864,6 +873,8 @@ namespace JDP {
         // site's markup, or null for no script
         public static void AddOtherReplaces(HTMLParser htmlParser, string pageURL, List<ReplaceInfo> replaceList, string offlineScriptSite) {
             HashSet<int> existingOffsets = new HashSet<int>();
+            // Links made absolute in the saved page never carry a login from the thread URL
+            pageURL = RemoveUserInfo(pageURL);
 
             foreach (ReplaceInfo replace in replaceList) {
                 existingOffsets.Add(replace.Offset);
