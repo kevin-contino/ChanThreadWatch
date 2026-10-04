@@ -21,8 +21,10 @@ namespace JDP {
             using (Process.Start(new ProcessStartInfo(target) { UseShellExecute = true })) { }
         }
 
-        // The test log is only honored as a full local path in the temp folder, so the variable cannot
-        // make the app write anywhere else. Returns null (targets open normally) otherwise.
+        // The test log is only honored as a full local path in the temp folder, so a mis-set variable
+        // does not make the app write somewhere unexpected. This guards against mistakes, not attacks:
+        // whoever can set this variable can also set TMP or start code in the user's session.
+        // Returns null (targets open normally) otherwise.
         internal static string GetTestLogPath() {
             string testLog = Environment.GetEnvironmentVariable(TestLogVariable);
             if (String.IsNullOrEmpty(testLog) || !Path.IsPathFullyQualified(testLog)) return null;

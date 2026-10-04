@@ -110,17 +110,28 @@ namespace JDP {
         }
 
         private static Mutex CreateMutex(string name, bool useDefaultSecurity, MutexSecurity security) {
-            bool createdNew;
             if (useDefaultSecurity) {
                 return new Mutex(false, name);
             }
+            // If the owner exits between the failed create and the open, try again, so the mutex is
+            // never created without its ACL. .NET Framework retried the same way.
+            for (int attempt = 1; attempt < 10; attempt++) {
+                Mutex mutex = TryCreateOrOpenMutex(name, security);
+                if (mutex != null) return mutex;
+            }
+            return MutexAcl.Create(false, name, out _, security);
+        }
+
+        // Returns null if the mutex existed when the create was denied but was gone before the open.
+        private static Mutex TryCreateOrOpenMutex(string name, MutexSecurity security) {
             try {
-                return MutexAcl.Create(false, name, out createdNew, security);
+                return MutexAcl.Create(false, name, out _, security);
             }
             catch (UnauthorizedAccessException) {
                 // The mutex already exists and its ACL denies the full access MutexAcl.Create asks for.
-                // Open it with the default rights instead, as .NET Framework did.
-                return new Mutex(false, name);
+                // Open it with only the rights a wait and a release need.
+                Mutex mutex;
+                return MutexAcl.TryOpenExisting(name, MutexRights.Synchronize | MutexRights.Modify, out mutex) ? mutex : null;
             }
         }
 

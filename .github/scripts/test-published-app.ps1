@@ -46,11 +46,11 @@ function Get-FileStamp([string] $Path) {
 }
 
 # A Portable run must not touch the real settings folder, which may hold a user's settings on a local
-# machine. Its log and thread list are recorded here (read only) and compared after the run.
+# machine. Its log, thread list and settings are recorded here (read only) and compared after the run.
 $realStamps = [ordered]@{}
 if ($Mode -eq 'Portable') {
     $realSettingsDir = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Chan Thread Watch'
-    foreach ($name in 'log.txt', 'threads.txt') {
+    foreach ($name in 'log.txt', 'threads.txt', 'settings.txt') {
         $path = Join-Path $realSettingsDir $name
         $realStamps[$path] = Get-FileStamp $path
     }

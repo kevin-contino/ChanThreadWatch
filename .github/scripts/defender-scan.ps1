@@ -20,7 +20,12 @@ if (-not (Test-Path -LiteralPath $mpCmdRun)) {
     Write-ScanProblem "$mpCmdRun not found; the release files were not scanned"
     return
 }
-& $mpCmdRun -SignatureUpdate
+# A network blip can fail one update, so it is tried again, the last time straight from Microsoft
+# Malware Protection Center (-MMPC)
+foreach ($updateArgs in @('-SignatureUpdate'), @('-SignatureUpdate'), @('-SignatureUpdate', '-MMPC')) {
+    & $mpCmdRun @updateArgs
+    if ($LASTEXITCODE -eq 0) { break }
+}
 if ($LASTEXITCODE -ne 0) {
     Write-ScanProblem "Defender could not update its signatures (MpCmdRun exit code $LASTEXITCODE)"
 }
