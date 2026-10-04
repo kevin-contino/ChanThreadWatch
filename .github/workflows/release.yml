@@ -49,6 +49,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # Release notes are the user-facing section of CHANGELOG.md for this tag
+          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## $([regex]::Escape($env:TAG))(?=[ \r\n])[^\r\n]*\r?\n(.*?)(?=^## |\z)")
+          if (-not $section.Success) { throw "CHANGELOG.md has no '## $env:TAG' section" }
+          $section.Groups[1].Value.Trim() | Set-Content RELEASE_NOTES.md
           $files = 'bin/Release/ChanThreadWatch.exe', 'bin/Release/ChanThreadWatch.exe.config'
           Get-FileHash $files -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } | Set-Content SHA256SUMS.txt
-          gh release create $env:TAG @files SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes --title $env:TAG
+          gh release create $env:TAG @files SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --verify-tag --notes-file RELEASE_NOTES.md --title $env:TAG --latest
