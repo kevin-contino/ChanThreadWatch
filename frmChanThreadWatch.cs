@@ -22,6 +22,8 @@ namespace JDP {
         private readonly ThreadListStore _threadListStore = new ThreadListStore();
         private static Dictionary<string, int> _categories = new Dictionary<string, int>();
         private static Dictionary<string, ThreadWatcher> _watchers = new Dictionary<string, ThreadWatcher>();
+        // Each watcher's row in lvThreads; only touched on the UI thread
+        private static Dictionary<ThreadWatcher, ListViewItem> _listViewItems = new Dictionary<ThreadWatcher, ListViewItem>();
         private static HashSet<string> _blacklist = new HashSet<string>();
         private static readonly Dictionary<StopReason, string> _stopReasonTexts = new Dictionary<StopReason, string> {
             { StopReason.UserRequest, "User requested" },
@@ -393,7 +395,7 @@ namespace JDP {
             siteHelper.SetURL(pageURL);
             ThreadWatcher watcher;
             if (_watchers.TryGetValue(siteHelper.GetPageID(), out watcher)) {
-                (((WatcherExtraData)watcher.Tag).ListViewItem).Selected = true;
+                _listViewItems[watcher].Selected = true;
             }
         }
 
@@ -985,7 +987,6 @@ namespace JDP {
         private bool AddThread(ThreadInfo thread) {
             ThreadWatcher watcher = null;
             ThreadWatcher parentThread = null;
-            ListViewItem newListViewItem = null;
             SiteHelper siteHelper = SiteHelpers.GetInstance((new Uri(thread.URL)).Host);
             siteHelper.SetURL(thread.URL);
             string pageID = siteHelper.GetPageID();
@@ -998,12 +999,12 @@ namespace JDP {
 
             if (watcher == null) {
                 watcher = CreateThreadWatcher(thread, out parentThread);
-                newListViewItem = AddThreadListViewItem(watcher);
+                AddThreadListViewItem(watcher);
                 UpdateCategories(watcher.Category);
             }
 
             ApplyThreadInfo(watcher, thread);
-            AttachExtraData(watcher, thread, newListViewItem);
+            AttachExtraData(watcher, thread);
             RegisterThreadWatcher(watcher, parentThread);
             DisplayData(watcher);
 
@@ -1039,15 +1040,15 @@ namespace JDP {
             watcher.AddThread += ThreadWatcher_AddThread;
         }
 
-        private ListViewItem AddThreadListViewItem(ThreadWatcher watcher) {
+        private void AddThreadListViewItem(ThreadWatcher watcher) {
             ListViewItem newListViewItem = new ListViewItem(String.Empty);
             for (int i = 1; i < lvThreads.Columns.Count; i++) {
                 newListViewItem.SubItems.Add(String.Empty);
             }
             newListViewItem.Tag = watcher;
             lvThreads.Items.Add(newListViewItem);
+            _listViewItems[watcher] = newListViewItem;
             lvThreads.Sort();
-            return newListViewItem;
         }
 
         private static void ApplyThreadInfo(ThreadWatcher watcher, ThreadInfo thread) {
@@ -1058,12 +1059,9 @@ namespace JDP {
             watcher.AutoFollow = thread.AutoFollow;
         }
 
-        private static void AttachExtraData(ThreadWatcher watcher, ThreadInfo thread, ListViewItem newListViewItem) {
+        private static void AttachExtraData(ThreadWatcher watcher, ThreadInfo thread) {
             if (thread.ExtraData == null) {
                 thread.ExtraData = watcher.Tag as WatcherExtraData ?? new WatcherExtraData { AddedOn = DateTime.Now };
-            }
-            if (newListViewItem != null) {
-                thread.ExtraData.ListViewItem = newListViewItem;
             }
             watcher.Tag = thread.ExtraData;
         }
@@ -1100,6 +1098,7 @@ namespace JDP {
                     RunPreRemoveAction(preRemoveAction, watcher);
                     UpdateCategories(watcher.Category, true);
                     lvThreads.Items.RemoveAt(i);
+                    _listViewItems.Remove(watcher);
                     _watchers.Remove(watcher.PageID);
                 }
                 else {
@@ -1209,7 +1208,9 @@ namespace JDP {
         }
 
         private void SetSubItemText(ThreadWatcher watcher, ColumnIndex columnIndex, string text) {
-            ListViewItem item = ((WatcherExtraData)watcher.Tag).ListViewItem;
+            ListViewItem item;
+            // A status callback queued before the thread was removed has no row to update
+            if (!_listViewItems.TryGetValue(watcher, out item)) return;
             var subItem = item.SubItems[(int)columnIndex];
             if (subItem.Text != text) {
                 subItem.Text = text;
@@ -1429,6 +1430,8 @@ namespace JDP {
             try {
                 thread.SaveDir = thread.SaveDir.Length != 0 ? General.GetAbsoluteDirectoryPath(thread.SaveDir, Settings.AbsoluteDownloadDirectory) : null;
                 Invoke(() => {
+                    // A second entry for the same thread fails the load, so the first one is kept and the file is copied aside
+                    if (IsThreadWatched(thread.URL)) throw new InvalidOperationException("Duplicate entry in the thread list");
                     AddThread(thread);
                 });
                 return true;
@@ -1437,6 +1440,12 @@ namespace JDP {
                 Logger.Log("Unable to load thread " + thread.URL + Environment.NewLine + ex);
                 return false;
             }
+        }
+
+        private static bool IsThreadWatched(string url) {
+            SiteHelper siteHelper = SiteHelpers.GetInstance((new Uri(url)).Host);
+            siteHelper.SetURL(url);
+            return _watchers.ContainsKey(siteHelper.GetPageID());
         }
 
         private void LinkLoadedThreadsToParents() {
@@ -1672,7 +1681,7 @@ namespace JDP {
         }
 
         private void FocusThread(ThreadWatcher watcher) {
-            ListViewItem item = ((WatcherExtraData)watcher.Tag).ListViewItem;
+            ListViewItem item = _listViewItems[watcher];
             lvThreads.SelectedItems.Clear();
             lvThreads.Select();
             item.Selected = true;

@@ -55,6 +55,17 @@ namespace JDP {
         }
     }
 
+    public class WatcherExtraData {
+        public DateTime AddedOn { get; set; }
+        public DateTime? LastImageOn { get; set; }
+        public bool HasDownloadedPage { get; set; }
+        public bool PreviousDownloadWasPage { get; set; }
+        public string AddedFrom { get; set; }
+        // Saved logins that couldn't be decrypted, written back unchanged until a new login is set
+        public string UndecryptablePageAuth { get; set; }
+        public string UndecryptableImageAuth { get; set; }
+    }
+
     public class ThreadInfo {
         public string URL { get; set; }
         public string PageAuth { get; set; }
