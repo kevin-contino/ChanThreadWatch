@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Test tool, not shipped: checks that saved logins written by the .NET Framework 4.8 app decrypt in the
+       .NET 10 app and the reverse. Run by .github/scripts/test-stored-auth-cross-runtime.ps1. -->
+  <PropertyGroup>
+    <TargetFrameworks>net48;net10.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>JDP</RootNamespace>
+    <AssemblyName>StoredAuthCheck</AssemblyName>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- The explicit .net48 reference package is used, so the lock file does not depend on whether the machine has the targeting pack -->
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+  </PropertyGroup>
+
+  <!-- .NET Framework 4.8: Core is net10.0 only, so the tool compiles the same StoredAuth.cs (and TextFile.cs, which it
+       uses) itself, as the 4.8 app did -->
+  <ItemGroup Condition=" '$(TargetFramework)' == 'net48' ">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Security" />
+    <Compile Include="..\..\ChanThreadWatch.Core\StoredAuth.cs" Link="Core\StoredAuth.cs" />
+    <Compile Include="..\..\ChanThreadWatch.Core\TextFile.cs" Link="Core\TextFile.cs" />
+  </ItemGroup>
+
+  <!-- .NET 10: the real Core, so its Settings and ThreadListFile read and write the files -->
+  <ItemGroup Condition=" '$(TargetFramework)' == 'net10.0' ">
+    <ProjectReference Include="..\..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+  </ItemGroup>
+
+</Project>

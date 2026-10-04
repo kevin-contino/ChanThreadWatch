@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -9,6 +10,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace JDP.Tests {
     // S6: saved logins are encrypted at rest with DPAPI. All credentials here are fake.
     [TestClass]
+    [SupportedOSPlatform("windows")]
     public class StoredAuthTests {
         private const string FakePageAuth = "fakepageuser:fakepagepass";
         private const string FakeImageAuth = "fakeimageuser:fakeimagepass";

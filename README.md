@@ -10,16 +10,16 @@ For documentation, changelog and any other information, please visit the wiki: [
 
 ## Building and testing
 
-Requires Visual Studio (or Build Tools) MSBuild with the .NET SDK component, and the .NET SDK for `dotnet test`. The .NET Framework 4.8 reference assemblies come from NuGet, so the Developer Pack is not needed.
+Requires the .NET 10 SDK on Windows. The app targets `net10.0-windows`; `ChanThreadWatch.Core` targets `net10.0`.
 
 ```
-msbuild ChanThreadWatch.sln -restore -p:Configuration=Release
+dotnet build ChanThreadWatch.sln -c Release
 dotnet test ChanThreadWatch.sln -c Release --no-build
 ```
 
 The second command runs every test, including the UI smoke test in `ChanThreadWatch.UITests`. That test launches the built app, so it needs an interactive desktop session. Each run uses a copy of the exe in a temporary folder with its own settings, so it does not change your own settings or thread list. To skip it, add `--filter "TestCategory!=UI"`.
 
-`dotnet build` alone does not work: the SDK's MSBuild cannot compile the forms' non-string `.resx` resources.
+The release exes are self-contained single files, one per architecture: `pwsh .github/scripts/publish-app.ps1` writes `publish/ChanThreadWatch-win-x64.exe` and `publish/ChanThreadWatch-win-arm64.exe`.
 
 A weekly live canary (`.github/workflows/canary.yml`) fetches one current thread per supported site and checks that its site helper still parses it, using the fixture sanitizer in verify mode. It fails when a site changes its markup, and also on fetch errors (shown as `fetch failed (index): HTTP <code>` or `fetch failed (thread): ...`, so an outage is distinguishable from a markup change). To run it locally after a Release build: `python tools/site-fixtures/live_canary.py` (add `--dry-run` to list the sites without fetching).
 

@@ -12,6 +12,12 @@ using System.Web;
 
 namespace JDP {
     public static class General {
+        // .NET has only UTF-8, UTF-16/32, ASCII and Latin-1 built in. Pages and the update check can use other
+        // code pages (Windows-1252, Shift_JIS, ...), and the app's drag and drop uses the system ANSI code page.
+        static General() {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        }
+
         // The version of the host app, set once at startup. This class lives in ChanThreadWatch.Core,
         // whose own assembly version is not the app's.
         public static Version HostVersion { get; set; }
@@ -100,7 +106,24 @@ namespace JDP {
             if (response.StatusCode == HttpStatusCode.NotModified) return new HTTP304Exception();
             string retryAfter = response.Headers["Retry-After"];
             if (IsRateLimitStatus(response.StatusCode, retryAfter != null)) return new HTTPRateLimitedException(response.ResponseUri.Host, ParseRetryAfter(retryAfter, DateTime.UtcNow), ex);
-            return ex;
+            return WithStatusText(response, ex);
+        }
+
+        // Returns the protocol error as an exception that keeps the HTTP status as its message, without
+        // the response; other failures are returned as they are. The response is closed once the error is
+        // handled, and .NET 10 cannot read the status of a closed response (.NET Framework could).
+        internal static WebException WithoutResponse(WebException ex) {
+            HttpWebResponse response = GetProtocolErrorResponse(ex);
+            return response == null ? ex : WithStatusText(response, ex);
+        }
+
+        private static WebException WithStatusText(HttpWebResponse response, Exception ex) {
+            return new WebException(FormatHTTPStatus(response), ex, WebExceptionStatus.ProtocolError, null);
+        }
+
+        // For example "HTTP 403 Forbidden"
+        internal static string FormatHTTPStatus(HttpWebResponse response) {
+            return String.Format("HTTP {0} {1}", (int)response.StatusCode, response.StatusDescription).TrimEnd();
         }
 
         private static bool IsRateLimitStatus(HttpStatusCode code, bool hasRetryAfter) {
@@ -239,8 +262,11 @@ namespace JDP {
                 return DownloadPageToStringUnchecked(url);
             }
             catch (WebException ex) {
+                // Read before TranslateWebException closes the response
+                WebException withoutResponse = WithoutResponse(ex);
                 HTTPRateLimitedException rateLimited = TranslateWebException(ex) as HTTPRateLimitedException;
-                if (rateLimited == null) throw;
+                if (rateLimited == null && withoutResponse == ex) throw;
+                if (rateLimited == null) throw withoutResponse;
                 connectionManager.PauseAndLog(rateLimited.RetryAfter);
                 throw rateLimited;
             }
@@ -262,7 +288,10 @@ namespace JDP {
         }
 
         private static HttpWebRequest BuildWebRequest(string url, string auth = null, string connectionGroupName = null, string referer = null, DateTime? cacheLastModifiedTime = null) {
+            // SYSLIB0014: HttpWebRequest and ServicePointManager stay until the HttpClient transport (MP-5b)
+#pragma warning disable SYSLIB0014
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+#pragma warning restore SYSLIB0014
             if (connectionGroupName != null) {
                 request.ConnectionGroupName = connectionGroupName;
             }
@@ -700,19 +729,35 @@ namespace JDP {
             return null;
         }
 
+        // The longest full path the .NET Framework 4.8 app could create (MAX_PATH less the terminating
+        // null; the app was not long path aware). .NET 10 creates longer paths, but file names are
+        // shortened to fit this limit, so a longer one would name a thread's files differently than
+        // older versions did and download them again.
+        internal const int MaxFilePathLength = 259;
+        private const int ErrorInvalidName = unchecked((int)0x8007007B);
+
         private static bool IsFilePathTooLong(string path) {
+            return path.Length > MaxFilePathLength || !CanCreateFile(path);
+        }
+
+        // False if the file system rejects the path as too long
+        private static bool CanCreateFile(string path) {
             try {
                 using (File.Create(path)) { }
                 try { File.Delete(path); }
                 catch { }
-                return false;
+                return true;
             }
             catch (PathTooLongException) {
-                return true;
+                return false;
             }
             catch (DirectoryNotFoundException) {
                 // Workaround for Mono
-                return true;
+                return false;
+            }
+            catch (IOException ex) when (ex.HResult == ErrorInvalidName) {
+                // A file name longer than 255 characters (.NET Framework threw PathTooLongException)
+                return false;
             }
         }
 
@@ -798,7 +843,7 @@ namespace JDP {
         }
 
         public static ulong Calculate64BitMD5(byte[] bytes) {
-            using (MD5CryptoServiceProvider hashAlgo = new MD5CryptoServiceProvider()) {
+            using (MD5 hashAlgo = MD5.Create()) {
                 return BytesTo64BitXor(hashAlgo.ComputeHash(bytes));
             }
         }

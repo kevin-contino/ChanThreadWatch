@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Security.Authentication;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
@@ -23,6 +25,26 @@ namespace JDP.Tests {
         public void DescribesAFailedSecureChannelWithTheHost() {
             var ex = new WebException("tls", WebExceptionStatus.SecureChannelFailure);
             Assert.AreEqual("secure connection failed for example.com", ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
+        }
+
+        // .NET 10 wraps a failed TLS handshake as UnknownError around an HttpRequestException; the exact shape
+        // was recorded from HttpWebRequest on .NET 10.0.12 against a self-signed certificate
+        [TestMethod]
+        public void DescribesARejectedCertificateOnNet10LikeNetFramework() {
+            var reject = new AuthenticationException("The remote certificate was rejected by the provided RemoteCertificateValidationCallback.");
+            Assert.AreEqual("certificate not trusted for example.com", ThreadWatcher.DescribeDownloadError(Net10TLSFailure(reject), ThreadURL));
+        }
+
+        [TestMethod]
+        public void DescribesAnotherTLSFailureOnNet10LikeNetFramework() {
+            var alert = new AuthenticationException("Authentication failed because the remote party sent a TLS alert: 'ProtocolVersion'.");
+            Assert.AreEqual("secure connection failed for example.com", ThreadWatcher.DescribeDownloadError(Net10TLSFailure(alert), ThreadURL));
+        }
+
+        private static WebException Net10TLSFailure(Exception inner) {
+            const string message = "The SSL connection could not be established, see inner exception.";
+            var httpEx = new HttpRequestException(HttpRequestError.SecureConnectionError, message, inner);
+            return new WebException(message, httpEx, WebExceptionStatus.UnknownError, null);
         }
 
         [TestMethod]

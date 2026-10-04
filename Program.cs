@@ -13,8 +13,8 @@ namespace JDP {
         private static void Main() {
             SetHostVersion();
             InstallExceptionHandlers();
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
+            // Visual styles, text rendering, DPI mode and default font, from the Application* properties in ChanThreadWatch.csproj
+            ApplicationConfiguration.Initialize();
             if (!ObtainMutex()) {
                 MessageBox.Show("Another instance of this program is running.", "Already Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
@@ -77,15 +77,19 @@ namespace JDP {
             SecurityIdentifier sid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
             MutexSecurity security = new MutexSecurity();
             bool useDefaultSecurity = !TryAddAccessRules(security, sid);
-            string name = @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
-                settingsFolder.ToUpperInvariant())).ToString("X16");
-            Mutex mutex = CreateMutex(name, useDefaultSecurity, security);
+            Mutex mutex = CreateMutex(GetMutexName(settingsFolder), useDefaultSecurity, security);
             if (!TryAcquireMutex(mutex)) {
                 return false;
             }
             ReleaseMutex();
             _mutex = mutex;
             return true;
+        }
+
+        // One instance per settings folder. Older versions use the same name, so they exclude each other too.
+        internal static string GetMutexName(string settingsFolder) {
+            return @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
+                settingsFolder.ToUpperInvariant())).ToString("X16");
         }
 
         // Returns false if the platform does not support the access rules (Mono).
@@ -110,7 +114,7 @@ namespace JDP {
             if (useDefaultSecurity) {
                 return new Mutex(false, name);
             }
-            return new Mutex(false, name, out createdNew, security);
+            return MutexAcl.Create(false, name, out createdNew, security);
         }
 
         // Returns false if another process holds the mutex. An abandoned mutex counts as acquired.

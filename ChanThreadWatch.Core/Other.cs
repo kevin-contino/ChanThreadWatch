@@ -305,7 +305,10 @@ namespace JDP {
         }
 
         public string SwapForFreshConnection(string name, string url) {
+            // SYSLIB0014: HttpWebRequest and ServicePointManager stay until the HttpClient transport (MP-5b)
+#pragma warning disable SYSLIB0014
             ServicePoint servicePoint = ServicePointManager.FindServicePoint(new Uri(url));
+#pragma warning restore SYSLIB0014
             try {
                 servicePoint.CloseConnectionGroup(name);
             }
@@ -770,7 +773,7 @@ namespace JDP {
         public HashGeneratorStream(HashType hashType) {
             switch (hashType) {
                 case HashType.MD5:
-                    _hashAlgo = new MD5CryptoServiceProvider();
+                    _hashAlgo = MD5.Create();
                     break;
                 default:
                     throw new Exception("Unsupported hash type.");

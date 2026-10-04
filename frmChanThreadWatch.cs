@@ -299,7 +299,8 @@ namespace JDP {
             }
             else if (e.Data.GetDataPresent("UniformResourceLocator")) {
                 byte[] data = ((MemoryStream)e.Data.GetData("UniformResourceLocator")).ToArray();
-                url = Encoding.Default.GetString(data, 0, General.StrLen(data));
+                // The system ANSI code page, which Encoding.Default was on .NET Framework (it is UTF-8 on .NET 10)
+                url = Encoding.GetEncoding(0).GetString(data, 0, General.StrLen(data));
             }
             url = General.CleanPageURL(url);
             if (url != null) {
@@ -481,7 +482,7 @@ namespace JDP {
                             });
                         }
                         else {
-                            Process.Start(dir);
+                            Shell.Open(dir);
                         }
                     }
                     catch (Exception ex) {
@@ -502,7 +503,7 @@ namespace JDP {
                 string url = watcher.PageURL;
                 ThreadPool.QueueUserWorkItem((s) => {
                     try {
-                        Process.Start(url);
+                        Shell.Open(url);
                     }
                     catch (Exception ex) {
                         Logger.Log(ex.ToString());
@@ -603,7 +604,7 @@ namespace JDP {
         }
         
         private void btnHelp_Click(object sender, EventArgs e) {
-            Process.Start(General.WikiURL);
+            Shell.Open(General.WikiURL);
         }
 
         private void lvThreads_KeyDown(object sender, KeyEventArgs e) {
@@ -1111,7 +1112,7 @@ namespace JDP {
         private void CheckForUpdateThread() {
             string json;
             try {
-                json = General.DownloadPageToString(General.LatestReleaseAPIURL);
+                json = General.DownloadPageToString(GetLatestReleaseAPIURL());
             }
             catch {
                 return;
@@ -1122,6 +1123,17 @@ namespace JDP {
             if (General.ParseVersionNumber(latestStr) > GetCurrentVersionNumber()) {
                 PromptForUpdate(latestStr);
             }
+        }
+
+        // Test seam: UI tests point the update check at a loopback server through this variable. Any
+        // other value is ignored, so it cannot send the check anywhere but this computer.
+        internal const string TestUpdateURLVariable = "CTW_TEST_UPDATE_URL";
+
+        internal static string GetLatestReleaseAPIURL() {
+            string testURL = Environment.GetEnvironmentVariable(TestUpdateURLVariable);
+            return Uri.TryCreate(testURL, UriKind.Absolute, out Uri uri) && uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback
+                ? testURL
+                : General.LatestReleaseAPIURL;
         }
 
         private static int GetCurrentVersionNumber() {
@@ -1142,7 +1154,7 @@ namespace JDP {
                     if (MessageBox.Show(this, "A newer version of Chan Thread Watch is available.  Would you like to open the Chan Thread Watch website?",
                         "Newer Version Found", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
                     {
-                        Process.Start(General.ProgramURL);
+                        Shell.Open(General.ProgramURL);
                     }
                 });
             }

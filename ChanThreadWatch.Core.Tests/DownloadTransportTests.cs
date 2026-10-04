@@ -70,7 +70,10 @@ namespace JDP.Tests {
                 notFound.Body = new byte[4000000];
                 server.Route("/missing", notFound);
                 server.Route("/ok", LoopbackResponse.Text("ok"));
+                // SYSLIB0014: the test pins the HttpWebRequest transport, which stays until MP-5b
+#pragma warning disable SYSLIB0014
                 ServicePointManager.FindServicePoint(new Uri(server.BaseURL())).ConnectionLimit = 1;
+#pragma warning restore SYSLIB0014
                 string group = NewGroup();
 
                 DownloadProbe missing = DownloadProbe.Start(server.URL("/missing"), group);
@@ -122,7 +125,10 @@ namespace JDP.Tests {
                 probe.AssertEndsOnce(Promptly);
                 Assert.AreEqual(1, probe.Completes, probe.Error?.ToString());
                 Assert.AreEqual("ok", probe.BodyText);
-                Assert.AreEqual(1, server.ConnectionCount, "The redirect did not reuse the connection of the replaced response");
+                // MP-2c (W2): .NET 10's HttpWebRequest opens one connection per request until the HttpClient transport
+                // (MP-5b), so the redirect cannot reuse the replaced response's connection. On .NET Framework:
+                // Assert.AreEqual(1, server.ConnectionCount, "The redirect did not reuse the connection of the replaced response");
+                Assert.AreEqual(2, server.ConnectionCount);
             }
         }
 

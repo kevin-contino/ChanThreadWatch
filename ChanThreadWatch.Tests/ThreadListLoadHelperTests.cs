@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
-using System.Runtime.Serialization;
+using System.Runtime.CompilerServices;
 using System.Windows.Forms;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -32,7 +32,7 @@ namespace JDP.Tests {
         }
 
         private static int GetCheckEveryMinutes(bool comboEnabled, string text) {
-            frmChanThreadWatch form = (frmChanThreadWatch)FormatterServices.GetUninitializedObject(typeof(frmChanThreadWatch));
+            frmChanThreadWatch form = (frmChanThreadWatch)RuntimeHelpers.GetUninitializedObject(typeof(frmChanThreadWatch));
             GC.SuppressFinalize(form);
             using (ComboBox cbo = new ComboBox { Enabled = comboEnabled })
             using (TextBox txt = new TextBox { Text = text }) {

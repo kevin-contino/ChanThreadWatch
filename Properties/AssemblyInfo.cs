@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
@@ -20,6 +21,10 @@ using System.Runtime.InteropServices;
 // COM, set the ComVisible attribute to true on that type.
 
 [assembly: ComVisible(false)]
+
+// The SDK generates this attribute only with GenerateAssemblyInfo, which is off because this file is the version source.
+// 7.0 is the SDK's default minimum for net10.0-windows.
+[assembly: SupportedOSPlatform("windows7.0")]
 
 [assembly: InternalsVisibleTo("ChanThreadWatch.Tests")]
 

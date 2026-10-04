@@ -1,9 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <OutputType>WinExe</OutputType>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- Program.Main calls ApplicationConfiguration.Initialize, which applies these.
+         PerMonitor matches the dpiAware True/PM the manifest declared on .NET Framework, and the
+         default font is the .NET Framework one (.NET 10 would use Segoe UI 9), so every form
+         and dialog keeps its size and layout. -->
+    <ApplicationHighDpiMode>PerMonitor</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Microsoft Sans Serif, 8.25pt</ApplicationDefaultFont>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <!-- The release is a single-file exe, so code that needs a file path for an assembly is reported -->
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
     <RootNamespace>JDP</RootNamespace>
     <AssemblyName>ChanThreadWatch</AssemblyName>
     <ApplicationIcon>ChanThreadWatch.ico</ApplicationIcon>
@@ -15,29 +25,31 @@
     <!-- The release and the tests expect bin\<Configuration>\ChanThreadWatch.exe, without a target framework folder -->
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
-    <!-- Same as the old-style project: an AnyCPU exe that prefers 32-bit, and a non-deterministic build.
-         An explicit PlatformTarget also stops the SDK from inferring a win-x86 RuntimeIdentifier for a .NET Framework exe. -->
-    <PlatformTarget>AnyCPU</PlatformTarget>
-    <Prefer32Bit>true</Prefer32Bit>
+    <!-- Same as the old-style project: a non-deterministic build -->
     <Deterministic>false</Deterministic>
     <WarningLevel>4</WarningLevel>
     <DebugSymbols>true</DebugSymbols>
-    <!-- App.config already declares supportedRuntime; this keeps ChanThreadWatch.exe.config a byte copy of it -->
-    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
-    <!-- The old-style project never generated redirects; keep exe.config a copy even if a package conflict appears later -->
-    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <!-- Pinned so the locked restore in CI does not depend on the build tools' default -->
-    <RuntimeIdentifiers>win;win-arm64;win-x64;win-x86</RuntimeIdentifiers>
-    <!-- The explicit .net48 reference package is used everywhere, so the lock file does not depend on whether the machine has the targeting pack -->
-    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <!-- The release architectures (G14). Pinned so the lock file lists their runtime packs, and the locked
+         restore in CI does not depend on the SDK's default -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <!-- The project sits at the repository root, so the default globs would include the other projects, tools and temp -->
     <EnableDefaultItems>false</EnableDefaultItems>
   </PropertyGroup>
 
+  <!-- Release assets: dotnet publish ChanThreadWatch.csproj -c Release -r win-x64 (or win-arm64) gives one
+       self-contained exe that needs no .NET install. A build without a runtime identifier (tests, UI tests)
+       stays framework-dependent. -->
+  <PropertyGroup Condition=" '$(RuntimeIdentifier)' != '' ">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugType>full</DebugType>
-    <!-- The old-style project set latest for Debug only; Release uses the net48 default (7.3) -->
+    <!-- The old-style project set latest for Debug only; Release uses the SDK default for the target framework -->
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
@@ -46,13 +58,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Provides .NET 4.8 reference assemblies so the build does not need the Developer Pack installed -->
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="System.Security" />
-    <Reference Include="System.Web" />
+    <!-- .NET Framework's casing and comparison rules (Windows NLS) instead of ICU. Without it, ToUpperInvariant and
+         OrdinalIgnoreCase map more characters (e.g. Greek final sigma, Georgian), which changes the single-instance
+         mutex name for such settings folders and could change file names; see RuntimeMigrationTests. -->
+    <RuntimeHostConfigurationOption Include="System.Globalization.UseNls" Value="true" />
   </ItemGroup>
 
   <ItemGroup>
@@ -61,6 +70,7 @@
 
   <ItemGroup>
     <Compile Include="Classes\GUI.cs" />
+    <Compile Include="Classes\Shell.cs" />
     <Compile Include="frmChanThreadWatch.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -110,7 +120,6 @@
       <DependentUpon>Resources.resx</DependentUpon>
       <DesignTime>True</DesignTime>
     </Compile>
-    <None Include="App.config" />
     <None Include="app.manifest">
       <SubType>Designer</SubType>
     </None>

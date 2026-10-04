@@ -136,8 +136,12 @@ namespace JDP.UITests {
             Assert.IsTrue(savedSettings.Any(line => line.StartsWith("ColumnWidths=", StringComparison.Ordinal)), "settings.txt was not saved on exit");
         }
 
-        private Window LaunchApp() {
+        // updateCheckURL: the loopback address the app's update check uses instead of GitHub (needs CheckForUpdates=1)
+        private Window LaunchApp(string updateCheckURL = null) {
             var startInfo = new ProcessStartInfo(Path.Combine(_appDir, AppExeName)) { WorkingDirectory = _appDir, UseShellExecute = false };
+            // Folders and web pages the app would open are written to this file instead (see MainWindowSmokeTests.Shell.cs)
+            startInfo.Environment["CTW_TEST_SHELL_LOG"] = ShellLogPath;
+            if (updateCheckURL != null) startInfo.Environment["CTW_TEST_UPDATE_URL"] = updateCheckURL;
             _process = Process.Start(startInfo);
             // FlaUI gets its own handle to the process so that disposing it leaves _process usable
             using (Application app = Application.Attach(_process.Id)) {
@@ -209,15 +213,20 @@ namespace JDP.UITests {
             }
         }
 
-        // Copies only the app's own files, not the test runner's assemblies
+        // The app's framework-dependent build: the exe starts ChanThreadWatch.dll on the installed .NET runtime.
+        // The release is a self-contained single-file exe instead; .github/scripts/test-published-app.ps1 starts that.
+        private static readonly string[] AppFiles = {
+            AppExeName, "ChanThreadWatch.dll", "ChanThreadWatch.runtimeconfig.json", "ChanThreadWatch.deps.json", CoreDllName
+        };
+
+        // Copies only the app's own files, not the test runner's assemblies, so a missing dependency fails here too
         private static void CopyApp(string appDir) {
             string buildDir = AppDomain.CurrentDomain.BaseDirectory;
-            string exePath = Path.Combine(buildDir, AppExeName);
-            if (!File.Exists(exePath)) Assert.Fail("Built app not found at " + exePath);
-            File.Copy(exePath, Path.Combine(appDir, AppExeName));
-            File.Copy(exePath + ".config", Path.Combine(appDir, AppExeName + ".config"));
-            // The same files the release ships, so a missing dependency fails here too
-            File.Copy(Path.Combine(buildDir, CoreDllName), Path.Combine(appDir, CoreDllName));
+            foreach (string file in AppFiles) {
+                string path = Path.Combine(buildDir, file);
+                if (!File.Exists(path)) Assert.Fail("Built app file not found at " + path);
+                File.Copy(path, Path.Combine(appDir, file));
+            }
         }
 
         // A settings.txt in place switches the app to portable mode. The download folder is set so

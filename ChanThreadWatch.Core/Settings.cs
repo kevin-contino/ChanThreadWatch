@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
-using System.Reflection;
 
 namespace JDP {
     public static class Settings {
@@ -218,7 +217,8 @@ namespace JDP {
         public static bool? UseExeDirectoryForSettings { get; set; }
 
         public static string ExeDirectory {
-            get { return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); }
+            // The folder of the app's exe. A single-file app has no assembly file paths, so this does not use Assembly.Location.
+            get { return Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory); }
         }
 
         public static string AppDataDirectory {

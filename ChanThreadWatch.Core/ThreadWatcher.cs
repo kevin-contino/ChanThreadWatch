@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Security.Authentication;
 using System.Threading;
 using System.Web;
 
@@ -87,11 +89,14 @@ namespace JDP {
             // HttpWebRequest uses ThreadPool for asynchronous calls
             General.EnsureThreadPoolMaxThreads(500, 1000);
 
+            // SYSLIB0014: HttpWebRequest and ServicePointManager stay until the HttpClient transport (MP-5b)
+#pragma warning disable SYSLIB0014
             // Shouldn't matter since the limit is supposed to be per connection group
             ServicePointManager.DefaultConnectionLimit = Int32.MaxValue;
 
             // Enable TLS 1.2 on supported environments
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+#pragma warning restore SYSLIB0014
         }
 
         public ThreadWatcher(string pageURL) {
@@ -1442,8 +1447,22 @@ namespace JDP {
             if (webEx == null) return DescribeNonWebError(ex);
             if (webEx.Status == WebExceptionStatus.ProtocolError) return DescribeHTTPError(webEx);
             string format;
-            if (_webExceptionStatusTexts.TryGetValue(webEx.Status, out format)) return String.Format(format, new Uri(url).Host);
+            if (_webExceptionStatusTexts.TryGetValue(GetStatus(webEx), out format)) return String.Format(format, new Uri(url).Host);
             return webEx.Message;
+        }
+
+        // .NET 10's HttpWebRequest reports a failed TLS handshake as UnknownError around an HttpRequestException
+        // (SecureConnectionError), where .NET Framework gave TrustFailure or SecureChannelFailure. It always checks
+        // certificates through its own validation callback, so a rejected certificate is an AuthenticationException
+        // about the certificate.
+        private static WebExceptionStatus GetStatus(WebException webEx) {
+            HttpRequestException httpEx = webEx.InnerException as HttpRequestException;
+            if (httpEx == null || httpEx.HttpRequestError != HttpRequestError.SecureConnectionError) return webEx.Status;
+            return IsCertificateRejection(httpEx.InnerException) ? WebExceptionStatus.TrustFailure : WebExceptionStatus.SecureChannelFailure;
+        }
+
+        private static bool IsCertificateRejection(Exception ex) {
+            return ex is AuthenticationException && ex.Message.IndexOf("certificate", StringComparison.OrdinalIgnoreCase) != -1;
         }
 
         private static string DescribeNonWebError(Exception ex) {
@@ -1454,7 +1473,7 @@ namespace JDP {
         private static string DescribeHTTPError(WebException webEx) {
             HttpWebResponse response = webEx.Response as HttpWebResponse;
             if (response == null) return webEx.Message;
-            return String.Format("HTTP {0} {1}", (int)response.StatusCode, response.StatusDescription).TrimEnd();
+            return General.FormatHTTPStatus(response);
         }
 
         private void EndCheck() {

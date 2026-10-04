@@ -15,6 +15,22 @@ namespace JDP.Tests {
             return "<html><head><meta http-equiv=\"Refresh\" content=\"" + content + "\"></head></html>";
         }
 
+        // MP-2c: names are shortened so the full path fits the 259 characters the .NET Framework app could
+        // create (it was not long path aware). .NET 10 creates longer paths, which would rename files.
+        // Recorded on .NET Framework 4.8: dir 40 -> 218, dir 161 -> 97 (259 in total each).
+        [TestMethod]
+        [DataRow(1)]
+        [DataRow(120)]
+        public void MaximumFileNameLengthKeepsTheNetFrameworkPathLimit(int padding) {
+            string dir = Path.Combine(Path.GetTempPath(), "ctw-len-" + Guid.NewGuid().ToString("N") + new string('x', padding));
+            Directory.CreateDirectory(dir);
+            try {
+                Assert.AreEqual(General.MaxFilePathLength - (dir.Length + 1), General.GetMaximumFileNameLength(dir));
+            }
+            finally {
+                Directory.Delete(dir, true);
+            }
+        }
         [TestMethod]
         [DataRow("0; url=http://example.com/next", "http://example.com/next")]
         [DataRow("5;URL='../up'", "http://a.com/up")]
