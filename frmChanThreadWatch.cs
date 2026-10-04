@@ -21,24 +21,18 @@ namespace JDP {
         private static Dictionary<string, int> _categories = new Dictionary<string, int>();
         // Each watcher's row in lvThreads; only touched on the UI thread
         private static Dictionary<ThreadWatcher, ListViewItem> _listViewItems = new Dictionary<ThreadWatcher, ListViewItem>();
-        private static readonly Dictionary<StopReason, string> _stopReasonTexts = new Dictionary<StopReason, string> {
-            { StopReason.UserRequest, "User requested" },
-            { StopReason.Exiting, "Exiting" },
-            { StopReason.PageNotFound, "Page not found" },
-            { StopReason.DownloadComplete, "Download complete" },
-            { StopReason.IOError, "Error writing to disk" }
-        };
 
         // ReleaseDate property and version in AssemblyInfo.cs should be updated for each release.
 
         public frmChanThreadWatch() {
             // Created before InitializeComponent so control events raised during it never see a null session.
             // MethodInvoker keeps an exception thrown on the UI thread unwrapped for the caller.
-            _session = new WatchSession(a => Invoke(new MethodInvoker(a)));
+            _session = new WatchSession(a => Invoke(new MethodInvoker(a)), a => BeginInvoke(new MethodInvoker(a)));
             _session.ThreadWatcherCreated += Session_ThreadWatcherCreated;
             _session.ThreadWatcherAdded += DisplayData;
             _session.ThreadListLoadStarting += () => UpdateCategories(String.Empty);
             _session.AddedFromChanged += DisplayAddedFrom;
+            _session.ThreadWatcherRemoved += Session_ThreadWatcherRemoved;
             InitializeComponent();
             Icon = Resources.ChanThreadWatchIcon;
             niTrayIcon.Icon = Resources.ChanThreadWatchIcon;
@@ -396,38 +390,7 @@ namespace JDP {
         }
 
         private void btnRemoveCompleted_Click(object sender, EventArgs e) {
-            if (Settings.MoveToCompletedFolder != true) {
-                RemoveThreads(true, false);
-            }
-            else {
-                if (!Directory.Exists(Settings.AbsoluteCompletedDirectory)) {
-                    Settings.CompletedFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Completed Threads");
-                    Settings.CompletedFolderIsRelative = false;
-                }
-                RemoveThreads(true, false, MoveThreadToCompletedFolder);
-            }
-        }
-
-        private static void MoveThreadToCompletedFolder(ThreadWatcher watcher) {
-            string destDir = Path.Combine(Settings.AbsoluteCompletedDirectory,
-                General.GetRelativeDirectoryPath(watcher.ThreadDownloadDirectory, watcher.MainDownloadDirectory));
-            if (Directory.Exists(watcher.ThreadDownloadDirectory)) {
-                if (Directory.Exists(destDir)) {
-                    Directory.Delete(destDir);
-                }
-                if (watcher.Category.Length != 0) {
-                    Directory.CreateDirectory(General.RemoveLastDirectory(destDir));
-                }
-                Directory.Move(watcher.ThreadDownloadDirectory, destDir);
-            }
-            DeleteCategoryFolderIfEmpty(watcher);
-        }
-
-        private static void DeleteCategoryFolderIfEmpty(ThreadWatcher watcher) {
-            string categoryPath = General.RemoveLastDirectory(watcher.ThreadDownloadDirectory);
-            if (categoryPath != watcher.MainDownloadDirectory && Directory.GetFiles(categoryPath).Length == 0 && Directory.GetDirectories(categoryPath).Length == 0) {
-                Directory.Delete(categoryPath);
-            }
+            _session.RemoveCompletedThreads(ListedThreadWatchers);
         }
 
         private void miStop_Click(object sender, EventArgs e) {
@@ -564,7 +527,7 @@ namespace JDP {
         }
 
         private void miRemove_Click(object sender, EventArgs e) {
-            RemoveThreads(false, true);
+            RemoveSelectedThreads();
         }
 
         private void miRemoveAndDeleteFolder_Click(object sender, EventArgs e) {
@@ -573,12 +536,7 @@ namespace JDP {
             {
                 return;
             }
-            RemoveThreads(false, true, DeleteThreadFolder);
-        }
-
-        private static void DeleteThreadFolder(ThreadWatcher watcher) {
-            if (Directory.Exists(watcher.ThreadDownloadDirectory)) Directory.Delete(watcher.ThreadDownloadDirectory, true);
-            DeleteCategoryFolderIfEmpty(watcher);
+            RemoveSelectedThreads(WatchSession.DeleteThreadFolder);
         }
 
         private void miBlacklist_Click(object sender, EventArgs e) {
@@ -650,7 +608,7 @@ namespace JDP {
 
         private void lvThreads_KeyDown(object sender, KeyEventArgs e) {
             if (e.KeyCode == Keys.Delete) {
-                RemoveThreads(false, true);
+                RemoveSelectedThreads();
                 return;
             }
             if (!e.Control) return;
@@ -846,7 +804,7 @@ namespace JDP {
             int failedFileCount = watcher.FailedFileCount;
             string reparseError = watcher.ReparseError;
             BeginInvoke(() => {
-                DisplayStatus(watcher, AppendReparseError(FormatStopStatus(args.StopReason, stopError, failedFileCount), reparseError));
+                DisplayStatus(watcher, WatcherStatusText.AppendReparseError(WatcherStatusText.FormatStopStatus(args.StopReason, stopError, failedFileCount), reparseError));
                 SetupWaitTimer();
                 if (args.StopReason != StopReason.UserRequest && args.StopReason != StopReason.Exiting) {
                     _session.SaveThreadListPending = true;
@@ -900,29 +858,6 @@ namespace JDP {
             }
         }
 
-        private void ThreadWatcher_AddThread(object sender, AddThreadEventArgs args) {
-            ThreadWatcher watcher = (ThreadWatcher)sender;
-            ThreadWatcher rootThread = watcher.RootThread;
-            BeginInvoke(() => {
-                try {
-                    AddFollowedThread(watcher, args.PageURL);
-                }
-                finally {
-                    // The watcher reserved room for this thread under its root before raising
-                    // the event; the thread is now either added (and counted) or rejected
-                    rootThread.ReleaseDescendantSlot();
-                }
-            });
-        }
-
-        private void AddFollowedThread(ThreadWatcher watcher, string pageURL) {
-            ThreadInfo thread = watcher.CreateChildThreadInfo(pageURL, DateTime.Now, Settings.RecursiveAutoFollow != false);
-            if (_session.IsThreadWatched(thread.URL)) return;
-            if (_session.AddThread(thread)) {
-                _session.SaveThreadListPending = true;
-            }
-        }
-
         private bool AddThread(string pageURL) {
             ThreadInfo thread = new ThreadInfo {
                 URL = pageURL,
@@ -960,7 +895,6 @@ namespace JDP {
             watcher.DownloadStart += ThreadWatcher_DownloadStart;
             watcher.DownloadProgress += ThreadWatcher_DownloadProgress;
             watcher.DownloadEnd += ThreadWatcher_DownloadEnd;
-            watcher.AddThread += ThreadWatcher_AddThread;
         }
 
         private void AddThreadListViewItem(ThreadWatcher watcher) {
@@ -974,39 +908,16 @@ namespace JDP {
             lvThreads.Sort();
         }
 
-        private void RemoveThreads(bool removeCompleted, bool removeSelected) {
-            RemoveThreads(removeCompleted, removeSelected, null);
+        // Removes the selected threads, in list order (SelectedItems enumerates by index)
+        private void RemoveSelectedThreads(Action<ThreadWatcher> preRemoveAction = null) {
+            _session.RemoveThreads(new List<ThreadWatcher>(SelectedThreadWatchers), preRemoveAction);
         }
 
-        private void RemoveThreads(bool removeCompleted, bool removeSelected, Action<ThreadWatcher> preRemoveAction) {
-            int i = 0;
-            while (i < lvThreads.Items.Count) {
-                ListViewItem item = lvThreads.Items[i];
-                ThreadWatcher watcher = (ThreadWatcher)item.Tag;
-                if (ShouldRemoveThread(watcher, item, removeCompleted, removeSelected)) {
-                    RunPreRemoveAction(preRemoveAction, watcher);
-                    UpdateCategories(watcher.Category, true);
-                    lvThreads.Items.RemoveAt(i);
-                    _listViewItems.Remove(watcher);
-                    _session.UnregisterThreadWatcher(watcher);
-                }
-                else {
-                    i++;
-                }
-            }
-            _session.SaveThreadListPending = true;
-        }
-
-        private static bool ShouldRemoveThread(ThreadWatcher watcher, ListViewItem item, bool removeCompleted, bool removeSelected) {
-            return (removeCompleted || (removeSelected && item.Selected)) && !watcher.IsRunning && !watcher.IsReparsing;
-        }
-
-        private static void RunPreRemoveAction(Action<ThreadWatcher> preRemoveAction, ThreadWatcher watcher) {
-            if (preRemoveAction == null) return;
-            try { preRemoveAction(watcher); }
-            catch (Exception ex) {
-                Logger.Log(ex.ToString());
-            }
+        // The session is removing the watcher, after its pre-remove action and before unregistering it
+        private void Session_ThreadWatcherRemoved(ThreadWatcher watcher) {
+            UpdateCategories(watcher.Category, true);
+            lvThreads.Items.Remove(_listViewItems[watcher]);
+            _listViewItems.Remove(watcher);
         }
 
         private void BindCheckEveryList() {
@@ -1171,47 +1082,7 @@ namespace JDP {
 
         private void SetWaitStatus(ThreadWatcher watcher) {
             int remainingSeconds = (watcher.MillisecondsUntilNextCheck + 999) / 1000;
-            DisplayStatus(watcher, FormatWaitStatus(remainingSeconds, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitPausedHost, watcher.RateLimitResumeTime));
-        }
-
-        // E.g. "Waiting 60 seconds", "Error: HTTP 403 Forbidden, waiting 60 seconds",
-        // "Rate limited by i.4cdn.org until 14:32:05" or
-        // "2 files failed, waiting 60 seconds"
-        internal static string FormatWaitStatus(int remainingSeconds, string checkError, int failedFileCount, string rateLimitedHost = null, DateTime rateLimitResumeTime = default(DateTime)) {
-            if (checkError != null) return String.Format("Error: {0}, waiting {1} seconds", checkError, remainingSeconds);
-            if (rateLimitedHost != null) return String.Format("Rate limited by {0} until {1:HH:mm:ss}", rateLimitedHost, rateLimitResumeTime);
-            if (failedFileCount > 0) return String.Format("{0}, waiting {1} seconds", FormatFailedFileCount(failedFileCount), remainingSeconds);
-            return String.Format("Waiting {0} seconds", remainingSeconds);
-        }
-
-        // E.g. "Stopped: Download complete", "Stopped: Download complete, 2 files failed" or
-        // "Stopped: Error: HTTP 403 Forbidden"
-        internal static string FormatStopStatus(StopReason stopReason, string stopError, int failedFileCount) {
-            if (stopError != null && IsStopWithoutKnownReason(stopReason)) return "Stopped: Error: " + stopError;
-            string reasonText = GetStopReasonText(stopReason);
-            if (stopReason == StopReason.DownloadComplete && failedFileCount > 0) {
-                reasonText += ", " + FormatFailedFileCount(failedFileCount);
-            }
-            return "Stopped: " + reasonText;
-        }
-
-        // E.g. "Stopped: User requested, reparse failed: Access to the path is denied"
-        internal static string AppendReparseError(string stopStatus, string reparseError) {
-            return !String.IsNullOrEmpty(reparseError) ? stopStatus + ", reparse failed: " + reparseError : stopStatus;
-        }
-
-        private static string GetStopReasonText(StopReason stopReason) {
-            string reasonText;
-            return _stopReasonTexts.TryGetValue(stopReason, out reasonText) ? reasonText : "Unknown error";
-        }
-
-        // stopError is only set for a stop it caused (a one-time download whose page failed stops with Other)
-        private static bool IsStopWithoutKnownReason(StopReason stopReason) {
-            return stopReason == StopReason.Other || stopReason == StopReason.DownloadComplete;
-        }
-
-        private static string FormatFailedFileCount(int failedFileCount) {
-            return String.Format("{0} file{1} failed", failedFileCount, failedFileCount != 1 ? "s" : String.Empty);
+            DisplayStatus(watcher, WatcherStatusText.FormatWaitStatus(remainingSeconds, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitPausedHost, watcher.RateLimitResumeTime));
         }
 
         private void SetReparseStatus(ThreadWatcher watcher, ReparseType reparseType, int completeCount, int totalCount) {
@@ -1290,6 +1161,17 @@ namespace JDP {
                 foreach (ListViewItem item in lvThreads.SelectedItems) {
                     yield return (ThreadWatcher)item.Tag;
                 }
+            }
+        }
+
+        // Every row's watcher, in list order; a copy, so rows can be removed while it is enumerated
+        private List<ThreadWatcher> ListedThreadWatchers {
+            get {
+                List<ThreadWatcher> watchers = new List<ThreadWatcher>();
+                foreach (ListViewItem item in lvThreads.Items) {
+                    watchers.Add((ThreadWatcher)item.Tag);
+                }
+                return watchers;
             }
         }
 

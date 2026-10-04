@@ -35,7 +35,7 @@ namespace JDP.Tests.Integration {
             watcher.WaitStatus += (s, e) => {
                 failedCounts.Add(watcher.FailedFileCount);
                 rateLimitedHosts.Add(watcher.RateLimitedHost);
-                statuses.Add(frmChanThreadWatch.FormatWaitStatus(60, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitPausedHost, watcher.RateLimitResumeTime));
+                statuses.Add(WatcherStatusText.FormatWaitStatus(60, watcher.CheckError, watcher.FailedFileCount, watcher.RateLimitPausedHost, watcher.RateLimitResumeTime));
             };
 
             RunChecks(watcher, 2, check => {

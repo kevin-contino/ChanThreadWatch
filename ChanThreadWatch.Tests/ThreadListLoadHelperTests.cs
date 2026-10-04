@@ -25,7 +25,7 @@ namespace JDP.Tests {
             _dir = Path.Combine(Path.GetTempPath(), "ctw-migrate-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_dir);
             Settings.Load(Path.Combine(_dir, "missing.txt"));
-            _session = new WatchSession(a => a(), _dir);
+            _session = new WatchSession(a => a(), a => a(), _dir);
         }
 
         [TestCleanup]
