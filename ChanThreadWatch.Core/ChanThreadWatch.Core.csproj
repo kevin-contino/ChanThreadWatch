@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>ChanThreadWatch.Core</AssemblyName>
+    <RootNamespace>JDP</RootNamespace>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Provides .NET 4.8 reference assemblies so the build does not need the Developer Pack installed -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- System.Drawing is used only for Settings.ClientSize -->
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\Resources\OfflinePageScript.js" LogicalName="OfflinePageScript.js" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The forms and the tests use internal members of the session and the watchers -->
+    <InternalsVisibleTo Include="ChanThreadWatch" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Tests" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Core.Tests" />
+  </ItemGroup>
+
+</Project>

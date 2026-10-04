@@ -1,9 +1,9 @@
-# Runs a site helper from the built ChanThreadWatch.exe on a saved page and prints what it finds
+# Runs a site helper from the built ChanThreadWatch.Core.dll on a saved page and prints what it finds
 # as JSON: whether it is a thread page, the images, the thumbnails and the cross links.
 # Used by sanitize_site_fixture.py to check that a fixture gives the same results as its capture.
 # Requires Windows PowerShell 5.1 (the app targets .NET Framework 4.8).
 param(
-    [Parameter(Mandatory = $true)][string]$Exe,
+    [Parameter(Mandatory = $true)][string]$CoreDll,
     [Parameter(Mandatory = $true)][string]$Helper,
     [Parameter(Mandatory = $true)][string]$Url,
     [Parameter(Mandatory = $true)][string]$Html
@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
-$assembly = [Reflection.Assembly]::LoadFrom($Exe)
+$assembly = [Reflection.Assembly]::LoadFrom($CoreDll)
 $helperType = $assembly.GetType("JDP.$Helper", $true)
 $parserType = $assembly.GetType('JDP.HTMLParser', $true)
 $thumbnailType = $assembly.GetType('JDP.ThumbnailInfo', $true)

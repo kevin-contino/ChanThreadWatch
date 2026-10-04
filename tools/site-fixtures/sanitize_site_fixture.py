@@ -7,7 +7,7 @@ placeholder: post numbers, names, tripcodes, poster IDs, file names, MD5s, hosts
 Post text, subjects, dates and everything else are dropped.
 
 After sanitizing, the real site helper is run on the raw capture and on the fixture (through
-Get-SiteHelperResult.ps1, using the built ChanThreadWatch.exe). The fixture is only written when
+Get-SiteHelperResult.ps1, using the built ChanThreadWatch.Core.dll). The fixture is only written when
 both runs give corresponding results: the same number of images, thumbnails and cross links, and
 values that map one to one.
 
@@ -36,7 +36,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SITES_DIR = os.path.join(REPO, "ChanThreadWatch.Tests", "Fixtures", "sites")
 ALLOWLIST_PATH = os.path.join(SITES_DIR, "allowlist.json")
 MANIFEST_PATH = os.path.join(SITES_DIR, "manifest.json")
-EXE_PATH = os.path.join(REPO, "bin", "Release", "ChanThreadWatch.exe")
+CORE_DLL_PATH = os.path.join(REPO, "bin", "Release", "ChanThreadWatch.Core.dll")
 RESULT_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Get-SiteHelperResult.ps1")
 
 # Values the placeholders stand for when a fixture is parsed. The tests use the same values.
@@ -406,7 +406,7 @@ def substitute(fixture_html):
 
 def helper_result(helper, url, html_path):
     command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", RESULT_SCRIPT,
-               "-Exe", EXE_PATH, "-Helper", helper, "-Url", url, "-Html", html_path]
+               "-CoreDll", CORE_DLL_PATH, "-Helper", helper, "-Url", url, "-Html", html_path]
     output = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
     if output.returncode != 0:
         raise SystemExit("Get-SiteHelperResult.ps1 failed: " + output.stderr.strip())

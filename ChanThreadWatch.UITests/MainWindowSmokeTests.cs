@@ -21,6 +21,7 @@ namespace JDP.UITests {
     [TestClass]
     public class MainWindowSmokeTests {
         private const string AppExeName = "ChanThreadWatch.exe";
+        private const string CoreDllName = "ChanThreadWatch.Core.dll";
         private const string MainWindowTitle = "Chan Thread Watch";
         private const string ThreadPath = "/b/thread/123";
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
@@ -198,6 +199,8 @@ namespace JDP.UITests {
             if (!File.Exists(exePath)) Assert.Fail("Built app not found at " + exePath);
             File.Copy(exePath, Path.Combine(appDir, AppExeName));
             File.Copy(exePath + ".config", Path.Combine(appDir, AppExeName + ".config"));
+            // The same files the release ships, so a missing dependency fails here too
+            File.Copy(Path.Combine(buildDir, CoreDllName), Path.Combine(appDir, CoreDllName));
         }
 
         // A settings.txt in place switches the app to portable mode. The download folder is set so

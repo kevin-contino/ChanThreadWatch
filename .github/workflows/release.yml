@@ -38,7 +38,7 @@ jobs:
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
       - name: Build
-        run: msbuild ChanThreadWatch.sln -restore -p:Configuration=Release -v:minimal -nologo
+        run: msbuild ChanThreadWatch.sln -restore -p:RestoreLockedMode=true -p:Configuration=Release -v:minimal -nologo
 
       - name: Test
         run: dotnet test ChanThreadWatch.sln -c Release --no-build
@@ -53,6 +53,8 @@ jobs:
           $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## $([regex]::Escape($env:TAG))(?=[ \r\n])[^\r\n]*\r?\n(.*?)(?=^## |\z)")
           if (-not $section.Success) { throw "CHANGELOG.md has no '## $env:TAG' section" }
           $section.Groups[1].Value.Trim() | Set-Content RELEASE_NOTES.md
-          $files = 'bin/Release/ChanThreadWatch.exe', 'bin/Release/ChanThreadWatch.exe.config'
-          Get-FileHash $files -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } | Set-Content SHA256SUMS.txt
+          $files = 'bin/Release/ChanThreadWatch.exe', 'bin/Release/ChanThreadWatch.exe.config', 'bin/Release/ChanThreadWatch.Core.dll'
+          # LF line endings, so sha256sum -c also works on Linux
+          $sums = Get-FileHash $files -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
+          [IO.File]::WriteAllText('SHA256SUMS.txt', ($sums -join "`n") + "`n")
           gh release create $env:TAG @files SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --verify-tag --notes-file RELEASE_NOTES.md --title $env:TAG --latest

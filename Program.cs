@@ -11,6 +11,7 @@ namespace JDP {
 
         [STAThread]
         private static void Main() {
+            SetHostVersion();
             InstallExceptionHandlers();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -19,6 +20,11 @@ namespace JDP {
                 return;
             }
             Application.Run(new frmChanThreadWatch());
+        }
+
+        // General.Version (About box, update check) reports this app's version, not ChanThreadWatch.Core's
+        internal static void SetHostVersion() {
+            General.HostVersion = typeof(Program).Assembly.GetName().Version;
         }
 
         // UI thread exceptions are logged and shown, and the program keeps running. Exceptions on
