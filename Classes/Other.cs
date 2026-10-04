@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -753,70 +752,6 @@ namespace JDP {
         }
     }
 
-    public class HashSet<T> : IEnumerable<T> {
-        private Dictionary<T, int> _dict;
-
-        public HashSet() {
-            _dict = new Dictionary<T, int>();
-        }
-
-        public HashSet(IEqualityComparer<T> comparer) {
-            _dict = new Dictionary<T, int>(comparer);
-        }
-
-        public HashSet(IEnumerable<T> collection) :
-            this()
-        {
-            AddRange(collection);
-        }
-
-        public HashSet(IEnumerable<T> collection, IEqualityComparer<T> comparer) :
-            this(comparer)
-        {
-            AddRange(collection);
-        }
-
-        public int Count {
-            get { return _dict.Count; }
-        }
-
-        public bool Add(T item) {
-            if (!_dict.ContainsKey(item)) {
-                _dict[item] = 0;
-                return true;
-            }
-            return false;
-        }
-
-        private void AddRange(IEnumerable<T> collection) {
-            foreach (T item in collection) {
-                Add(item);
-            }
-        }
-
-        public bool Remove(T item) {
-            return _dict.Remove(item);
-        }
-
-        public void Clear() {
-            _dict.Clear();
-        }
-
-        public bool Contains(T item) {
-            return _dict.ContainsKey(item);
-        }
-
-        public IEnumerator<T> GetEnumerator() {
-            foreach (KeyValuePair<T, int> item in _dict) {
-                yield return item.Key;
-            }
-        }
-
-        IEnumerator IEnumerable.GetEnumerator() {
-            return GetEnumerator();
-        }
-    }
-
     public class HashGeneratorStream : Stream {
         private HashAlgorithm _hashAlgo;
         private byte[] _dataHash;
@@ -1132,47 +1067,6 @@ namespace JDP {
         }
     }
 
-    public static class Enumerable {
-        public static IEnumerable<TSource> Where<TSource>(IEnumerable<TSource> source, Func<TSource, bool> predicate) {
-            foreach (TSource item in source) {
-                if (predicate(item)) {
-                    yield return item;
-                }
-            }
-        }
-
-        public static TSource FirstOrDefault<TSource>(IEnumerable<TSource> source) {
-            foreach (TSource item in source) {
-                return item;
-            }
-            return default(TSource);
-        }
-
-        public static bool Any<TSource>(IEnumerable<TSource> source, Func<TSource, bool> predicate) {
-            foreach (TSource item in source) {
-                if (predicate(item)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        public static bool All<TSource>(IEnumerable<TSource> source, Func<TSource, bool> predicate) {
-            foreach (TSource item in source) {
-                if (!predicate(item)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        public static IEnumerable<TResult> Select<TSource, TResult>(IEnumerable<TSource> source, Func<TSource, TResult> selector) {
-            foreach (TSource item in source) {
-                yield return selector(item);
-            }
-        }
-    }
-
     public class DownloadStatusEventArgs : EventArgs {
         public DownloadType DownloadType { get; private set; }
         public int CompleteCount { get; private set; }
@@ -1249,29 +1143,9 @@ namespace JDP {
         }
     }
 
-    public delegate void EventHandler<TSender, TArgs>(TSender sender, TArgs e) where TArgs : EventArgs;
-
     public delegate void DownloadFileEndCallback(DownloadResult result);
 
     public delegate void DownloadPageEndCallback(DownloadResult result, string content, DateTime? lastModifiedTime);
-
-    public delegate void Action();
-
-    public delegate void Action<T1, T2>(T1 arg1, T2 arg2);
-
-    public delegate void Action<T1, T2, T3>(T1 arg1, T2 arg2, T3 arg3);
-
-    public delegate void Action<T1, T2, T3, T4>(T1 arg1, T2 arg2, T3 arg3, T4 arg4);
-
-    public delegate TResult Func<TResult>();
-
-    public delegate TResult Func<T, TResult>(T arg);
-
-    public delegate TResult Func<T1, T2, TResult>(T1 arg1, T2 arg2);
-
-    public delegate TResult Func<T1, T2, T3, TResult>(T1 arg1, T2 arg2, T3 arg3);
-
-    public delegate TResult Func<T1, T2, T3, T4, TResult>(T1 arg1, T2 arg2, T3 arg3, T4 arg4);
 
     public enum ThreadDoubleClickAction {
         OpenFolder = 1,

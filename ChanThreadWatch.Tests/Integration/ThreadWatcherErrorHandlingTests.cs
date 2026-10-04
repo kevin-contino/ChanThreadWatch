@@ -400,7 +400,7 @@ namespace JDP.Tests.Integration {
             ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
             var stopped = new ManualResetEvent(false);
             string reparseError = null;
-            watcher.StopStatus += (s, e) => { reparseError = s.ReparseError; stopped.Set(); };
+            watcher.StopStatus += (s, e) => { reparseError = ((ThreadWatcher)s).ReparseError; stopped.Set(); };
 
             watcher.BeginReparse();
 
@@ -417,7 +417,7 @@ namespace JDP.Tests.Integration {
             ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
             var stopped = new AutoResetEvent(false);
             var reparseErrors = new List<string>();
-            watcher.StopStatus += (s, e) => { reparseErrors.Add(s.ReparseError); stopped.Set(); };
+            watcher.StopStatus += (s, e) => { reparseErrors.Add(((ThreadWatcher)s).ReparseError); stopped.Set(); };
             watcher.BeginReparse();
             Assert.IsTrue(stopped.WaitOne(10000), "No stop status after the failed reparse");
             watcher.ThreadDownloadDirectory = Path.Combine(DownloadDir, "empty");
