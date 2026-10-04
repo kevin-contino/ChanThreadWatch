@@ -127,6 +127,7 @@
     <Compile Include="Classes\StoredAuth.cs" />
     <Compile Include="Classes\TextFile.cs" />
     <Compile Include="Classes\ThreadListFile.cs" />
+    <Compile Include="Classes\WatchSession.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="ChanThreadWatch.ico" />

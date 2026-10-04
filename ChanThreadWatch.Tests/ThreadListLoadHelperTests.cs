@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Serialization;
@@ -7,13 +6,14 @@ using System.Windows.Forms;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
-    // The thread list helpers are private members of the main form, so they are reached
-    // through reflection. The form's static watcher map is cleared around each test.
+    // The thread list helpers are internal members of WatchSession; each test uses a new
+    // session. The check interval helper is a private member of the main form, so it is
+    // reached through reflection.
     [TestClass]
     public class ThreadListLoadHelperTests {
-        private const BindingFlags PrivateStatic = BindingFlags.NonPublic | BindingFlags.Static;
         private const BindingFlags PrivateInstance = BindingFlags.NonPublic | BindingFlags.Instance;
         private string _dir;
+        private WatchSession _session;
 
         [ClassInitialize]
         public static void UseExeDirectoryForLog(TestContext context) {
@@ -25,48 +25,32 @@ namespace JDP.Tests {
             _dir = Path.Combine(Path.GetTempPath(), "ctw-migrate-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_dir);
             Settings.Load(Path.Combine(_dir, "missing.txt"));
-            Watchers.Clear();
+            _session = new WatchSession(a => a(), _dir);
         }
 
         [TestCleanup]
         public void Cleanup() {
-            Watchers.Clear();
             Settings.Load(Path.Combine(_dir, "missing.txt"));
             Directory.Delete(_dir, true);
         }
 
-        private static Dictionary<string, ThreadWatcher> Watchers {
-            get { return (Dictionary<string, ThreadWatcher>)typeof(frmChanThreadWatch).GetField("_watchers", PrivateStatic).GetValue(null); }
-        }
-
-        private static object InvokeStatic(string methodName, params object[] args) {
-            MethodInfo method = typeof(frmChanThreadWatch).GetMethod(methodName, PrivateStatic);
-            Assert.IsNotNull(method, "Missing helper: " + methodName);
-            try {
-                return method.Invoke(null, args);
-            }
-            catch (TargetInvocationException ex) {
-                throw ex.InnerException;
-            }
-        }
-
-        private static ThreadWatcher AddWatcher(int threadNumber, string addedFrom) {
+        private ThreadWatcher AddWatcher(int threadNumber, string addedFrom) {
             ThreadWatcher watcher = new ThreadWatcher("https://boards.4chan.org/a/thread/" + threadNumber);
             watcher.Tag = new WatcherExtraData { AddedFrom = addedFrom };
-            Watchers.Add(watcher.PageID, watcher);
+            _session.RegisterThreadWatcher(watcher, null);
             return watcher;
         }
 
-        private static void Link(ThreadWatcher watcher) {
-            InvokeStatic("LinkToParentThread", watcher);
+        private void Link(ThreadWatcher watcher) {
+            _session.LinkToParentThread(watcher);
         }
 
         [TestMethod]
         public void ADuplicateThreadListEntryIsDetected() {
             AddWatcher(1, null);
 
-            Assert.IsTrue((bool)InvokeStatic("IsThreadWatched", "https://boards.4chan.org/a/thread/1"));
-            Assert.IsFalse((bool)InvokeStatic("IsThreadWatched", "https://boards.4chan.org/a/thread/2"));
+            Assert.IsTrue(_session.IsThreadWatched("https://boards.4chan.org/a/thread/1"));
+            Assert.IsFalse(_session.IsThreadWatched("https://boards.4chan.org/a/thread/2"));
         }
 
         // B4
@@ -134,7 +118,7 @@ namespace JDP.Tests {
             ThreadWatcher root = CreateWatcherInDownloadFolder(1, Path.Combine(_dir, "root"));
             ThreadWatcher child = CreateWatcherInDownloadFolder(2, Path.Combine(_dir, "root", "missing-child"));
 
-            InvokeStatic("MoveDescendantThreadDirectory", root, child);
+            WatchSession.MoveDescendantThreadDirectory(root, child);
 
             Assert.IsFalse(child.DoNotRename);
             Assert.AreEqual(Path.Combine(_dir, "root", "missing-child"), child.ThreadDownloadDirectory);
@@ -147,7 +131,7 @@ namespace JDP.Tests {
             ThreadWatcher root = CreateWatcherInDownloadFolder(1, Path.Combine(_dir, "root"));
             ThreadWatcher child = CreateWatcherInDownloadFolder(2, childDir);
 
-            Assert.AreEqual(childDir, (string)InvokeStatic("GetDescendantThreadDestDir", root, child, childDir));
+            Assert.AreEqual(childDir, WatchSession.GetDescendantThreadDestDir(root, child, childDir));
         }
 
         [TestMethod]
@@ -158,7 +142,7 @@ namespace JDP.Tests {
             ThreadWatcher root = CreateWatcherInDownloadFolder(1, Path.Combine(_dir, "root"));
             ThreadWatcher child = CreateWatcherInDownloadFolder(2, childDir);
 
-            InvokeStatic("MoveDescendantThreadDirectory", root, child);
+            WatchSession.MoveDescendantThreadDirectory(root, child);
 
             Assert.AreEqual(Path.Combine(_dir, "child"), child.ThreadDownloadDirectory);
             Assert.IsTrue(File.Exists(Path.Combine(_dir, "child", "image.jpg")));
@@ -170,7 +154,7 @@ namespace JDP.Tests {
             ThreadWatcher root = CreateWatcherInDownloadFolder(1, Path.Combine(_dir, "root"));
             ThreadWatcher child = CreateWatcherInDownloadFolder(2, null);
 
-            InvokeStatic("MoveDescendantThreadDirectory", root, child);
+            WatchSession.MoveDescendantThreadDirectory(root, child);
 
             Assert.IsNull(child.ThreadDownloadDirectory);
             Assert.IsFalse(child.DoNotRename);
