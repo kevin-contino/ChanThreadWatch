@@ -19,7 +19,7 @@ namespace JDP.UITests {
     // its settings, thread list and log there instead of in the user's AppData. The thread page
     // comes from a loopback server, so the test never touches the real network.
     [TestClass]
-    public class MainWindowSmokeTests {
+    public partial class MainWindowSmokeTests {
         private const string AppExeName = "ChanThreadWatch.exe";
         private const string CoreDllName = "ChanThreadWatch.Core.dll";
         private const string MainWindowTitle = "Chan Thread Watch";
@@ -149,11 +149,28 @@ namespace JDP.UITests {
 
         private void KillApp() {
             if (_process == null) return;
-            if (!_process.HasExited) {
+            // Closing the window first lets the app remove its tray icon, which a killed app leaves
+            // behind until the mouse passes over it
+            if (!_process.HasExited) CloseMainWindow();
+            if (!_process.HasExited && !_process.WaitForExit(5000)) {
                 _process.Kill();
                 _process.WaitForExit((int)Timeout.TotalMilliseconds);
             }
             _process.Dispose();
+        }
+
+        private const int WM_CLOSE = 0x0010;
+
+        private void CloseMainWindow() {
+            if (_window == null) return;
+            try {
+                PostMessage(_window.Properties.NativeWindowHandle.Value, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            }
+            catch (COMException) {
+                // The window is already gone, so the wait and kill that follow handle the rest
+            }
+            catch (ElementNotAvailableException) {
+            }
         }
 
         private static AutomationElement FindById(AutomationElement parent, string automationId) {
