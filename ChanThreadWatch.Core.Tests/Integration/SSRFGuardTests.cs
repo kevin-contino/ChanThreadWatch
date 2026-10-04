@@ -24,6 +24,8 @@ namespace JDP.Tests.Integration {
 
         [TestInitialize]
         public void StartServer() {
+            // Earlier tests have connected; these tests use their own servers, so no pooled connection carries over
+            SSRFGuard.AllowSettingsChangeForTesting();
             _server = new LoopbackHttpServer();
             _server.Route("/x", LoopbackResponse.Text(Sentinel));
             // Even if the guard were broken, nothing here connects anywhere but loopback
@@ -36,6 +38,7 @@ namespace JDP.Tests.Integration {
 
         [TestCleanup]
         public void RestoreDesktopMode() {
+            SSRFGuard.AllowSettingsChangeForTesting();
             SSRFGuard.ServiceMode = false;
             SSRFGuard.AllowLoopbackForTesting = false;
             SSRFGuard.AllowedHosts = null;
@@ -128,7 +131,7 @@ namespace JDP.Tests.Integration {
             Assert.HasCount(1, _server.Requests);
         }
 
-        // file: and ftp: are never followed, in service mode too
+        // file: and ftp: are never followed, in service mode too: a redirect ends with its own status
         [TestMethod]
         [DataRow("file:///C:/Windows/win.ini")]
         [DataRow("ftp://127.0.0.1/x")]
@@ -137,11 +140,25 @@ namespace JDP.Tests.Integration {
             _server.Route("/redirect", Redirect(target));
             _server.Route("/meta", LoopbackResponse.Html("<html><head><meta http-equiv=\"refresh\" content=\"0; URL=" + target + "\"></head></html>"));
 
-            Assert.IsInstanceOfType<NotSupportedException>(DownloadAsync(_server.URL("/redirect")));
+            Assert.AreEqual("HTTP 302 Found", DownloadAsync(_server.URL("/redirect")).Message);
             Assert.IsInstanceOfType<NotSupportedException>(DownloadAsync(_server.URL("/meta")));
 
             Assert.HasCount(2, _server.Requests);
             Assert.AreEqual(2, _server.ConnectionCount);
+        }
+
+        // Service mode and the allowlist cannot change once a connection has been made, since a pooled
+        // connection would not be checked again; setting the same value is allowed
+        [TestMethod]
+        public void TheSettingsCannotChangeAfterAConnection() {
+            Assert.AreEqual(Sentinel, General.DownloadPageToString(_server.URL("/x")));
+
+            Assert.ThrowsExactly<InvalidOperationException>(() => SSRFGuard.ServiceMode = true);
+            Assert.ThrowsExactly<InvalidOperationException>(() => SSRFGuard.AllowedHosts = new[] { "lan.example.test" });
+            SSRFGuard.ServiceMode = false;
+            SSRFGuard.AllowedHosts = new string[0];
+            Assert.IsFalse(SSRFGuard.ServiceMode);
+            Assert.IsEmpty(SSRFGuard.AllowedHosts);
         }
 
         // One private address in a DNS answer blocks the host, so an answer cannot mix one in

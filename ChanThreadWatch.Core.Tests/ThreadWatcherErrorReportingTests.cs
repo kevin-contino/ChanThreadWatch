@@ -53,6 +53,30 @@ namespace JDP.Tests {
             Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
         }
 
+        // The server closed the connection before the whole response head arrived
+        [TestMethod]
+        public void DescribesAResponseThatEndedEarlyAsALostConnection() {
+            var ended = new HttpRequestException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+            var reset = new HttpRequestException(HttpRequestError.Unknown, "An error occurred while sending the request.",
+                new IOException("Unable to read data from the transport connection.", new SocketException((int)SocketError.ConnectionReset)));
+            Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(ended, ThreadURL));
+            Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(reset, ThreadURL));
+        }
+
+        // A lookup that found no address, whatever error wraps it
+        [TestMethod]
+        [DataRow(SocketError.HostNotFound)]
+        [DataRow(SocketError.NoData)]
+        [DataRow(SocketError.TryAgain)]
+        public void DescribesAFailedLookupAsHostNotFound(SocketError error) {
+            var lookup = new SocketException((int)error);
+            var connect = new HttpRequestException(HttpRequestError.ConnectionError, "No data of the requested type was found. (example.com:80)", lookup);
+            var unknown = new HttpRequestException(HttpRequestError.Unknown, "An error occurred.", new IOException("lookup", lookup));
+            Assert.AreEqual("host not found: example.com", ThreadWatcher.DescribeDownloadError(connect, ThreadURL));
+            Assert.AreEqual("host not found: example.com", ThreadWatcher.DescribeDownloadError(unknown, ThreadURL));
+            Assert.AreEqual("host not found: example.com", ThreadWatcher.DescribeDownloadError(lookup, ThreadURL));
+        }
+
         [TestMethod]
         public void DescribesANetworkReadFailureAsALostConnection() {
             Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(new IOException("reset"), ThreadURL));
@@ -69,7 +93,7 @@ namespace JDP.Tests {
         public void DescribesOtherErrorsByTheirMessage() {
             Assert.AreEqual("Timed out while waiting for response", ThreadWatcher.DescribeDownloadError(new TimeoutException("Timed out while waiting for response."), ThreadURL));
             Assert.AreEqual("HTTP 403 Forbidden", ThreadWatcher.DescribeDownloadError(new HTTPStatusException(403, "HTTP 403 Forbidden"), ThreadURL));
-            Assert.AreEqual("The response ended prematurely", ThreadWatcher.DescribeDownloadError(new HttpRequestException(HttpRequestError.ResponseEnded, "The response ended prematurely."), ThreadURL));
+            Assert.AreEqual("The server returned an invalid or unrecognized response", ThreadWatcher.DescribeDownloadError(new HttpRequestException(HttpRequestError.InvalidResponse, "The server returned an invalid or unrecognized response."), ThreadURL));
         }
 
         // B22: a link to a file that is not on disk is made absolute and attribute-encoded

@@ -56,6 +56,8 @@ namespace JDP.Tests {
         // A redirect from https to http is not followed (a downgrade); the redirect answer is the result
         [TestMethod]
         [DataRow("https://a.example.org/x", "http://a.example.org/y", null)]
+        [DataRow("http://a.example.org/x", "file:///C:/Windows/win.ini", null)]
+        [DataRow("http://a.example.org/x", "ftp://a.example.org/y", null)]
         [DataRow("https://a.example.org/x", "https://b.example.org/y", "https://b.example.org/y")]
         [DataRow("http://a.example.org/x", "https://a.example.org/y", "https://a.example.org/y")]
         [DataRow("http://a.example.org/x/1", "../y?q=1", "http://a.example.org/y?q=1")]
@@ -66,6 +68,54 @@ namespace JDP.Tests {
             Assert.AreEqual(expected, General.GetRedirectTarget(response)?.AbsoluteUri);
         }
 
+        // A meta refresh is checked like a redirect: only http(s), and no downgrade from https to http
+        [TestMethod]
+        [DataRow("https://a.example.org/x", "http://a.example.org/y", null)]
+        [DataRow("https://a.example.org/x", "https://b.example.org/y", "https://b.example.org/y")]
+        [DataRow("http://a.example.org/x", "https://a.example.org/y", "https://a.example.org/y")]
+        [DataRow("http://a.example.org/x", "http://b.example.org/y", "http://b.example.org/y")]
+        [DataRow("http://a.example.org/x", "ftp://a.example.org/y", null)]
+        public void MetaRefreshTarget(string pageURL, string redirectURL, string expected) {
+            if (expected == null) {
+                Assert.ThrowsExactly<NotSupportedException>(() => General.GetMetaRefreshTarget(new Uri(pageURL), redirectURL));
+                return;
+            }
+            Assert.AreEqual(expected, General.GetMetaRefreshTarget(new Uri(pageURL), redirectURL).AbsoluteUri);
+        }
+
+        // A connection attempt is not canceled with its request, so it has a limit of its own: a
+        // server that accepts the connection but never answers the TLS handshake is let go within it
+        [TestMethod]
+        public void AStalledConnectionAttemptEndsWithinTheRequestTimeout() {
+            General.RequestTimeoutMS = ShortTimeoutMS;
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try {
+                using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero))
+                using (var client = new HttpClient(handler)) {
+                    Assert.AreEqual(TimeSpan.FromMilliseconds(ShortTimeoutMS), handler.ConnectTimeout);
+                    int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                    var request = General.BuildWebRequest(new Uri("https://127.0.0.1:" + port + "/x"), null, null, null);
+                    // The request itself gives up at once; only the handler's limit ends the attempt
+                    using (var canceled = new CancellationTokenSource(100)) {
+                        Assert.ThrowsAsync<OperationCanceledException>(() => client.SendAsync(request, canceled.Token)).GetAwaiter().GetResult();
+                    }
+                    using (System.Net.Sockets.TcpClient accepted = listener.AcceptTcpClient()) {
+                        accepted.ReceiveTimeout = (int)Promptly.TotalMilliseconds;
+                        var clock = System.Diagnostics.Stopwatch.StartNew();
+                        try {
+                            var buffer = new byte[4096];
+                            while (accepted.GetStream().Read(buffer, 0, buffer.Length) > 0) { }
+                        }
+                        catch (IOException) { }
+                        Assert.IsLessThan(ShortTimeoutMS * 4, clock.ElapsedMilliseconds, "The stalled connection attempt was not given up");
+                    }
+                }
+            }
+            finally {
+                listener.Stop();
+            }
+        }
         private static HttpResponseMessage ErrorResponse(int status, string reason, string retryAfter) {
             var response = new HttpResponseMessage((HttpStatusCode)status) {
                 ReasonPhrase = reason,

@@ -14,7 +14,8 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 
 - The Downloads window keeps each finished download listed for about 5 seconds, marked "Done" or "Failed" in the Progress column. A successful download shows its final size. Before, small files often finished between two updates of the list, so the list looked empty while the title showed a download speed. Downloads that fail before the transfer starts (for example a 404 or a connection error) are still not listed.
 - Downloads use secure connections with TLS 1.3 when the server supports it. Before, the app asked for TLS 1.2.
-- Downloads use a new network component. Consecutive downloads from the same server share one connection, as in 1.39.0, and a retry after a failed download uses a new connection.
+- Redirects with status 308 (Permanent Redirect) are now followed, like the other redirects. Before, the download failed with "HTTP 308".
+- The `HTTP_PROXY` and `HTTPS_PROXY` environment variables, when set, are now used before the Windows proxy settings.
 - A redirect from an https address to an http address is no longer followed, so a download never falls back to an unencrypted connection. The download fails with the redirect's status, for example "HTTP 302 Found".
 
 ### Security

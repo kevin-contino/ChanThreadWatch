@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -23,22 +24,48 @@ namespace JDP {
     // unique local, multicast, unspecified and reserved addresses are refused, unless the host or
     // address is in AllowedHosts.
     public static class SSRFGuard {
+        private static readonly object _settingsSync = new object();
         private static volatile bool _serviceMode;
         private static volatile string[] _allowedHosts = new string[0];
+        // Set by the first connection; the settings cannot change after it
+        private static volatile bool _connected;
 
-        // Set once at startup by a host that serves other users (no UI sets it yet), before the first
-        // download: a pooled connection made before a change is not checked again. Service mode never
-        // connects through a proxy, whose address is all the guard would see.
+        // Set once at startup by a host that serves other users (no UI sets it yet). A change after the
+        // first connection throws InvalidOperationException: a pooled connection made before it would
+        // not be checked again. Service mode never connects through a proxy, whose address is all the
+        // guard would see.
         public static bool ServiceMode {
             get { return _serviceMode; }
-            set { _serviceMode = value; }
+            set {
+                lock (_settingsSync) {
+                    if (value != _serviceMode) ThrowIfConnected();
+                    _serviceMode = value;
+                }
+            }
         }
 
         // Host names or IP addresses (e.g. a board on the LAN) that service mode lets through. A copy
-        // is kept and given out, so changing an array never changes the setting.
+        // is kept and given out, so changing an array never changes the setting. Set once, like
+        // ServiceMode.
         public static string[] AllowedHosts {
             get { return (string[])_allowedHosts.Clone(); }
-            set { _allowedHosts = value != null ? (string[])value.Clone() : new string[0]; }
+            set {
+                string[] hosts = value != null ? (string[])value.Clone() : new string[0];
+                lock (_settingsSync) {
+                    if (!hosts.SequenceEqual(_allowedHosts)) ThrowIfConnected();
+                    _allowedHosts = hosts;
+                }
+            }
+        }
+
+        private static void ThrowIfConnected() {
+            if (_connected) throw new InvalidOperationException("The SSRF guard settings cannot change once a connection has been made.");
+        }
+
+        // Test only: lets the next test set the settings again. Tests that change them use their own
+        // hosts and ports, so no pooled connection carries over.
+        internal static void AllowSettingsChangeForTesting() {
+            _connected = false;
         }
 
         // Test only: lets loopback addresses through in service mode, so the loopback test servers can
@@ -54,6 +81,9 @@ namespace JDP {
         // Resolves the host, checks every address it resolves to (one blocked address blocks the host,
         // so a DNS answer cannot mix in a private address), then connects to those same addresses
         internal static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken) {
+            lock (_settingsSync) {
+                _connected = true;
+            }
             DnsEndPoint endPoint = context.DnsEndPoint;
             IPAddress literal;
             // The DNS lookup refuses an unspecified address (0.0.0.0) instead of returning it

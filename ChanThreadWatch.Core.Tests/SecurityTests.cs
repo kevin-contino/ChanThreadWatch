@@ -142,6 +142,40 @@ namespace JDP.Tests {
             }
         }
 
+        // A Referer or custom User-Agent with a line break is never sent as extra header lines
+        [TestMethod]
+        public void HeaderValuesCannotInjectHeaders() {
+            Settings.UseCustomUserAgent = true;
+            Settings.CustomUserAgent = "Agent/1.0\r\nX-Injected: user-agent";
+            try {
+                using (var server = new LoopbackHttpServer()) {
+                    server.Route("/image.jpg", OkResponse);
+
+                    Download(server.URL("/image.jpg"), null, "https://boards.example.org/a/thread/1\r\nX-Injected: referer");
+
+                    RecordedRequest request = server.Requests[0];
+                    Assert.IsNull(request.Header("X-Injected"), request.Raw);
+                    // Settings keep each value on one line, and the transport would drop one that is not
+                    Assert.AreEqual("Agent/1.0 X-Injected: user-agent", request.Header("User-Agent"), request.Raw);
+                    Assert.IsNull(request.Header("Referer"), request.Raw);
+                    Assert.HasCount(1, server.Requests);
+                }
+            }
+            finally {
+                Settings.UseCustomUserAgent = false;
+                Settings.CustomUserAgent = null;
+            }
+        }
+
+        // HTTP/3 would connect without the SSRF guard's ConnectCallback, so every request is HTTP/1.1 exactly
+        [TestMethod]
+        public void RequestsUseHTTP11Exactly() {
+            HttpRequestMessage request = General.BuildWebRequest(new Uri("https://boards.example.org/a/thread/1"), "user:pass", "https://boards.example.org/", DateTime.Now);
+
+            Assert.AreEqual(HttpVersion.Version11, request.Version);
+            Assert.AreEqual(HttpVersionPolicy.RequestVersionExact, request.VersionPolicy);
+        }
+
         private static readonly LoopbackResponse OkResponse = LoopbackResponse.Text("ok");
 
         private static LoopbackResponse MetaRefreshResponse(string url) {

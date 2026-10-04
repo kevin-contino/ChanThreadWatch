@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -69,6 +70,33 @@ namespace JDP.Tests.Integration {
             Assert.IsNull(watcher.StopError);
             Assert.IsNull(watcher.CheckError);
             Assert.HasCount(1, server.RequestsTo("/target"));
+        }
+
+        // A later check that gets a page over the limit leaves the page saved by the check before it
+        // as it was, and no backup behind; with and without an announced length
+        [TestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void APageOverTheLimitKeepsThePreviouslySavedPage(bool chunked) {
+            var fixture = new FourChanThreadFixture();
+            LoopbackHttpServer server = StartServer();
+            fixture.RouteAll(server);
+            string html = fixture.Html(server.BaseURL(), server.BaseURL());
+            byte[] page = Encoding.UTF8.GetBytes(html);
+            General.MaxPageBytes = page.Length;
+            byte[] larger = Encoding.UTF8.GetBytes(html + new string(' ', 4096));
+            server.RouteSequence(FourChanThreadFixture.ThreadPath, LoopbackResponse.Bytes(page, "text/html; charset=utf-8"),
+                chunked ? LoopbackResponse.Chunked(larger, "text/html; charset=utf-8") : LoopbackResponse.Bytes(larger, "text/html; charset=utf-8"));
+            ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
+            string savedPage = null;
+
+            RunChecks(watcher, 2, check => savedPage = File.ReadAllText(SavedPagePath(watcher)));
+
+            Assert.HasCount(2, server.RequestsTo(FourChanThreadFixture.ThreadPath));
+            Assert.AreEqual("The page is larger than the maximum of " + page.Length + " bytes", watcher.CheckError);
+            Assert.IsNotNull(savedPage);
+            Assert.AreEqual(savedPage, File.ReadAllText(SavedPagePath(watcher)));
+            Assert.IsFalse(File.Exists(SavedPagePath(watcher) + ".bak"));
         }
 
         private static LoopbackResponse Body(int size, string contentType, bool chunked) {

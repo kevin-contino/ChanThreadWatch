@@ -1428,10 +1428,13 @@ namespace JDP {
         private const string CertificateNotTrustedText = "certificate not trusted for {0}";
         private const string SecureConnectionFailedText = "secure connection failed for {0}";
         private const string TimedOutConnectingText = "timed out connecting to {0}";
+        private const string HostNotFoundText = "host not found: {0}";
+        private const string ConnectionLostText = "connection lost";
 
         private static readonly Dictionary<HttpRequestError, string> _httpRequestErrorTexts = new Dictionary<HttpRequestError, string> {
-            { HttpRequestError.NameResolutionError, "host not found: {0}" },
-            { HttpRequestError.ConnectionError, "cannot connect to {0}" }
+            { HttpRequestError.NameResolutionError, HostNotFoundText },
+            { HttpRequestError.ConnectionError, "cannot connect to {0}" },
+            { HttpRequestError.ResponseEnded, ConnectionLostText }
         };
 
         // A short, plain description of why a download failed, e.g. "HTTP 403 Forbidden" (the
@@ -1445,20 +1448,40 @@ namespace JDP {
 
         // A failed TLS handshake is an HttpRequestException (SecureConnectionError). Certificates are
         // checked by the default validation, so a rejected certificate is an AuthenticationException
-        // about the certificate.
+        // about the certificate. A lookup that found no address can also come as another error with
+        // the lookup's SocketException inside, and a connection that broke before the response
+        // headers as one with an IOException inside.
         private static string GetErrorTextFormat(HttpRequestException httpEx) {
-            if (httpEx.HttpRequestError == HttpRequestError.SecureConnectionError) {
-                return IsCertificateRejection(httpEx.InnerException) ? CertificateNotTrustedText : SecureConnectionFailedText;
-            }
+            if (httpEx.HttpRequestError == HttpRequestError.SecureConnectionError) return GetTLSErrorTextFormat(httpEx);
+            if (IsHostNotFound(httpEx)) return HostNotFoundText;
+            return GetErrorTextFormat(httpEx.HttpRequestError) ?? (httpEx.InnerException is IOException ? ConnectionLostText : null);
+        }
+
+        private static string GetTLSErrorTextFormat(HttpRequestException httpEx) {
+            return IsCertificateRejection(httpEx.InnerException) ? CertificateNotTrustedText : SecureConnectionFailedText;
+        }
+
+        private static string GetErrorTextFormat(HttpRequestError error) {
             string format;
-            return _httpRequestErrorTexts.TryGetValue(httpEx.HttpRequestError, out format) ? format : null;
+            return _httpRequestErrorTexts.TryGetValue(error, out format) ? format : null;
+        }
+
+        private static readonly SocketError[] _lookupFailures = { SocketError.HostNotFound, SocketError.NoData, SocketError.TryAgain };
+
+        private static bool IsHostNotFound(Exception ex) {
+            for (Exception inner = ex; inner != null; inner = inner.InnerException) {
+                SocketException socketEx = inner as SocketException;
+                if (socketEx != null && Array.IndexOf(_lookupFailures, socketEx.SocketErrorCode) != -1) return true;
+            }
+            return false;
         }
 
         // A network timeout from the socket (not one of the transport's own time limits) reads like the
         // .NET Framework's WebException with status Timeout did
         private static string DescribeNonWebError(Exception ex, string url) {
             if (IsSocketTimeout(ex)) return String.Format(TimedOutConnectingText, new Uri(url).Host);
-            if (ex is IOException) return "connection lost";
+            if (IsHostNotFound(ex)) return String.Format(HostNotFoundText, new Uri(url).Host);
+            if (ex is IOException) return ConnectionLostText;
             return ex.Message.TrimEnd('.');
         }
 

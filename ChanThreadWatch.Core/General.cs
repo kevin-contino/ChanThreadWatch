@@ -100,10 +100,11 @@ namespace JDP {
                 // proxied connection in service mode
                 UseProxy = true,
                 PooledConnectionLifetime = pooledConnectionLifetime,
-                // ConnectTimeout stays infinite: the connect is bounded by RequestTimeoutMS like the
-                // rest of the request. ConnectionManager decides how many requests go to a host at a
-                // time; a second limit here could only hold a request behind a connection that is
-                // still being drained.
+                // A connection attempt (TCP and TLS) is not canceled with the request that started it,
+                // so it gets its own limit; without one a stalled attempt would hold up the next request
+                ConnectTimeout = TimeSpan.FromMilliseconds(RequestTimeoutMS),
+                // ConnectionManager decides how many requests go to a host at a time; a second limit here
+                // could only hold a request behind a connection that is still being drained.
                 MaxConnectionsPerServer = Int32.MaxValue,
                 // Every connection, so every redirect and meta refresh hop, goes through the SSRF guard.
                 // TLS is left to the OS (1.2 and 1.3), with the default certificate validation.
@@ -366,15 +367,24 @@ namespace JDP {
         }
 
         // The absolute URL a redirect response points to, or null if it is not a redirect that is
-        // followed: no Location, or a redirect from https to http (a downgrade, which HttpClient's own
-        // redirect handling refuses too)
+        // followed: no Location, a scheme other than http(s), or a redirect from https to http (a
+        // downgrade, which HttpClient's own redirect handling refuses too). The redirect answer is then
+        // the result ("HTTP 302 Found").
         internal static Uri GetRedirectTarget(HttpResponseMessage response) {
             Uri location = IsRedirectStatus(response.StatusCode) ? response.Headers.Location : null;
             if (location == null) return null;
             Uri requestUri = response.RequestMessage.RequestUri;
             // A relative Location resolves against the URL of this hop
             Uri target = new Uri(requestUri, location);
-            return IsDowngrade(requestUri, target) ? null : target;
+            return IsHTTPScheme(target) && !IsDowngrade(requestUri, target) ? target : null;
+        }
+
+        // The URL a meta refresh leads to, checked like a redirect: only http(s), and never from an
+        // https page to an http one. Throws NotSupportedException otherwise.
+        internal static Uri GetMetaRefreshTarget(Uri pageUri, string redirectUrl) {
+            Uri target = ToHTTPUri(redirectUrl);
+            if (IsDowngrade(pageUri, target)) throw new NotSupportedException("A meta refresh from https to http is not followed.");
+            return target;
         }
 
         private static bool IsDowngrade(Uri from, Uri to) {
@@ -392,28 +402,49 @@ namespace JDP {
         // read a local file or reach an FTP server
         private static Uri ToHTTPUri(string url) {
             Uri uri = new Uri(url);
-            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) {
+            if (!IsHTTPScheme(uri)) {
                 throw new NotSupportedException("Only http and https URLs can be downloaded, not " + uri.Scheme + ".");
             }
             return uri;
         }
 
-        private static HttpRequestMessage BuildWebRequest(Uri uri, string auth, string referer, DateTime? cacheLastModifiedTime) {
-            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri);
-            // 4chan blocks (HTTP 403) non-browser user agents, so default to a browser-like one
-            request.Headers.TryAddWithoutValidation("User-Agent", GetUserAgent());
+        private static bool IsHTTPScheme(Uri uri) {
+            return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+        }
+
+        internal static HttpRequestMessage BuildWebRequest(Uri uri, string auth, string referer, DateTime? cacheLastModifiedTime) {
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri) {
+                // HTTP/3 (QUIC) would not connect through ConnectCallback, so the SSRF guard
+                // could not check it; HTTP/2 is not needed
+                Version = HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact
+            };
+            // 4chan blocks (HTTP 403) non-browser user agents, so default to a browser-like one. A custom
+            // one that could not be sent as one header line falls back to the default.
+            string userAgent = GetUserAgent();
+            AddHeader(request, "User-Agent", IsSafeHeaderValue(userAgent) ? userAgent : DefaultUserAgent);
             if (cacheLastModifiedTime != null) {
                 request.Headers.IfModifiedSince = cacheLastModifiedTime.Value;
             }
             if (!String.IsNullOrEmpty(auth)) {
                 Encoding encoding = Encoding.GetEncoding("iso-8859-1");
-                request.Headers.TryAddWithoutValidation("Authorization", "Basic " + Convert.ToBase64String(encoding.GetBytes(auth)));
+                AddHeader(request, "Authorization", "Basic " + Convert.ToBase64String(encoding.GetBytes(auth)));
             }
             string refererWithoutLogin = RemoveUserInfo(referer);
             if (!String.IsNullOrEmpty(refererWithoutLogin)) {
-                request.Headers.TryAddWithoutValidation("Referer", refererWithoutLogin);
+                AddHeader(request, "Referer", refererWithoutLogin);
             }
             return request;
+        }
+
+        // Values are added without validation, so that they are sent exactly as given. A value with a
+        // line break or NUL would add header lines of its own, so such a value is not sent at all.
+        private static void AddHeader(HttpRequestMessage request, string name, string value) {
+            if (IsSafeHeaderValue(value)) request.Headers.TryAddWithoutValidation(name, value);
+        }
+
+        private static bool IsSafeHeaderValue(string value) {
+            return value != null && value.IndexOfAny(new[] { '\r', '\n', '\0' }) == -1;
         }
 
         // A thread URL may hold a login (user:password@host). It must never reach another server in the
@@ -1483,14 +1514,14 @@ namespace JDP {
                 if (string.IsNullOrEmpty(redirectUrl)) {
                     return new MemoryStream(pageBytes);
                 }
-                return await FollowMetaRefreshAsync(redirectUrl).ConfigureAwait(false);
+                return await FollowMetaRefreshAsync(pageUrl, redirectUrl).ConfigureAwait(false);
             }
 
             // Only one meta refresh is followed. Its request is sent like any other (each redirect hop
             // checked), and its response headers must arrive within RequestTimeoutMS.
-            private async Task<Stream> FollowMetaRefreshAsync(string redirectUrl) {
+            private async Task<Stream> FollowMetaRefreshAsync(string pageUrl, string redirectUrl) {
                 // Sends nothing to a host that is paused by a rate limit
-                ConnectionManager.GetInstanceForHost(ToHTTPUri(redirectUrl).Host).ThrowIfPaused();
+                ConnectionManager.GetInstanceForHost(GetMetaRefreshTarget(new Uri(pageUrl), redirectUrl).Host).ThrowIfPaused();
                 ReleaseReplacedResponse();
                 HttpResponseMessage redirectionResponse = await GetResponseAsync(redirectUrl, GetAuthForURL(_auth, _url, redirectUrl), null, _cacheLastModifiedTime, _freshConnection, _cancel.Token).ConfigureAwait(false);
                 SetResponse(redirectionResponse);
