@@ -835,7 +835,8 @@ namespace JDP {
             Close();
         }
 
-        private void ThreadWatcher_DownloadStatus(ThreadWatcher watcher, DownloadStatusEventArgs args) {
+        private void ThreadWatcher_DownloadStatus(object sender, DownloadStatusEventArgs args) {
+            ThreadWatcher watcher = (ThreadWatcher)sender;
             WatcherExtraData extraData = (WatcherExtraData)watcher.Tag;
             bool isInitialPageDownload = TrackPageDownload(extraData, args.DownloadType);
             bool isFirstImageUpdate = TrackImageDownload(extraData, args.DownloadType);
@@ -873,14 +874,16 @@ namespace JDP {
             return true;
         }
 
-        private void ThreadWatcher_WaitStatus(ThreadWatcher watcher, EventArgs args) {
+        private void ThreadWatcher_WaitStatus(object sender, EventArgs args) {
+            ThreadWatcher watcher = (ThreadWatcher)sender;
             BeginInvoke(() => {
                 SetWaitStatus(watcher);
                 SetupWaitTimer();
             });
         }
 
-        private void ThreadWatcher_StopStatus(ThreadWatcher watcher, StopStatusEventArgs args) {
+        private void ThreadWatcher_StopStatus(object sender, StopStatusEventArgs args) {
+            ThreadWatcher watcher = (ThreadWatcher)sender;
             // Read on the watcher's thread, before a restart could reset them
             string stopError = watcher.StopError;
             int failedFileCount = watcher.FailedFileCount;
@@ -894,20 +897,21 @@ namespace JDP {
             });
         }
 
-        private void ThreadWatcher_ReparseStatus(ThreadWatcher watcher, ReparseStatusEventArgs args) {
+        private void ThreadWatcher_ReparseStatus(object sender, ReparseStatusEventArgs args) {
+            ThreadWatcher watcher = (ThreadWatcher)sender;
             BeginInvoke(() => {
                 SetReparseStatus(watcher, args.ReparseType, args.CompleteCount, args.TotalCount);
                 SetupWaitTimer();
             });
         }
 
-        private void ThreadWatcher_ThreadDownloadDirectoryRename(ThreadWatcher watcher, EventArgs args) {
+        private void ThreadWatcher_ThreadDownloadDirectoryRename(object sender, EventArgs args) {
             BeginInvoke(() => {
                 _saveThreadList = true;
             });
         }
 
-        private void ThreadWatcher_DownloadStart(ThreadWatcher watcher, DownloadStartEventArgs args) {
+        private void ThreadWatcher_DownloadStart(object sender, DownloadStartEventArgs args) {
             DownloadProgressInfo info = new DownloadProgressInfo();
             info.DownloadID = args.DownloadID;
             info.URL = args.URL;
@@ -919,7 +923,7 @@ namespace JDP {
             }
         }
 
-        private void ThreadWatcher_DownloadProgress(ThreadWatcher watcher, DownloadProgressEventArgs args) {
+        private void ThreadWatcher_DownloadProgress(object sender, DownloadProgressEventArgs args) {
             lock (_downloadProgresses) {
                 DownloadProgressInfo info;
                 if (!_downloadProgresses.TryGetValue(args.DownloadID, out info)) return;
@@ -928,7 +932,7 @@ namespace JDP {
             }
         }
 
-        private void ThreadWatcher_DownloadEnd(ThreadWatcher watcher, DownloadEndEventArgs args) {
+        private void ThreadWatcher_DownloadEnd(object sender, DownloadEndEventArgs args) {
             lock (_downloadProgresses) {
                 DownloadProgressInfo info;
                 if (!_downloadProgresses.TryGetValue(args.DownloadID, out info)) return;
@@ -939,7 +943,8 @@ namespace JDP {
             }
         }
 
-        private void ThreadWatcher_AddThread(ThreadWatcher watcher, AddThreadEventArgs args) {
+        private void ThreadWatcher_AddThread(object sender, AddThreadEventArgs args) {
+            ThreadWatcher watcher = (ThreadWatcher)sender;
             ThreadWatcher rootThread = watcher.RootThread;
             BeginInvoke(() => {
                 try {

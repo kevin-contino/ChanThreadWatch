@@ -690,23 +690,23 @@ namespace JDP {
             get { lock (_settingsSync) { return _stopReason; } }
         }
 
-        public event EventHandler<ThreadWatcher, DownloadStatusEventArgs> DownloadStatus;
+        public event EventHandler<DownloadStatusEventArgs> DownloadStatus;
 
-        public event EventHandler<ThreadWatcher, EventArgs> WaitStatus;
+        public event EventHandler WaitStatus;
 
-        public event EventHandler<ThreadWatcher, StopStatusEventArgs> StopStatus;
+        public event EventHandler<StopStatusEventArgs> StopStatus;
 
-        public event EventHandler<ThreadWatcher, ReparseStatusEventArgs> ReparseStatus;
+        public event EventHandler<ReparseStatusEventArgs> ReparseStatus;
 
-        public event EventHandler<ThreadWatcher, EventArgs> ThreadDownloadDirectoryRename;
+        public event EventHandler ThreadDownloadDirectoryRename;
 
-        public event EventHandler<ThreadWatcher, DownloadStartEventArgs> DownloadStart;
+        public event EventHandler<DownloadStartEventArgs> DownloadStart;
 
-        public event EventHandler<ThreadWatcher, DownloadProgressEventArgs> DownloadProgress;
+        public event EventHandler<DownloadProgressEventArgs> DownloadProgress;
 
-        public event EventHandler<ThreadWatcher, DownloadEndEventArgs> DownloadEnd;
+        public event EventHandler<DownloadEndEventArgs> DownloadEnd;
 
-        public event EventHandler<ThreadWatcher, AddThreadEventArgs> AddThread;
+        public event EventHandler<AddThreadEventArgs> AddThread;
 
         private void OnDownloadStatus(DownloadStatusEventArgs e) {
             var evt = DownloadStatus;
