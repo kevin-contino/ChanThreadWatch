@@ -551,7 +551,7 @@ namespace JDP {
         }
 
         private void miCheckEvery_Click(object sender, EventArgs e) {
-            MenuItem menuItem = sender as MenuItem;
+            ToolStripMenuItem menuItem = sender as ToolStripMenuItem;
             if (menuItem != null) {
                 int checkIntervalSeconds = Convert.ToInt32(menuItem.Tag) * 60;
                 foreach (ThreadWatcher watcher in SelectedThreadWatchers) {
@@ -638,13 +638,13 @@ namespace JDP {
                 anyNotReparsing |= !watcher.IsReparsing;
             }
             bool anyStoppedAndNotReparsing = anyStopped && anyNotReparsing;
-            miStop.Visible = anyRunning;
-            miStart.Visible = anyStoppedAndNotReparsing;
-            miCheckNow.Visible = anyRunning;
-            miCheckEvery.Visible = anyRunning;
-            miRemove.Visible = anyStoppedAndNotReparsing;
-            miRemoveAndDeleteFolder.Visible = anyStoppedAndNotReparsing;
-            miReparse.Visible = anyStoppedAndNotReparsing;
+            miStop.Available = anyRunning;
+            miStart.Available = anyStoppedAndNotReparsing;
+            miCheckNow.Available = anyRunning;
+            miCheckEvery.Available = anyRunning;
+            miRemove.Available = anyStoppedAndNotReparsing;
+            miRemoveAndDeleteFolder.Available = anyStoppedAndNotReparsing;
+            miReparse.Available = anyStoppedAndNotReparsing;
             cmThreads.Show(lvThreads, e.Location);
         }
 
@@ -936,31 +936,30 @@ namespace JDP {
         private void BuildCheckEverySubMenu() {
             for (int i = 0; i < cboCheckEvery.Items.Count; i++) {
                 int minutes = ((ListItemInt32)cboCheckEvery.Items[i]).Value;
-                MenuItem menuItem = new MenuItem {
-                    Index = i,
+                ToolStripMenuItem menuItem = new ToolStripMenuItem {
                     Tag = minutes,
                     Text = minutes > 0 ? minutes + " Minutes" : "1 Minute or <"
                 };
                 menuItem.Click += miCheckEvery_Click;
-                miCheckEvery.MenuItems.Add(menuItem);
+                miCheckEvery.DropDownItems.Add(menuItem);
             }
         }
 
         private void BuildColumnHeaderMenu() {
-            ContextMenu contextMenu = new ContextMenu();
-            contextMenu.Popup += (s, e) => {
-                for (int i = 0; i < lvThreads.Columns.Count; i++) {
-                    contextMenu.MenuItems[i].Checked = lvThreads.Columns[i].Width != 0;
+            ContextMenuStrip contextMenu = new ContextMenuStrip { RenderMode = ToolStripRenderMode.System };
+            ToolStripMenuItem[] columnItems = new ToolStripMenuItem[lvThreads.Columns.Count];
+            contextMenu.Opening += (s, e) => {
+                for (int i = 0; i < columnItems.Length; i++) {
+                    columnItems[i].Checked = lvThreads.Columns[i].Width != 0;
                 }
             };
-            for (int i = 0; i < lvThreads.Columns.Count; i++) {
-                MenuItem menuItem = new MenuItem {
-                    Index = i,
+            for (int i = 0; i < columnItems.Length; i++) {
+                ToolStripMenuItem menuItem = new ToolStripMenuItem {
                     Tag = i,
                     Text = lvThreads.Columns[i].Text
                 };
                 menuItem.Click += (s, e) => {
-                    int iColumn = (int)((MenuItem)s).Tag;
+                    int iColumn = (int)((ToolStripMenuItem)s).Tag;
                     ColumnHeader column = lvThreads.Columns[iColumn];
                     if (column.Width != 0) {
                         _columnWidths[iColumn] = column.Width;
@@ -970,9 +969,10 @@ namespace JDP {
                         column.Width = _columnWidths[iColumn];
                     }
                 };
-                contextMenu.MenuItems.Add(menuItem);
+                columnItems[i] = menuItem;
             }
-            ContextMenuStrip contextMenuStrip = new ContextMenuStrip();
+            contextMenu.Items.AddRange(columnItems);
+            ContextMenuStrip contextMenuStrip = new ContextMenuStrip { RenderMode = ToolStripRenderMode.System };
             contextMenuStrip.Opening += (s, e) => {
                 e.Cancel = true;
                 Point pos = lvThreads.PointToClient(Control.MousePosition);

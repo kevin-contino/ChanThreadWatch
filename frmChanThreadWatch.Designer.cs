@@ -50,18 +50,18 @@
             this.btnRemoveCompleted = new System.Windows.Forms.Button();
             this.btnAbout = new System.Windows.Forms.Button();
             this.btnSettings = new System.Windows.Forms.Button();
-            this.cmThreads = new System.Windows.Forms.ContextMenu();
-            this.miEdit = new System.Windows.Forms.MenuItem();
-            this.miOpenFolder = new System.Windows.Forms.MenuItem();
-            this.miOpenURL = new System.Windows.Forms.MenuItem();
-            this.miStop = new System.Windows.Forms.MenuItem();
-            this.miStart = new System.Windows.Forms.MenuItem();
-            this.miCopyURL = new System.Windows.Forms.MenuItem();
-            this.miRemove = new System.Windows.Forms.MenuItem();
-            this.miRemoveAndDeleteFolder = new System.Windows.Forms.MenuItem();
-            this.miBlacklist = new System.Windows.Forms.MenuItem();
-            this.miCheckNow = new System.Windows.Forms.MenuItem();
-            this.miCheckEvery = new System.Windows.Forms.MenuItem();
+            this.cmThreads = new System.Windows.Forms.ContextMenuStrip(this.components);
+            this.miEdit = new System.Windows.Forms.ToolStripMenuItem();
+            this.miOpenFolder = new System.Windows.Forms.ToolStripMenuItem();
+            this.miOpenURL = new System.Windows.Forms.ToolStripMenuItem();
+            this.miStop = new System.Windows.Forms.ToolStripMenuItem();
+            this.miStart = new System.Windows.Forms.ToolStripMenuItem();
+            this.miCopyURL = new System.Windows.Forms.ToolStripMenuItem();
+            this.miRemove = new System.Windows.Forms.ToolStripMenuItem();
+            this.miRemoveAndDeleteFolder = new System.Windows.Forms.ToolStripMenuItem();
+            this.miBlacklist = new System.Windows.Forms.ToolStripMenuItem();
+            this.miCheckNow = new System.Windows.Forms.ToolStripMenuItem();
+            this.miCheckEvery = new System.Windows.Forms.ToolStripMenuItem();
             this.grpDoubleClick = new System.Windows.Forms.GroupBox();
             this.rbEdit = new System.Windows.Forms.RadioButton();
             this.rbOpenURL = new System.Windows.Forms.RadioButton();
@@ -71,27 +71,29 @@
             this.tmrSaveThreadList = new System.Windows.Forms.Timer(this.components);
             this.btnDownloads = new System.Windows.Forms.Button();
             this.tmrMaintenance = new System.Windows.Forms.Timer(this.components);
-            this.miReparse = new System.Windows.Forms.MenuItem();
+            this.miReparse = new System.Windows.Forms.ToolStripMenuItem();
             this.btnHelp = new System.Windows.Forms.Button();
             this.niTrayIcon = new System.Windows.Forms.NotifyIcon(this.components);
-            this.cmTrayIcon = new System.Windows.Forms.ContextMenu();
-            this.miMonitorTotal = new System.Windows.Forms.MenuItem();
-            this.miMonitorRunning = new System.Windows.Forms.MenuItem();
-            this.miMonitorDead = new System.Windows.Forms.MenuItem();
-            this.miMonitorStopped = new System.Windows.Forms.MenuItem();
-            this.miSeparatorMonitorQuickLinks = new System.Windows.Forms.MenuItem();
-            this.miAddFromClipboard = new System.Windows.Forms.MenuItem();
-            this.miDownloads = new System.Windows.Forms.MenuItem();
-            this.miSettings = new System.Windows.Forms.MenuItem();
-            this.miAbout = new System.Windows.Forms.MenuItem();
-            this.miHelp = new System.Windows.Forms.MenuItem();
-            this.miSeparatorQuickLinksExit = new System.Windows.Forms.MenuItem();
-            this.miExit = new System.Windows.Forms.MenuItem();
+            this.cmTrayIcon = new System.Windows.Forms.ContextMenuStrip(this.components);
+            this.miMonitorTotal = new System.Windows.Forms.ToolStripMenuItem();
+            this.miMonitorRunning = new System.Windows.Forms.ToolStripMenuItem();
+            this.miMonitorDead = new System.Windows.Forms.ToolStripMenuItem();
+            this.miMonitorStopped = new System.Windows.Forms.ToolStripMenuItem();
+            this.miSeparatorMonitorQuickLinks = new System.Windows.Forms.ToolStripSeparator();
+            this.miAddFromClipboard = new System.Windows.Forms.ToolStripMenuItem();
+            this.miDownloads = new System.Windows.Forms.ToolStripMenuItem();
+            this.miSettings = new System.Windows.Forms.ToolStripMenuItem();
+            this.miAbout = new System.Windows.Forms.ToolStripMenuItem();
+            this.miHelp = new System.Windows.Forms.ToolStripMenuItem();
+            this.miSeparatorQuickLinksExit = new System.Windows.Forms.ToolStripSeparator();
+            this.miExit = new System.Windows.Forms.ToolStripMenuItem();
             this.tmrMonitor = new System.Windows.Forms.Timer(this.components);
             this.tmrBackupThreadList = new System.Windows.Forms.Timer(this.components);
             this.grpAddThread.SuspendLayout();
             this.pnlCheckEvery.SuspendLayout();
+            this.cmThreads.SuspendLayout();
             this.grpDoubleClick.SuspendLayout();
+            this.cmTrayIcon.SuspendLayout();
             this.SuspendLayout();
             // 
             // lvThreads
@@ -348,7 +350,7 @@
             // 
             // cmThreads
             // 
-            this.cmThreads.MenuItems.AddRange(new System.Windows.Forms.MenuItem[] {
+            this.cmThreads.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.miEdit,
             this.miOpenFolder,
             this.miOpenURL,
@@ -361,70 +363,72 @@
             this.miCheckNow,
             this.miCheckEvery,
             this.miReparse});
+            this.cmThreads.Name = "cmThreads";
+            this.cmThreads.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
             // 
             // miEdit
             // 
-            this.miEdit.Index = 0;
+            this.miEdit.Name = "miEdit";
             this.miEdit.Text = "Edit";
             this.miEdit.Click += new System.EventHandler(this.miEdit_Click);
             // 
             // miOpenFolder
             // 
-            this.miOpenFolder.Index = 1;
+            this.miOpenFolder.Name = "miOpenFolder";
             this.miOpenFolder.Text = "Open Folder";
             this.miOpenFolder.Click += new System.EventHandler(this.miOpenFolder_Click);
             // 
             // miOpenURL
             // 
-            this.miOpenURL.Index = 2;
+            this.miOpenURL.Name = "miOpenURL";
             this.miOpenURL.Text = "Open URL";
             this.miOpenURL.Click += new System.EventHandler(this.miOpenURL_Click);
             // 
             // miStop
             // 
-            this.miStop.Index = 3;
+            this.miStop.Name = "miStop";
             this.miStop.Text = "Stop";
             this.miStop.Click += new System.EventHandler(this.miStop_Click);
             // 
             // miStart
             // 
-            this.miStart.Index = 4;
+            this.miStart.Name = "miStart";
             this.miStart.Text = "Start";
             this.miStart.Click += new System.EventHandler(this.miStart_Click);
             // 
             // miCopyURL
             // 
-            this.miCopyURL.Index = 5;
+            this.miCopyURL.Name = "miCopyURL";
             this.miCopyURL.Text = "Copy URL";
             this.miCopyURL.Click += new System.EventHandler(this.miCopyURL_Click);
             // 
             // miRemove
             // 
-            this.miRemove.Index = 6;
+            this.miRemove.Name = "miRemove";
             this.miRemove.Text = "Remove";
             this.miRemove.Click += new System.EventHandler(this.miRemove_Click);
             // 
             // miRemoveAndDeleteFolder
             // 
-            this.miRemoveAndDeleteFolder.Index = 7;
+            this.miRemoveAndDeleteFolder.Name = "miRemoveAndDeleteFolder";
             this.miRemoveAndDeleteFolder.Text = "Remove and Delete Folder";
             this.miRemoveAndDeleteFolder.Click += new System.EventHandler(this.miRemoveAndDeleteFolder_Click);
             // 
             // miBlacklist
             // 
-            this.miBlacklist.Index = 8;
+            this.miBlacklist.Name = "miBlacklist";
             this.miBlacklist.Text = "Blacklist";
             this.miBlacklist.Click += new System.EventHandler(this.miBlacklist_Click);
             // 
             // miCheckNow
             // 
-            this.miCheckNow.Index = 9;
+            this.miCheckNow.Name = "miCheckNow";
             this.miCheckNow.Text = "Check Now";
             this.miCheckNow.Click += new System.EventHandler(this.miCheckNow_Click);
             // 
             // miCheckEvery
             // 
-            this.miCheckEvery.Index = 10;
+            this.miCheckEvery.Name = "miCheckEvery";
             this.miCheckEvery.Text = "Check Every";
             // 
             // grpDoubleClick
@@ -511,7 +515,7 @@
             // 
             // miReparse
             // 
-            this.miReparse.Index = 11;
+            this.miReparse.Name = "miReparse";
             this.miReparse.Text = "Reparse";
             this.miReparse.Click += new System.EventHandler(this.miReparse_Click);
             // 
@@ -528,14 +532,14 @@
             // 
             // niTrayIcon
             // 
-            this.niTrayIcon.ContextMenu = this.cmTrayIcon;
+            this.niTrayIcon.ContextMenuStrip = this.cmTrayIcon;
             this.niTrayIcon.Text = "Chan Thread Watch";
             this.niTrayIcon.Click += new System.EventHandler(this.niTrayIcon_Click);
             this.niTrayIcon.DoubleClick += new System.EventHandler(this.niTrayIcon_DoubleClick);
             // 
             // cmTrayIcon
             // 
-            this.cmTrayIcon.MenuItems.AddRange(new System.Windows.Forms.MenuItem[] {
+            this.cmTrayIcon.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.miMonitorTotal,
             this.miMonitorRunning,
             this.miMonitorDead,
@@ -548,74 +552,74 @@
             this.miHelp,
             this.miSeparatorQuickLinksExit,
             this.miExit});
+            this.cmTrayIcon.Name = "cmTrayIcon";
+            this.cmTrayIcon.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
             // 
             // miMonitorTotal
             // 
             this.miMonitorTotal.Enabled = false;
-            this.miMonitorTotal.Index = 0;
+            this.miMonitorTotal.Name = "miMonitorTotal";
             this.miMonitorTotal.Text = "Watching 0 threads";
             // 
             // miMonitorRunning
             // 
             this.miMonitorRunning.Enabled = false;
-            this.miMonitorRunning.Index = 1;
+            this.miMonitorRunning.Name = "miMonitorRunning";
             this.miMonitorRunning.Text = "    0 running";
             // 
             // miMonitorDead
             // 
             this.miMonitorDead.Enabled = false;
-            this.miMonitorDead.Index = 2;
+            this.miMonitorDead.Name = "miMonitorDead";
             this.miMonitorDead.Text = "    0 dead";
             // 
             // miMonitorStopped
             // 
             this.miMonitorStopped.Enabled = false;
-            this.miMonitorStopped.Index = 3;
+            this.miMonitorStopped.Name = "miMonitorStopped";
             this.miMonitorStopped.Text = "    0 stopped";
             // 
             // miSeparatorMonitorQuickLinks
             // 
-            this.miSeparatorMonitorQuickLinks.Index = 4;
-            this.miSeparatorMonitorQuickLinks.Text = "-";
+            this.miSeparatorMonitorQuickLinks.Name = "miSeparatorMonitorQuickLinks";
             // 
             // miAddFromClipboard
             // 
-            this.miAddFromClipboard.Index = 5;
+            this.miAddFromClipboard.Name = "miAddFromClipboard";
             this.miAddFromClipboard.Text = "Add From &Clipboard";
             this.miAddFromClipboard.Click += new System.EventHandler(this.btnAddFromClipboard_Click);
             // 
             // miDownloads
             // 
-            this.miDownloads.Index = 6;
+            this.miDownloads.Name = "miDownloads";
             this.miDownloads.Text = "&Downloads";
             this.miDownloads.Click += new System.EventHandler(this.btnDownloads_Click);
             // 
             // miSettings
             // 
-            this.miSettings.Index = 7;
+            this.miSettings.Name = "miSettings";
             this.miSettings.Text = "&Settings";
             this.miSettings.Click += new System.EventHandler(this.btnSettings_Click);
             // 
             // miAbout
             // 
-            this.miAbout.Index = 8;
+            this.miAbout.Name = "miAbout";
             this.miAbout.Text = "A&bout";
             this.miAbout.Click += new System.EventHandler(this.btnAbout_Click);
             // 
             // miHelp
             // 
-            this.miHelp.Index = 9;
+            this.miHelp.Name = "miHelp";
             this.miHelp.Text = "&Help";
             this.miHelp.Click += new System.EventHandler(this.btnHelp_Click);
             // 
             // miSeparatorQuickLinksExit
             // 
-            this.miSeparatorQuickLinksExit.Index = 10;
-            this.miSeparatorQuickLinksExit.Text = "-";
+            this.miSeparatorQuickLinksExit.Name = "miSeparatorQuickLinksExit";
             // 
             // miExit
             // 
-            this.miExit.Index = 11;
+            this.miExit.Name = "miExit";
             this.miExit.Text = "E&xit";
             this.miExit.Click += new System.EventHandler(this.miExit_Click);
             // 
@@ -660,7 +664,9 @@
             this.grpAddThread.PerformLayout();
             this.pnlCheckEvery.ResumeLayout(false);
             this.pnlCheckEvery.PerformLayout();
+            this.cmThreads.ResumeLayout(false);
             this.grpDoubleClick.ResumeLayout(false);
+            this.cmTrayIcon.ResumeLayout(false);
             this.ResumeLayout(false);
 
         }
@@ -683,25 +689,25 @@
         private System.Windows.Forms.TextBox txtImageAuth;
         private System.Windows.Forms.Label lblCheckEvery;
         private System.Windows.Forms.Button btnSettings;
-        private System.Windows.Forms.ContextMenu cmThreads;
-        private System.Windows.Forms.MenuItem miOpenFolder;
-        private System.Windows.Forms.MenuItem miOpenURL;
-        private System.Windows.Forms.MenuItem miCheckNow;
-        private System.Windows.Forms.MenuItem miStop;
-        private System.Windows.Forms.MenuItem miCopyURL;
-        private System.Windows.Forms.MenuItem miCheckEvery;
+        private System.Windows.Forms.ContextMenuStrip cmThreads;
+        private System.Windows.Forms.ToolStripMenuItem miOpenFolder;
+        private System.Windows.Forms.ToolStripMenuItem miOpenURL;
+        private System.Windows.Forms.ToolStripMenuItem miCheckNow;
+        private System.Windows.Forms.ToolStripMenuItem miStop;
+        private System.Windows.Forms.ToolStripMenuItem miCopyURL;
+        private System.Windows.Forms.ToolStripMenuItem miCheckEvery;
         private System.Windows.Forms.GroupBox grpDoubleClick;
         private System.Windows.Forms.RadioButton rbOpenURL;
         private System.Windows.Forms.RadioButton rbOpenFolder;
-        private System.Windows.Forms.MenuItem miStart;
+        private System.Windows.Forms.ToolStripMenuItem miStart;
         private System.Windows.Forms.Timer tmrUpdateWaitStatus;
         private System.Windows.Forms.Button btnAddFromClipboard;
-        private System.Windows.Forms.MenuItem miRemove;
-        private System.Windows.Forms.MenuItem miRemoveAndDeleteFolder;
+        private System.Windows.Forms.ToolStripMenuItem miRemove;
+        private System.Windows.Forms.ToolStripMenuItem miRemoveAndDeleteFolder;
         private System.Windows.Forms.ColumnHeader chAddedOn;
         private System.Windows.Forms.ColumnHeader chLastImageOn;
         private System.Windows.Forms.ColumnHeader chDescription;
-        private System.Windows.Forms.MenuItem miEdit;
+        private System.Windows.Forms.ToolStripMenuItem miEdit;
         private System.Windows.Forms.RadioButton rbEdit;
         private System.Windows.Forms.Timer tmrSaveThreadList;
         private System.Windows.Forms.Button btnDownloads;
@@ -713,24 +719,24 @@
         private System.Windows.Forms.ColumnHeader chCategory;
         private System.Windows.Forms.Label lblCategory;
         private System.Windows.Forms.CheckBox chkAutoFollow;
-        private System.Windows.Forms.MenuItem miReparse;
-        private System.Windows.Forms.MenuItem miBlacklist;
+        private System.Windows.Forms.ToolStripMenuItem miReparse;
+        private System.Windows.Forms.ToolStripMenuItem miBlacklist;
         private System.Windows.Forms.Button btnHelp;
         private System.Windows.Forms.NotifyIcon niTrayIcon;
-        private System.Windows.Forms.ContextMenu cmTrayIcon;
-        private System.Windows.Forms.MenuItem miExit;
-        private System.Windows.Forms.MenuItem miAddFromClipboard;
-        private System.Windows.Forms.MenuItem miDownloads;
-        private System.Windows.Forms.MenuItem miSettings;
-        private System.Windows.Forms.MenuItem miAbout;
-        private System.Windows.Forms.MenuItem miHelp;
+        private System.Windows.Forms.ContextMenuStrip cmTrayIcon;
+        private System.Windows.Forms.ToolStripMenuItem miExit;
+        private System.Windows.Forms.ToolStripMenuItem miAddFromClipboard;
+        private System.Windows.Forms.ToolStripMenuItem miDownloads;
+        private System.Windows.Forms.ToolStripMenuItem miSettings;
+        private System.Windows.Forms.ToolStripMenuItem miAbout;
+        private System.Windows.Forms.ToolStripMenuItem miHelp;
         private System.Windows.Forms.Timer tmrMonitor;
-        private System.Windows.Forms.MenuItem miMonitorTotal;
-        private System.Windows.Forms.MenuItem miMonitorRunning;
-        private System.Windows.Forms.MenuItem miMonitorDead;
-        private System.Windows.Forms.MenuItem miMonitorStopped;
-        private System.Windows.Forms.MenuItem miSeparatorMonitorQuickLinks;
-        private System.Windows.Forms.MenuItem miSeparatorQuickLinksExit;
+        private System.Windows.Forms.ToolStripMenuItem miMonitorTotal;
+        private System.Windows.Forms.ToolStripMenuItem miMonitorRunning;
+        private System.Windows.Forms.ToolStripMenuItem miMonitorDead;
+        private System.Windows.Forms.ToolStripMenuItem miMonitorStopped;
+        private System.Windows.Forms.ToolStripSeparator miSeparatorMonitorQuickLinks;
+        private System.Windows.Forms.ToolStripSeparator miSeparatorQuickLinksExit;
         private System.Windows.Forms.Timer tmrBackupThreadList;
     }
 }
