@@ -44,6 +44,29 @@ namespace JDP.Tests {
             Assert.AreSame(ex, General.TranslateWebException(ex));
         }
 
+        // .NET 10 throws ObjectDisposedException when the status of a closed response is read
+        [TestMethod]
+        public void ProtocolErrorWithAClosedResponseFallsBackToItsMessage() {
+            using (var server = new LoopbackHttpServer()) {
+                server.Route("/denied", LoopbackResponse.StatusOnly(403, "Forbidden"));
+#pragma warning disable SYSLIB0014
+                var request = (HttpWebRequest)WebRequest.Create(server.URL("/denied"));
+#pragma warning restore SYSLIB0014
+                WebException ex = null;
+                try {
+                    request.GetResponse().Close();
+                }
+                catch (WebException caught) {
+                    ex = caught;
+                }
+                Assert.IsNotNull(ex);
+                ex.Response.Close();
+
+                Assert.AreEqual(ex.Message, General.TranslateWebException(ex).Message);
+                Assert.AreEqual(ex.Message, ThreadWatcher.DescribeDownloadError(ex, server.URL("/denied")));
+            }
+        }
+
         [TestMethod]
         [DataRow("garbage\r\n\r\n")]
         [DataRow("HTTP/1.1 404 Not Found\r\n")]
@@ -207,6 +230,40 @@ namespace JDP.Tests {
 
                 probe.AssertEndsOnce(Promptly);
                 Assert.AreEqual(1, probe.Exceptions);
+            }
+        }
+
+        // On .NET 10 BeginRead completes synchronously when the data is already buffered, which the
+        // speed limit's sleeps make likely. Starting the next read from the read callback then nested
+        // one level per chunk until the stack overflowed.
+        [TestMethod]
+        public void ThrottledLargeDownloadDoesNotNestReads() {
+            Settings.MaximumBytesPerSecond = 4 * 1024 * 1024;
+            byte[] body = new byte[4 * 1024 * 1024];
+            new Random(1).NextBytes(body);
+            using (var server = new LoopbackHttpServer()) {
+                server.Route("/file", LoopbackResponse.Bytes(body));
+                var received = new MemoryStream();
+                var done = new ManualResetEvent(false);
+                int minDepth = int.MaxValue;
+                int maxDepth = 0;
+                Exception error = null;
+
+                General.DownloadAsync(server.URL("/file"), null, null, null, null, r => { },
+                    (b, n) => {
+                        int depth = new System.Diagnostics.StackTrace().FrameCount;
+                        minDepth = Math.Min(minDepth, depth);
+                        maxDepth = Math.Max(maxDepth, depth);
+                        received.Write(b, 0, n);
+                    },
+                    () => done.Set(),
+                    ex => { error = ex; done.Set(); });
+
+                Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download did not end");
+                Assert.IsNull(error, error?.ToString());
+                // Chunks are delivered one at a time while holding the download's lock
+                Assert.IsTrue(maxDepth - minDepth < 50, "Reads nested: stack depth went from " + minDepth + " to " + maxDepth + " frames");
+                CollectionAssert.AreEqual(body, received.ToArray());
             }
         }
 

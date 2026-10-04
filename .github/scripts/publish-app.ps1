@@ -2,7 +2,7 @@
 # copied to <OutputDir>/ChanThreadWatch-<rid>.exe. Used by ci.yml and release.yml; also runs locally.
 # The publish settings (self-contained, single file, compression) are in ChanThreadWatch.csproj.
 #
-# Example: pwsh .github/scripts/Publish-App.ps1
+# Example: pwsh .github/scripts/publish-app.ps1
 param(
     [string[]] $RuntimeIdentifiers = @('win-x64', 'win-arm64'),
     [string] $OutputDir = 'publish'

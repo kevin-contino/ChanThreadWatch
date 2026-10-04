@@ -1110,18 +1110,21 @@ namespace JDP {
         }
 
         private void CheckForUpdateThread() {
+            string url = GetLatestReleaseAPIURL();
+            // A check against the test server must not change what the real update check sees later
+            bool saveResult = url == General.LatestReleaseAPIURL;
             string json;
             try {
-                json = General.DownloadPageToString(GetLatestReleaseAPIURL());
+                json = General.DownloadPageToString(url);
             }
             catch {
                 return;
             }
             string latestStr = General.NormalizeUpdateVersion(General.ParseReleaseTagName(json), General.Version);
             if (latestStr == null) return;
-            Settings.LastUpdateCheck = DateTime.Now.Date;
+            if (saveResult) Settings.LastUpdateCheck = DateTime.Now.Date;
             if (General.ParseVersionNumber(latestStr) > GetCurrentVersionNumber()) {
-                PromptForUpdate(latestStr);
+                PromptForUpdate(latestStr, saveResult);
             }
         }
 
@@ -1146,10 +1149,10 @@ namespace JDP {
             return current;
         }
 
-        private void PromptForUpdate(string latestStr) {
+        private void PromptForUpdate(string latestStr, bool saveVersion) {
             lock (_startupPromptSync) {
                 if (IsDisposed) return;
-                Settings.LatestUpdateVersion = latestStr;
+                if (saveVersion) Settings.LatestUpdateVersion = latestStr;
                 Invoke(() => {
                     if (MessageBox.Show(this, "A newer version of Chan Thread Watch is available.  Would you like to open the Chan Thread Watch website?",
                         "Newer Version Found", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)

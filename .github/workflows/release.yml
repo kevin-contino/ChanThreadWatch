@@ -60,9 +60,10 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/publish-app.ps1
 
+      # Strict: a release is only published after a clean scan with updated signatures
       - name: Defender scan
         shell: pwsh
-        run: ./.github/scripts/defender-scan.ps1
+        run: ./.github/scripts/defender-scan.ps1 -Strict
 
       - name: Prepare release notes and checksums
         shell: pwsh

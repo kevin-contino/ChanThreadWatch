@@ -87,6 +87,10 @@ namespace JDP {
             try {
                 return TranslateProtocolError(response, ex);
             }
+            catch (ObjectDisposedException) {
+                // .NET 10 cannot read the status of a response that is already closed
+                return new WebException(ex.Message, ex, WebExceptionStatus.ProtocolError, null);
+            }
             catch {
                 return ex;
             }
@@ -737,7 +741,7 @@ namespace JDP {
         private const int ErrorInvalidName = unchecked((int)0x8007007B);
 
         private static bool IsFilePathTooLong(string path) {
-            return path.Length > MaxFilePathLength || !CanCreateFile(path);
+            return Path.GetFullPath(path).Length > MaxFilePathLength || !CanCreateFile(path);
         }
 
         // False if the file system rejects the path as too long
@@ -1294,7 +1298,11 @@ namespace JDP {
             private HttpWebRequest CreateRequest(string url, string referer) {
                 lock (_sync) {
                     _url = url;
-                    return BuildWebRequest(url: url, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime, referer: referer);
+                    HttpWebRequest request = BuildWebRequest(url: url, auth: _auth, connectionGroupName: _connectionGroupName, cacheLastModifiedTime: _cacheLastModifiedTime, referer: referer);
+                    // AbortOnTimeout bounds the wait for the response. On .NET 10 request.Timeout also
+                    // bounds BeginGetResponse and would race it with a different error message.
+                    request.Timeout = Timeout.Infinite;
+                    return request;
                 }
             }
 
@@ -1480,12 +1488,22 @@ namespace JDP {
             // BeginRead runs without holding _sync because ThrottledStream may sleep in it. If an
             // abort closes the stream meanwhile, the sleep ends and BeginRead (or the later EndRead)
             // fails; AbortInternal then does nothing. Only one read is ever in flight, so _buff is
-            // not shared between reads.
+            // not shared between reads. A read that completed synchronously (on .NET 10, whenever the
+            // data is already buffered) is handled by the loop in ReadLoop, not by this callback, so
+            // the reads never nest on the stack.
             private void OnRead(IAsyncResult readResultParam) {
+                if (readResultParam != null && readResultParam.CompletedSynchronously) return;
+                ReadLoop(readResultParam);
+            }
+
+            private void ReadLoop(IAsyncResult readResult) {
                 try {
-                    Stream responseStream = HandleReadResult(readResultParam);
-                    if (responseStream == null) return;
-                    IAsyncResult readResult = responseStream.BeginRead(_buff, 0, _buff.Length, OnRead, null);
+                    while (true) {
+                        Stream responseStream = HandleReadResult(readResult);
+                        if (responseStream == null) return;
+                        readResult = responseStream.BeginRead(_buff, 0, _buff.Length, OnRead, null);
+                        if (!readResult.CompletedSynchronously) break;
+                    }
                     AbortOnTimeout(readResult, ReadTimeoutMS, "Timed out while reading response.");
                 }
                 catch (Exception ex) {

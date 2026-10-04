@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -731,9 +730,10 @@ namespace JDP.Tests.Integration {
             WebException webEx = ex as WebException;
             if (webEx != null && webEx.Status == WebExceptionStatus.Timeout) return "timeout";
             if (ex.Message.StartsWith("Timed out", StringComparison.Ordinal)) return "timeout";
-            // MP-2c: on .NET 10 the read timeout of HttpWebRequest ends a blocking read with this instead of a
-            // WebException with status Timeout (.NET Framework)
-            if (ex is IOException && (ex.InnerException as SocketException)?.SocketErrorCode == SocketError.TimedOut) return "timeout";
+            // MP-2c: on .NET 10 the read timeout of HttpWebRequest ends a blocking read with an IOException around a
+            // timed out SocketException instead of a WebException with status Timeout (.NET Framework). The app
+            // reports both with the same text.
+            if (ThreadWatcher.DescribeDownloadError(ex, "http://example.com/").StartsWith("timed out connecting to ", StringComparison.Ordinal)) return "timeout";
             HttpWebResponse response = webEx?.Response as HttpWebResponse;
             if (response != null) return "HTTP " + (int)response.StatusCode;
             // MP-2c: a protocol error now carries its status as the message ("HTTP 302 Found") instead of

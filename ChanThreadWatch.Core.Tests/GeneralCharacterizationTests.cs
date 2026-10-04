@@ -31,6 +31,24 @@ namespace JDP.Tests {
                 Directory.Delete(dir, true);
             }
         }
+
+        // .NET Framework checked the limit against the normalized path, so a folder written with
+        // "." or ".." segments or doubled separators gets the same names as its normal form
+        [TestMethod]
+        [DataRow(@"sub\..")]
+        [DataRow(@".\.")]
+        [DataRow(@"\\\")]
+        public void MaximumFileNameLengthMeasuresTheNormalizedPath(string suffix) {
+            string dir = Path.Combine(Path.GetTempPath(), "ctw-len-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(dir, "sub"));
+            try {
+                Assert.AreEqual(General.MaxFilePathLength - (dir.Length + 1), General.GetMaximumFileNameLength(dir + @"\" + suffix));
+            }
+            finally {
+                Directory.Delete(dir, true);
+            }
+        }
+
         [TestMethod]
         [DataRow("0; url=http://example.com/next", "http://example.com/next")]
         [DataRow("5;URL='../up'", "http://a.com/up")]

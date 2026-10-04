@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Threading;
 using System.Web;
@@ -1444,7 +1445,7 @@ namespace JDP {
         // A short, plain description of why a download failed, e.g. "HTTP 403 Forbidden"
         internal static string DescribeDownloadError(Exception ex, string url) {
             WebException webEx = ex as WebException;
-            if (webEx == null) return DescribeNonWebError(ex);
+            if (webEx == null) return DescribeNonWebError(ex, url);
             if (webEx.Status == WebExceptionStatus.ProtocolError) return DescribeHTTPError(webEx);
             string format;
             if (_webExceptionStatusTexts.TryGetValue(GetStatus(webEx), out format)) return String.Format(format, new Uri(url).Host);
@@ -1465,15 +1466,29 @@ namespace JDP {
             return ex is AuthenticationException && ex.Message.IndexOf("certificate", StringComparison.OrdinalIgnoreCase) != -1;
         }
 
-        private static string DescribeNonWebError(Exception ex) {
+        // .NET 10 ends a read that passed ReadWriteTimeout with an IOException around a timed out
+        // SocketException, where .NET Framework gave a WebException with status Timeout
+        private static string DescribeNonWebError(Exception ex, string url) {
+            if (IsSocketTimeout(ex)) return String.Format(_webExceptionStatusTexts[WebExceptionStatus.Timeout], new Uri(url).Host);
             if (ex is IOException) return "connection lost";
             return ex.Message.TrimEnd('.');
+        }
+
+        private static bool IsSocketTimeout(Exception ex) {
+            SocketException socketEx = (ex as IOException)?.InnerException as SocketException;
+            return socketEx != null && socketEx.SocketErrorCode == SocketError.TimedOut;
         }
 
         private static string DescribeHTTPError(WebException webEx) {
             HttpWebResponse response = webEx.Response as HttpWebResponse;
             if (response == null) return webEx.Message;
-            return General.FormatHTTPStatus(response);
+            try {
+                return General.FormatHTTPStatus(response);
+            }
+            catch (ObjectDisposedException) {
+                // .NET 10 cannot read the status of a response that is already closed
+                return webEx.Message;
+            }
         }
 
         private void EndCheck() {

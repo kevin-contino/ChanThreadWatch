@@ -26,7 +26,12 @@ namespace JDP {
             return Usage();
         }
 
+        // Never overwrites a settings folder in use, which would replace a user's settings and saved logins
         private static int WriteAndCheck(string settingsPath, string threadsPath) {
+            if (File.Exists(settingsPath) || File.Exists(threadsPath)) {
+                Console.Error.WriteLine("settings.txt or threads.txt already exists in the folder; write needs an empty folder");
+                return 2;
+            }
             Write(settingsPath, threadsPath);
             return File.Exists(settingsPath) && File.Exists(threadsPath) ? 0 : 1;
         }

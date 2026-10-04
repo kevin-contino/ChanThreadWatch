@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Security.Authentication;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -45,6 +46,20 @@ namespace JDP.Tests {
             const string message = "The SSL connection could not be established, see inner exception.";
             var httpEx = new HttpRequestException(HttpRequestError.SecureConnectionError, message, inner);
             return new WebException(message, httpEx, WebExceptionStatus.UnknownError, null);
+        }
+
+        // .NET 10 ends a read past ReadWriteTimeout this way, .NET Framework with a WebException (Timeout)
+        [TestMethod]
+        public void DescribesASocketReadTimeoutLikeAWebExceptionTimeout() {
+            var ex = new IOException("Unable to read data from the transport connection.", new SocketException((int)SocketError.TimedOut));
+            Assert.AreEqual(ThreadWatcher.DescribeDownloadError(new WebException("timeout", WebExceptionStatus.Timeout), ThreadURL), ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
+            Assert.AreEqual("timed out connecting to example.com", ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
+        }
+
+        [TestMethod]
+        public void DescribesAnotherSocketFailureAsALostConnection() {
+            var ex = new IOException("Unable to read data from the transport connection.", new SocketException((int)SocketError.ConnectionReset));
+            Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
         }
 
         [TestMethod]

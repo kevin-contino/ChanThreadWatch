@@ -39,6 +39,23 @@ if ($Mode -eq 'Portable') {
 $settingsPath = Join-Path $settingsDir 'settings.txt'
 Set-Content -LiteralPath $settingsPath -Value $settings
 
+# Existence and last write time of a file, only read
+function Get-FileStamp([string] $Path) {
+    if (Test-Path -LiteralPath $Path -PathType Leaf) { return (Get-Item -LiteralPath $Path).LastWriteTimeUtc.ToString('o') }
+    return 'missing'
+}
+
+# A Portable run must not touch the real settings folder, which may hold a user's settings on a local
+# machine. Its log and thread list are recorded here (read only) and compared after the run.
+$realStamps = [ordered]@{}
+if ($Mode -eq 'Portable') {
+    $realSettingsDir = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Chan Thread Watch'
+    foreach ($name in 'log.txt', 'threads.txt') {
+        $path = Join-Path $realSettingsDir $name
+        $realStamps[$path] = Get-FileStamp $path
+    }
+}
+
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -106,6 +123,12 @@ try {
     }
     if (Test-Path -LiteralPath (Join-Path $runDir 'shell-log.txt')) {
         throw "The app tried to open: $(Get-Content -LiteralPath (Join-Path $runDir 'shell-log.txt') -Raw)"
+    }
+    foreach ($path in $realStamps.Keys) {
+        $after = Get-FileStamp $path
+        if ($after -ne $realStamps[$path]) {
+            throw "Portable mode changed $path outside its temp folder (before: $($realStamps[$path]), after: $after)"
+        }
     }
     Write-Host "$Mode run: exited with code 0 and saved settings in $settingsDir"
 } finally {

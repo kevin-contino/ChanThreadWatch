@@ -114,7 +114,14 @@ namespace JDP {
             if (useDefaultSecurity) {
                 return new Mutex(false, name);
             }
-            return MutexAcl.Create(false, name, out createdNew, security);
+            try {
+                return MutexAcl.Create(false, name, out createdNew, security);
+            }
+            catch (UnauthorizedAccessException) {
+                // The mutex already exists and its ACL denies the full access MutexAcl.Create asks for.
+                // Open it with the default rights instead, as .NET Framework did.
+                return new Mutex(false, name);
+            }
         }
 
         // Returns false if another process holds the mutex. An abandoned mutex counts as acquired.

@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
@@ -20,6 +21,54 @@ namespace JDP.Tests {
         [DataRow("\\\\nas\\share\\\u00DF\u01C5\u10D0\u0131\u03C2\\ChanThreadWatch", "9C085E7C9CD1843F")]
         public void MutexNameIsTheSameAsOnNetFramework(string settingsFolder, string net48Hash) {
             Assert.AreEqual(@"Global\ChanThreadWatch_" + net48Hash, Program.GetMutexName(settingsFolder));
+        }
+
+        // The mutex ACL denies Delete and ChangePermissions, so on .NET 10 opening the existing mutex
+        // with MutexAcl.Create throws. A second instance must get false ("Already Running") instead.
+        [TestMethod]
+        public void SecondObtainMutexOnTheSameFolderReturnsFalse() {
+            string folder = Path.Combine(Path.GetTempPath(), "ctw-mutex-" + Guid.NewGuid().ToString("N"));
+            Exception ownerError = null;
+            bool ownerObtained = false;
+            using (ManualResetEventSlim obtained = new ManualResetEventSlim())
+            using (ManualResetEventSlim release = new ManualResetEventSlim()) {
+                // A mutex belongs to the thread that acquired it, so the owner thread also releases it
+                Thread owner = new Thread(() => {
+                    try {
+                        ownerObtained = Program.ObtainMutex(folder);
+                    }
+                    catch (Exception ex) {
+                        ownerError = ex;
+                    }
+                    obtained.Set();
+                    release.Wait();
+                    Program.ReleaseMutex();
+                });
+                owner.Start();
+                try {
+                    Assert.IsTrue(obtained.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.IsNull(ownerError);
+                    Assert.IsTrue(ownerObtained);
+                    bool secondObtained = true;
+                    Exception secondError = null;
+                    Thread second = new Thread(() => {
+                        try {
+                            secondObtained = Program.ObtainMutex(folder);
+                        }
+                        catch (Exception ex) {
+                            secondError = ex;
+                        }
+                    });
+                    second.Start();
+                    Assert.IsTrue(second.Join(TimeSpan.FromSeconds(10)));
+                    Assert.IsNull(secondError, secondError?.ToString());
+                    Assert.IsFalse(secondObtained);
+                }
+                finally {
+                    release.Set();
+                    owner.Join(TimeSpan.FromSeconds(10));
+                }
+            }
         }
 
         // Assembly.Location is empty in a single-file app, so ExeDirectory uses AppContext.BaseDirectory.
@@ -53,6 +102,43 @@ namespace JDP.Tests {
             finally {
                 Environment.SetEnvironmentVariable(Shell.TestLogVariable, saved);
                 File.Delete(log);
+            }
+        }
+
+        // Anything but a full local path in the temp folder is ignored, and targets then open normally
+        [TestMethod]
+        [DataRow(@"\\server\share\shell-log.txt")]
+        [DataRow(@"//server/share/shell-log.txt")]
+        [DataRow(@"\\?\UNC\server\share\shell-log.txt")]
+        [DataRow("shell-log.txt")]
+        [DataRow(@"\shell-log.txt")]
+        [DataRow("{windows}\\shell-log.txt")]
+        [DataRow("{temp}..\\shell-log.txt")]
+        [DataRow("{temp-sibling}\\shell-log.txt")]
+        public void ShellTestLogOutsideTheTempFolderIsIgnored(string testLog) {
+            string temp = Path.GetTempPath();
+            testLog = testLog.Replace("{windows}", Environment.GetFolderPath(Environment.SpecialFolder.Windows))
+                .Replace("{temp-sibling}", temp.TrimEnd('\\') + "-other")
+                .Replace("{temp}", temp);
+            Assert.IsNull(ShellTestLogPathFor(testLog));
+        }
+
+        [TestMethod]
+        public void ShellTestLogInTheTempFolderIsUsedAsAFullPath() {
+            string temp = Path.GetTempPath();
+            string expected = Path.Combine(temp, "ctw-shell", "shell-log.txt");
+            Assert.AreEqual(expected, ShellTestLogPathFor(Path.Combine(temp, "ctw-shell", "sub", "..", "shell-log.txt")));
+            Assert.AreEqual(expected, ShellTestLogPathFor(Path.Combine(temp.ToUpperInvariant(), "ctw-shell", "shell-log.txt")), true);
+        }
+
+        private static string ShellTestLogPathFor(string testLog) {
+            string saved = Environment.GetEnvironmentVariable(Shell.TestLogVariable);
+            try {
+                Environment.SetEnvironmentVariable(Shell.TestLogVariable, testLog);
+                return Shell.GetTestLogPath();
+            }
+            finally {
+                Environment.SetEnvironmentVariable(Shell.TestLogVariable, saved);
             }
         }
 

@@ -13,12 +13,26 @@ namespace JDP {
         internal const string TestLogVariable = "CTW_TEST_SHELL_LOG";
 
         public static void Open(string target) {
-            string testLog = Environment.GetEnvironmentVariable(TestLogVariable);
-            if (!String.IsNullOrEmpty(testLog)) {
+            string testLog = GetTestLogPath();
+            if (testLog != null) {
                 File.AppendAllText(testLog, target + Environment.NewLine);
                 return;
             }
             using (Process.Start(new ProcessStartInfo(target) { UseShellExecute = true })) { }
+        }
+
+        // The test log is only honored as a full local path in the temp folder, so the variable cannot
+        // make the app write anywhere else. Returns null (targets open normally) otherwise.
+        internal static string GetTestLogPath() {
+            string testLog = Environment.GetEnvironmentVariable(TestLogVariable);
+            if (String.IsNullOrEmpty(testLog) || !Path.IsPathFullyQualified(testLog)) return null;
+            string fullPath = Path.GetFullPath(testLog);
+            return IsLocalTempPath(fullPath) ? fullPath : null;
+        }
+
+        private static bool IsLocalTempPath(string fullPath) {
+            if (fullPath.StartsWith(@"\\", StringComparison.Ordinal)) return false;
+            return fullPath.StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase);
         }
     }
 }
