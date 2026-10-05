@@ -45,6 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          exit 1
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "Event $EVENT_NAME: running every job"
             flags="$(printf 'code=true\nscript=true\n')"
