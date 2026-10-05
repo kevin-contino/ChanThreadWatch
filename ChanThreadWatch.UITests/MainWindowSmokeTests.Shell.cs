@@ -1,6 +1,8 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using JDP.Tests.Integration;
@@ -28,7 +30,7 @@ namespace JDP.UITests {
             WaitUntil(() => RowHasCell(threadList, "Stopped: Download complete"), "the thread to stop after its one-time download");
 
             FindItem(RightClickFirstRow(threadList), "Open Folder").DoDefaultAction();
-            string folder = WaitForShellTargets(1)[0];
+            string folder = WaitForShellTargets(1, "Open Folder")[0];
             Assert.IsTrue(folder.StartsWith(Path.Combine(_appDir, "downloads") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase), "Open Folder target " + folder + " is not in the download folder");
             Assert.AreEqual(1, Directory.GetFiles(folder, "123.html", SearchOption.AllDirectories).Length, "Open Folder target " + folder + " is not the thread's folder");
 
@@ -36,10 +38,10 @@ namespace JDP.UITests {
             // a click on its Open URL item is lost
             WaitUntil(() => ProcessMenus().Length == 0, "the thread menu to close after Open Folder");
             FindItem(RightClickFirstRow(threadList), "Open URL").DoDefaultAction();
-            Assert.AreEqual(threadURL, WaitForShellTargets(2)[1]);
+            Assert.AreEqual(threadURL, WaitForShellTargets(2, "Open URL")[1]);
 
             FindById(window, "btnHelp").AsButton().Invoke();
-            Assert.AreEqual(WikiURL, WaitForShellTargets(3)[2]);
+            Assert.AreEqual(WikiURL, WaitForShellTargets(3, "Help")[2]);
         }
 
         [TestMethod]
@@ -57,24 +59,47 @@ namespace JDP.UITests {
             WaitUntil(() => (yes = prompt.FindFirstDescendant(cf => cf.ByControlType(ControlType.Button).And(cf.ByName("Yes")))) != null, "the Yes button of the update prompt");
             yes.AsButton().Invoke();
 
-            CollectionAssert.AreEqual(new[] { ReleasesURL }, WaitForShellTargets(1));
+            CollectionAssert.AreEqual(new[] { ReleasesURL }, WaitForShellTargets(1, "the update prompt's Yes"));
             Assert.AreNotEqual(0, _server.RequestsTo(LatestReleasePath).Count, "the app did not ask the stub for the latest release");
         }
 
-        // Waits until the app has handed exactly count targets to the shell, and returns them in order
-        private string[] WaitForShellTargets(int count) {
-            string[] targets = null;
-            WaitUntil(() => (targets = ReadShellLog()).Length >= count, count + " shell target(s) in " + ShellLogPath);
-            Assert.AreEqual(count, targets.Length, "shell targets: " + string.Join(", ", targets));
+        // Waits until the app has handed exactly count targets to the shell, and returns them in order.
+        // On a timeout the message names the targets logged so far and the app's own log, where the
+        // app writes any exception its Open Folder or Open URL worker caught.
+        private string[] WaitForShellTargets(int count, string step) {
+            string[] targets = new string[0];
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            while ((targets = ReadShellLog()).Length < count) {
+                if (stopwatch.Elapsed > Timeout) {
+                    Assert.Fail("Timed out waiting for " + count + " shell target(s) after " + step + " in " + ShellLogPath
+                        + "; logged: [" + string.Join(", ", targets) + "]; app log: " + string.Join(Environment.NewLine, ReadSharedLines(Path.Combine(SettingsDir, "log.txt"))));
+                }
+                Thread.Sleep(100);
+            }
+            Assert.AreEqual(count, targets.Length, "shell targets after " + step + ": " + string.Join(", ", targets));
             return targets;
         }
 
         private string[] ReadShellLog() {
+            return ReadSharedLines(ShellLogPath);
+        }
+
+        // Reads a file the app may be writing at the same moment. File.ReadAllLines shares the file
+        // for reading only, so an append by the app during the read fails with a sharing violation,
+        // and the app's worker drops that target (it logs the exception and goes on). Sharing it for
+        // writing as well lets the app's append go through.
+        private static string[] ReadSharedLines(string path) {
             try {
-                return File.Exists(ShellLogPath) ? File.ReadAllLines(ShellLogPath) : new string[0];
+                if (!File.Exists(path)) return new string[0];
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream)) {
+                    // Only whole lines count: the last piece is empty, or a line the app is still writing
+                    string[] pieces = reader.ReadToEnd().Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    return pieces.Take(pieces.Length - 1).ToArray();
+                }
             }
             catch (IOException) {
-                // The app is still writing it
+                // The file was deleted between the check and the open
                 return new string[0];
             }
         }
