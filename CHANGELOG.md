@@ -10,6 +10,11 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 - Windows 10 (version 1607 or later) or Windows 11 is required. On Windows on ARM, `ChanThreadWatch-win-arm64.exe` needs Windows 11, or Windows 10 version 21H2 or later, as listed in the .NET 10 supported systems. 32-bit Windows, Windows 7 and Windows 8.1 are no longer supported.
 - To upgrade, put the new exe in the folder of the old one. Your settings, thread list and saved logins carry over, also when the new exe has a different name. You can then delete the old `ChanThreadWatch.exe`, `ChanThreadWatch.exe.config` and `ChanThreadWatch.Core.dll`.
 
+### Added
+
+- A command line tool, `ctw`, to list, add and remove watched threads without opening the app: `ctw list`, `ctw add <url> [--description <text>] [--category <text>]` and `ctw remove <url>`. It comes as `ctw-1.40.0.zip`, which runs on Windows, Linux and macOS and needs the .NET 10 runtime (`dotnet ctw/ctw.dll list`). For portable mode, unzip it so that its `ctw` folder sits next to `ChanThreadWatch.exe`. It uses the app's settings folder and thread list, and refuses to add or remove while the app uses that folder on this computer (a window on another computer that was started with "start anyway" is not detected). New threads get the app's default check interval, one-time download and auto-follow settings, and no login. Unlike the app, it refuses a thread that is already in the list. Removing a thread keeps its downloaded files, and a saved login in the macOS Keychain or Linux Secret Service stays there.
+- When `ctw` is changing the thread list as the app starts, the app waits up to about 10 seconds for it, then says that the command line is using the folder.
+
 ### Changed
 
 - The Downloads window keeps each finished download listed for about 5 seconds, marked "Done" or "Failed" in the Progress column. A successful download shows its final size. Before, small files often finished between two updates of the list, so the list looked empty while the title showed a download speed. Downloads that fail before the transfer starts (for example a 404 or a connection error) are still not listed.

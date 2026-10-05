@@ -17,7 +17,7 @@
 
   <ItemGroup>
     <!-- Builds the app first and copies ChanThreadWatch.exe next to the tests, which launch it -->
-    <ProjectReference Include="..\ChanThreadWatch.csproj" />
+    <ProjectReference Include="..\src\ChanThreadWatch\ChanThreadWatch.csproj" />
   </ItemGroup>
 
   <ItemGroup>

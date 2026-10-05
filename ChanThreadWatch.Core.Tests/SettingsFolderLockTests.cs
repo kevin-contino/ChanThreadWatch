@@ -277,14 +277,17 @@ namespace JDP.Tests {
             Assert.IsNull(SettingsFolderLockHolder.Parse(text));
         }
 
-        // Only a window held by another window on another computer may start anyway; a null
-        // machine stands for no record
+        // Only a window held by another window on another computer may start anyway, and a window
+        // held by the command line (on any computer) waits longer for it; a null machine stands
+        // for no record
         [TestMethod]
         [DataRow("winforms", "winforms", "OTHER-PC", HeldLockAction.AskToStartAnyway)]
         [DataRow("winforms", "winforms", "other-pc", HeldLockAction.AskToStartAnyway)]
         [DataRow("winforms", "winforms", "THIS-PC", HeldLockAction.Refuse)]
         [DataRow("winforms", "winforms", null, HeldLockAction.Refuse)]
-        [DataRow("winforms", "cli", "OTHER-PC", HeldLockAction.Refuse)]
+        [DataRow("winforms", "cli", "OTHER-PC", HeldLockAction.WaitForCommandLine)]
+        [DataRow("winforms", "cli", "THIS-PC", HeldLockAction.WaitForCommandLine)]
+        [DataRow("winforms", "future", "OTHER-PC", HeldLockAction.Refuse)]
         [DataRow("winforms", "service", "OTHER-PC", HeldLockAction.Refuse)]
         [DataRow("cli", "winforms", "OTHER-PC", HeldLockAction.Refuse)]
         [DataRow("cli", "cli", "OTHER-PC", HeldLockAction.Refuse)]
@@ -298,6 +301,26 @@ namespace JDP.Tests {
         [TestMethod]
         public void UnreadableRecordIsRefused() {
             Assert.AreEqual(HeldLockAction.Refuse, SettingsFolderLockHolder.Decide(SettingsFolderLockHolder.Parse("kind=winforms"), "winforms", "THIS-PC"));
+            Assert.AreEqual(HeldLockAction.Refuse, SettingsFolderLockHolder.Decide(SettingsFolderLockHolder.Parse("kind=cli"), "winforms", "THIS-PC"));
+        }
+
+        // The window waits about 10 seconds in all for the command line
+        [TestMethod]
+        public void CommandLineWaitAddsUpToAboutTenSeconds() {
+            Assert.AreEqual(TimeSpan.FromSeconds(10), SettingsFolderLock.DefaultWait + SettingsFolderLock.CommandLineWait);
+        }
+
+        // The same names as RuntimeMigrationTests.MutexNameIsTheSameAsOnNetFramework (recorded from the .NET
+        // Framework 4.8 build), now computed in Core so the command line checks the window's mutex. Windows
+        // only: the mutex exists only there, and the names rely on NLS casing (UseNls), which other systems ignore.
+        [TestMethod]
+        [OSCondition(OperatingSystems.Windows)]
+        [DataRow(@"C:\Users\runneradmin\AppData\Roaming\ChanThreadWatch", "56D4B3D8F6E35CC8")]
+        [DataRow("C:\\Users\\J\u00FCrgen \u00C5ngstr\u00F6m\\AppData\\Roaming\\ChanThreadWatch", "BF9348385C7B5D86")]
+        [DataRow(@"D:\Tools\ChanThreadWatch", "63C0998D1948D86E")]
+        [DataRow("\\\\nas\\share\\\u00DF\u01C5\u10D0\u0131\u03C2\\ChanThreadWatch", "9C085E7C9CD1843F")]
+        public void AppMutexNameIsTheOldWindowsName(string settingsFolder, string net48Hash) {
+            Assert.AreEqual(@"Global\ChanThreadWatch_" + net48Hash, SettingsFolderLock.GetAppMutexName(settingsFolder));
         }
     }
 }

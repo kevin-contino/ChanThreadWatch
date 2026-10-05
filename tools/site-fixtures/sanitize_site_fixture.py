@@ -36,7 +36,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SITES_DIR = os.path.join(REPO, "ChanThreadWatch.Tests", "Fixtures", "sites")
 ALLOWLIST_PATH = os.path.join(SITES_DIR, "allowlist.json")
 MANIFEST_PATH = os.path.join(SITES_DIR, "manifest.json")
-CORE_DLL_PATH = os.path.join(REPO, "bin", "Release", "ChanThreadWatch.Core.dll")
+CORE_DLL_PATH = os.path.join(REPO, "src", "ChanThreadWatch", "bin", "Release", "ChanThreadWatch.Core.dll")
 RESULT_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Get-SiteHelperResult.ps1")
 
 # Values the placeholders stand for when a fixture is parsed. The tests use the same values.

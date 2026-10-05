@@ -1,6 +1,6 @@
 'use strict';
 
-// Runs Resources/OfflinePageScript.js in jsdom against each site fixture in
+// Runs src/ChanThreadWatch.Core/Resources/OfflinePageScript.js in jsdom against each site fixture in
 // ChanThreadWatch.Tests/Fixtures/sites. Each fixture is first changed the way the app saves a
 // page: same-page links become fragments and thumbnail links point at local image files.
 // jsdom does not enforce the Content-Security-Policy; the C# tests check the policy's hash.
@@ -13,7 +13,7 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FIXTURES = path.join(ROOT, 'ChanThreadWatch.Tests', 'Fixtures', 'sites');
-const SCRIPT = fs.readFileSync(path.join(ROOT, 'Resources', 'OfflinePageScript.js'), 'utf8');
+const SCRIPT = fs.readFileSync(path.join(ROOT, 'src', 'ChanThreadWatch.Core', 'Resources', 'OfflinePageScript.js'), 'utf8');
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'manifest.json'), 'utf8'));
 const BASE_URL = 'http://fixture.test';
 const MEDIA_URL = 'http://media.test';

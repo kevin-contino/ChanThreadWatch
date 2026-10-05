@@ -90,7 +90,7 @@ function Wait-Until([scriptblock] $Condition, [string] $Description) {
 $startInfo = [Diagnostics.ProcessStartInfo]::new($runExe)
 $startInfo.WorkingDirectory = $runDir
 $startInfo.UseShellExecute = $false
-# Anything the app would open in Explorer or a browser is written here instead (see Classes/Shell.cs)
+# Anything the app would open in Explorer or a browser is written here instead (see src/ChanThreadWatch/Classes/Shell.cs)
 $startInfo.Environment['CTW_TEST_SHELL_LOG'] = Join-Path $runDir 'shell-log.txt'
 $process = [Diagnostics.Process]::Start($startInfo)
 try {

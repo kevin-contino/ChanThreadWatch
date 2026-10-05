@@ -13,12 +13,25 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze (C#)
-    runs-on: windows-latest
+    name: Analyze (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # C# is built with dotnet build below; the workflow files need no build
+          - name: C#
+            language: csharp
+            build-mode: manual
+            os: windows-latest
+          - name: Actions
+            language: actions
+            build-mode: none
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,17 +39,19 @@ jobs:
 
       - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
-          languages: csharp
-          build-mode: manual
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
           queries: security-extended
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: matrix.build-mode == 'manual'
         with:
           dotnet-version: 10.0.x
 
       - name: Build
+        if: matrix.build-mode == 'manual'
         run: dotnet build ChanThreadWatch.sln -c Release -v:minimal -nologo
 
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
-          category: /language:csharp
+          category: /language:${{ matrix.language }}

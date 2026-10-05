@@ -1,15 +1,19 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2012
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch", "ChanThreadWatch.csproj", "{1DAC6953-5A72-45F4-8677-3F2B0A15F32A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch", "src\ChanThreadWatch\ChanThreadWatch.csproj", "{1DAC6953-5A72-45F4-8677-3F2B0A15F32A}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Tests", "ChanThreadWatch.Tests\ChanThreadWatch.Tests.csproj", "{2E769235-6A3B-4538-9E7A-DC76D1EA3A13}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.UITests", "ChanThreadWatch.UITests\ChanThreadWatch.UITests.csproj", "{2E90F7D2-1E7D-46EF-AD39-5516438CC19E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Core", "ChanThreadWatch.Core\ChanThreadWatch.Core.csproj", "{6F0C2B5E-3D41-4C8A-9E27-1B5A8D3C7F90}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Core", "src\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj", "{6F0C2B5E-3D41-4C8A-9E27-1B5A8D3C7F90}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Core.Tests", "ChanThreadWatch.Core.Tests\ChanThreadWatch.Core.Tests.csproj", "{9B3E4A71-5C2D-4F86-A0E3-7D1C6B2F8E45}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Cli", "src\ChanThreadWatch.Cli\ChanThreadWatch.Cli.csproj", "{591B7C0B-5541-4AAB-943D-F97621E26661}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Cli.Tests", "ChanThreadWatch.Cli.Tests\ChanThreadWatch.Cli.Tests.csproj", "{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -37,6 +41,14 @@ Global
 		{9B3E4A71-5C2D-4F86-A0E3-7D1C6B2F8E45}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9B3E4A71-5C2D-4F86-A0E3-7D1C6B2F8E45}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9B3E4A71-5C2D-4F86-A0E3-7D1C6B2F8E45}.Release|Any CPU.Build.0 = Release|Any CPU
+		{591B7C0B-5541-4AAB-943D-F97621E26661}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{591B7C0B-5541-4AAB-943D-F97621E26661}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{591B7C0B-5541-4AAB-943D-F97621E26661}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{591B7C0B-5541-4AAB-943D-F97621E26661}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

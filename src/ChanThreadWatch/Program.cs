@@ -39,7 +39,7 @@ namespace JDP {
         // atStartup picks the advice shown when the folder can't be written.
         internal static bool TryLockSettingsFolder(IWin32Window owner, string folder, bool atStartup, out SettingsFolderLock folderLock) {
             try {
-                if (SettingsFolderLock.TryAcquire(folder, SettingsFolderLockHolder.WinForms, SettingsFolderLock.DefaultWait, out folderLock)) return true;
+                if (TryAcquireWaitingForCommandLine(folder, atStartup, out folderLock)) return true;
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
                 Logger.Log("The settings folder lock could not be written: " + ex.Message);
@@ -50,10 +50,35 @@ namespace JDP {
             return ConfirmStartWithoutLock(owner, folder);
         }
 
+        // Shown when the command line (ctw) still holds the settings folder's lock after the longer wait
+        internal const string CommandLineHoldsFolderMessage = "The command line tool (ctw) is changing the thread list in this settings folder. " +
+            "Try again when it has finished.";
+
+        // Waits as for a program that is closing, and at startup longer when the command line holds the lock
+        // (see SettingsFolderLockHolder.Decide), since it lets go once it has changed the thread list. The
+        // settings window (atStartup false) waits only DefaultWait, so its UI thread is not blocked for long;
+        // the user can try again.
+        internal static bool TryAcquireWaitingForCommandLine(string folder, bool atStartup, out SettingsFolderLock folderLock) {
+            if (SettingsFolderLock.TryAcquire(folder, SettingsFolderLockHolder.WinForms, SettingsFolderLock.DefaultWait, out folderLock)) return true;
+            return atStartup && DecideForHolder(folder) == HeldLockAction.WaitForCommandLine &&
+                SettingsFolderLock.TryAcquire(folder, SettingsFolderLockHolder.WinForms, SettingsFolderLock.CommandLineWait, out folderLock);
+        }
+
+        private static HeldLockAction DecideForHolder(string folder) {
+            SettingsFolderLockHolder holder = SettingsFolderLock.ReadHolderAfterRecordIsWritten(folder);
+            return SettingsFolderLockHolder.Decide(holder, SettingsFolderLockHolder.WinForms, SettingsFolderLockHolder.GetThisMachineName());
+        }
+
+        // The message for a lock the window can't take and must not start without
+        internal static string GetHeldLockMessage(HeldLockAction action) {
+            return action == HeldLockAction.WaitForCommandLine ? CommandLineHoldsFolderMessage : SettingsFolderInUseMessage;
+        }
+
         private static bool ConfirmStartWithoutLock(IWin32Window owner, string folder) {
             SettingsFolderLockHolder holder = SettingsFolderLock.ReadHolderAfterRecordIsWritten(folder);
-            if (SettingsFolderLockHolder.Decide(holder, SettingsFolderLockHolder.WinForms, SettingsFolderLockHolder.GetThisMachineName()) == HeldLockAction.Refuse) {
-                MessageBox.Show(owner, SettingsFolderInUseMessage, "Already Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            HeldLockAction action = SettingsFolderLockHolder.Decide(holder, SettingsFolderLockHolder.WinForms, SettingsFolderLockHolder.GetThisMachineName());
+            if (action != HeldLockAction.AskToStartAnyway) {
+                MessageBox.Show(owner, GetHeldLockMessage(action), "Already Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return false;
             }
             if (MessageBox.Show(owner, GetRunningOnOtherComputerMessage(holder.MachineName), "Already Running",
@@ -165,9 +190,9 @@ namespace JDP {
         }
 
         // One instance per settings folder. Older versions use the same name, so they exclude each other too.
+        // The name is computed in Core, where the command line checks it as well.
         internal static string GetMutexName(string settingsFolder) {
-            return @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
-                settingsFolder.ToUpperInvariant())).ToString("X16");
+            return SettingsFolderLock.GetAppMutexName(settingsFolder);
         }
 
         // Returns false if the platform does not support the access rules (Mono).
