@@ -107,6 +107,32 @@ namespace JDP.Tests {
             return watcher;
         }
 
+        // MP-4a: a thread folder on another root has a rooted "relative" path. Combined with the completed
+        // folder, that made the destination the thread folder itself, so an empty one was deleted in place.
+        // \\localhost\C$ reaches the local temp folder as a network share, another root.
+        [TestMethod]
+        [OSCondition(OperatingSystems.Windows)]
+        public void CompletedMoveNeverDeletesAThreadFolderOnAnotherRootInPlace() {
+            string localThreadDir = Path.Combine(_dir, "share", "thread1");
+            Directory.CreateDirectory(localThreadDir);
+            string shareThreadDir = @"\\localhost\" +localThreadDir.Substring(0, 1) + "$" + localThreadDir.Substring(2);
+            if (!Directory.Exists(shareThreadDir)) Assert.Inconclusive("The administrative share " + shareThreadDir + " is not reachable");
+            Settings.CompletedFolder = Path.Combine(_dir, "completed");
+            Settings.CompletedFolderIsRelative = false;
+            Directory.CreateDirectory(Settings.AbsoluteCompletedDirectory);
+            ThreadWatcher watcher = CreateWatcherInDownloadFolder(1, shareThreadDir);
+            Assert.IsTrue(Path.IsPathRooted(General.GetRelativeDirectoryPath(shareThreadDir, watcher.MainDownloadDirectory)));
+
+            try {
+                WatchSession.MoveThreadToCompletedFolder(watcher);
+            }
+            catch (IOException) {
+                // Windows does not move a folder between roots; the folder must stay where it was
+            }
+
+            Assert.IsTrue(Directory.Exists(localThreadDir) || Directory.Exists(Path.Combine(Settings.AbsoluteCompletedDirectory, "thread1")));
+        }
+
         // B6: a skipped move must not leave renaming disabled
         [TestMethod]
         public void SkippedMoveReenablesRenaming() {

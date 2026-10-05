@@ -87,27 +87,30 @@ namespace JDP.Tests {
             new[] { "http://media.test/w1/x?q=a/b.jpg", "b.jpg", "b.jpg" }
         };
 
-        // Entity-encoded title or poster name, General.CleanFileName(HttpUtility.HtmlDecode(input)) as the site helpers do
+        // Entity-encoded title or poster name, HttpUtility.HtmlDecode(input), and
+        // General.CleanFileName(HttpUtility.HtmlDecode(input)) as the site helpers do. The decoded column
+        // (MP-4a) was recorded from System.Web.HttpUtility.HtmlDecode in an app targeting .NET Framework 4.8;
+        // the cleaned column is the corpus recorded before the move to ChanThreadWatch.Core.
         private static readonly string[][] DecodedNameCases = {
-            new[] { "Tom &amp; Jerry", "Tom & Jerry" },
-            new[] { "it&#x27;s here", "it's here" },
-            new[] { "it&#39;s here", "it's here" },
-            new[] { "&lt;b&gt;bold&lt;/b&gt;", "bboldb" },
-            new[] { "&quot;quoted&quot;", "quoted" },
-            new[] { "&#47;slash&#47;", "slash" },
-            new[] { "&nbsp;spaced&nbsp;", "\u00A0spaced\u00A0" },
-            new[] { "a&#58;b", "ab" },
-            new[] { "&#x2F;&#x2E;&#x2E;", "" },
-            new[] { "&amp;amp; double", "&amp; double" },
-            new[] { "caf&eacute;", "caf\u00E9" },
-            new[] { "cafe&#x301;", "cafe\u0301" },
-            new[] { "&#x1F600; grin", "\U0001F600 grin" },
-            new[] { "&bogus; entity", "&bogus; entity" },
-            new[] { "&#0; zero", " zero" },
-            new[] { "CON&period;txt", "CON&period;txt" },
-            new[] { "&#67;&#79;&#78;", "_CON" },
-            new[] { "dots&hellip;", "dots\u2026" },
-            new[] { "end&#46;&#46;&#46;", "end" }
+            new[] { "Tom &amp; Jerry", "Tom & Jerry", "Tom & Jerry" },
+            new[] { "it&#x27;s here", "it's here", "it's here" },
+            new[] { "it&#39;s here", "it's here", "it's here" },
+            new[] { "&lt;b&gt;bold&lt;/b&gt;", "<b>bold</b>", "bboldb" },
+            new[] { "&quot;quoted&quot;", "\"quoted\"", "quoted" },
+            new[] { "&#47;slash&#47;", "/slash/", "slash" },
+            new[] { "&nbsp;spaced&nbsp;", "\u00A0spaced\u00A0", "\u00A0spaced\u00A0" },
+            new[] { "a&#58;b", "a:b", "ab" },
+            new[] { "&#x2F;&#x2E;&#x2E;", "/..", "" },
+            new[] { "&amp;amp; double", "&amp; double", "&amp; double" },
+            new[] { "caf&eacute;", "caf\u00E9", "caf\u00E9" },
+            new[] { "cafe&#x301;", "cafe\u0301", "cafe\u0301" },
+            new[] { "&#x1F600; grin", "\U0001F600 grin", "\U0001F600 grin" },
+            new[] { "&bogus; entity", "&bogus; entity", "&bogus; entity" },
+            new[] { "&#0; zero", "\u0000 zero", " zero" },
+            new[] { "CON&period;txt", "CON&period;txt", "CON&period;txt" },
+            new[] { "&#67;&#79;&#78;", "CON", "_CON" },
+            new[] { "dots&hellip;", "dots\u2026", "dots\u2026" },
+            new[] { "end&#46;&#46;&#46;", "end...", "end" }
         };
 
         // Thread name, page index, ThreadWatcher.GetPageFileName(threadName, pageIndex)
@@ -152,7 +155,17 @@ namespace JDP.Tests {
         public void DecodedNamesMatchGoldenCorpus() {
             var failures = new List<string>();
             foreach (string[] c in DecodedNameCases) {
-                Check(failures, "CleanFileName(HtmlDecode)", c[0], c[1], General.CleanFileName(HttpUtility.HtmlDecode(c[0])));
+                Check(failures, "CleanFileName(HtmlDecode)", c[0], c[2], General.CleanFileName(HttpUtility.HtmlDecode(c[0])));
+            }
+            AssertNoFailures(failures);
+        }
+
+        // Decoding alone does not depend on the OS, so unlike DecodedNamesMatchGoldenCorpus this runs everywhere
+        [TestMethod]
+        public void HtmlDecodeMatchesRecordedNetFrameworkOutput() {
+            var failures = new List<string>();
+            foreach (string[] c in DecodedNameCases) {
+                Check(failures, "HtmlDecode", c[0], c[1], HttpUtility.HtmlDecode(c[0]));
             }
             AssertNoFailures(failures);
         }

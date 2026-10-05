@@ -266,9 +266,8 @@ namespace JDP {
             }
         }
 
-        private static void MoveThreadToCompletedFolder(ThreadWatcher watcher) {
-            string destDir = Path.Combine(Settings.AbsoluteCompletedDirectory,
-                General.GetRelativeDirectoryPath(watcher.ThreadDownloadDirectory, watcher.MainDownloadDirectory));
+        internal static void MoveThreadToCompletedFolder(ThreadWatcher watcher) {
+            string destDir = Path.Combine(Settings.AbsoluteCompletedDirectory, GetCompletedFolderName(watcher));
             if (Directory.Exists(watcher.ThreadDownloadDirectory)) {
                 if (Directory.Exists(destDir)) {
                     Directory.Delete(destDir);
@@ -279,6 +278,13 @@ namespace JDP {
                 Directory.Move(watcher.ThreadDownloadDirectory, destDir);
             }
             DeleteCategoryFolderIfEmpty(watcher);
+        }
+
+        // A thread folder on another root (another drive or network share) has no relative path, and
+        // combining the absolute path would make the destination the thread folder itself
+        private static string GetCompletedFolderName(ThreadWatcher watcher) {
+            string relativeDir = General.GetRelativeDirectoryPath(watcher.ThreadDownloadDirectory, watcher.MainDownloadDirectory);
+            return Path.IsPathRooted(relativeDir) ? General.GetLastDirectory(watcher.ThreadDownloadDirectory) : relativeDir;
         }
 
         private static void DeleteCategoryFolderIfEmpty(ThreadWatcher watcher) {

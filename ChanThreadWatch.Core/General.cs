@@ -782,21 +782,11 @@ namespace JDP {
             }
         }
 
+        // A folder that shares no root with baseDir (another drive or network share) stays absolute.
+        // The trailing separator is trimmed, as the earlier Uri-based version did.
         public static string GetRelativeDirectoryPath(string dir, string baseDir) {
-            if (dir.Length != 0 && Path.IsPathRooted(dir)) {
-                Uri baseDirUri = new Uri(Path.Combine(baseDir, "dummy.txt"));
-                Uri targetDirUri = new Uri(Path.Combine(dir, "dummy.txt"));
-                try {
-                    dir = Uri.UnescapeDataString(baseDirUri.MakeRelativeUri(targetDirUri).ToString());
-                }
-                catch (UriFormatException) {
-                    // Workaround for Mono when determining the relative URI of directories
-                    // on different drives in Windows.
-                    return dir;
-                }
-                dir = (dir.Length == 0) ? "." : Path.GetDirectoryName(dir.Replace('/', Path.DirectorySeparatorChar));
-            }
-            return dir;
+            if (dir.Length == 0 || !Path.IsPathRooted(dir)) return dir;
+            return Path.TrimEndingDirectorySeparator(Path.GetRelativePath(baseDir, dir));
         }
 
         public static string GetAbsoluteDirectoryPath(string dir, string baseDir) {
