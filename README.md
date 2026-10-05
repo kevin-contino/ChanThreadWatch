@@ -10,7 +10,7 @@ For documentation, changelog and any other information, please visit the wiki: [
 
 ## Building and testing
 
-Requires the .NET 10 SDK on Windows. The app targets `net10.0-windows`; `ChanThreadWatch.Core` targets `net10.0`.
+Requires the .NET 10 SDK. The app and its tests build only on Windows; see below for Linux and macOS. The app targets `net10.0-windows`; `ChanThreadWatch.Core` targets `net10.0`.
 
 ```
 dotnet build ChanThreadWatch.sln -c Release
@@ -18,6 +18,14 @@ dotnet test ChanThreadWatch.sln -c Release --no-build
 ```
 
 The second command runs every test, including the UI smoke test in `ChanThreadWatch.UITests`. That test launches the built app, so it needs an interactive desktop session. Each run uses a copy of the exe in a temporary folder with its own settings, so it does not change your own settings or thread list. To skip it, add `--filter "TestCategory!=UI"`.
+
+On Linux and macOS only `ChanThreadWatch.Core` and its tests build. Run them without the UI tests and the tests marked `PendingUnix`. Those tests cover Windows-only behavior that is not ported yet, and each one's comment gives the reason.
+
+```
+dotnet test ChanThreadWatch.Core.Tests -c Release --filter "TestCategory!=PendingUnix&TestCategory!=UI"
+```
+
+CI runs the Core tests on Windows, Ubuntu and macOS (the "Core tests" check), and the full Windows build and tests in "Build and test".
 
 The release exes are self-contained single files, one per architecture: `pwsh .github/scripts/publish-app.ps1` writes `publish/ChanThreadWatch-win-x64.exe` and `publish/ChanThreadWatch-win-arm64.exe`.
 

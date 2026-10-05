@@ -126,6 +126,8 @@ namespace JDP.Tests {
 
         // Once after each load: a copy written again later in the session is left alone
         [TestMethod]
+        // PendingUnix: StoredAuth.Protect uses DPAPI, which exists only on Windows, see MP-4c
+        [TestCategory("PendingUnix")]
         public void FirstSaveBlanksPlaintextLoginsInExistingSettingsCopiesOnce() {
             string copy = _path + ".corrupt-20200101-000000-000";
             string encryptedCopy = _path + ".corrupt-20200102-000000-000";
@@ -158,6 +160,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
+        // PendingUnix: an open reader does not stop File.Replace (a rename) on Unix, see MP-4d
+        [TestCategory("PendingUnix")]
         public void SettingsCopyThatCannotBeReplacedIsLeftUnchangedUntilTheNextLoad() {
             string copy = _path + ".corrupt-20200101-000000-000";
             File.WriteAllLines(copy, OldCopyLines);

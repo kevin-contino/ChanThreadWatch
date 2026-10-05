@@ -123,6 +123,8 @@ namespace JDP.Tests {
         };
 
         [TestMethod]
+        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the Windows-invalid characters stay in the name, see MP-4b
+        [TestCategory("PendingUnix")]
         public void CleanFileNameMatchesGoldenCorpus() {
             var failures = new List<string>();
             foreach (string[] c in CleanFileNameCases) {
@@ -132,6 +134,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
+        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the Windows-invalid characters stay in the name, see MP-4b
+        [TestCategory("PendingUnix")]
         public void URLFileNamesMatchGoldenCorpus() {
             var failures = new List<string>();
             foreach (string[] c in URLFileNameCases) {
@@ -143,6 +147,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
+        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the Windows-invalid characters stay in the name, see MP-4b
+        [TestCategory("PendingUnix")]
         public void DecodedNamesMatchGoldenCorpus() {
             var failures = new List<string>();
             foreach (string[] c in DecodedNameCases) {

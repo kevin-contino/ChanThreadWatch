@@ -128,7 +128,7 @@ namespace JDP.Tests.Integration {
             Assert.DoesNotContain("onload", html);
             StringAssert.Contains(html, "<img src=\"" + server.BaseURL() + "/wg/1700000000001s.jpg\"");
             StringAssert.Contains(html, "href=\"" + server.BaseURL() + "/wg/1700000000001.jpg\"");
-            StringAssert.Contains(html, "</html>\r\n");
+            StringAssert.Contains(html, "</html>" + Environment.NewLine);
             Assert.IsEmpty(server.RequestsTo(FourChanThreadFixture.ThumbPaths[0]));
             Assert.IsFalse(Directory.Exists(Path.Combine(watcher.ThreadDownloadDirectory, "thumbs")));
         }
@@ -315,6 +315,8 @@ namespace JDP.Tests.Integration {
         // S6: a saved login that can't be decrypted is loaded as empty, so no request carries
         // the stored ciphertext or any other credential
         [TestMethod]
+        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        [TestCategory("PendingUnix")]
         [SupportedOSPlatform("windows")]
         public void UndecryptableSavedLoginSendsNoCredentials() {
             var fixture = new FourChanThreadFixture();
