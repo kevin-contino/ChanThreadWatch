@@ -14,16 +14,16 @@ namespace JDP.Tests {
         private const string FourChanURL = "https://boards.4chan.org/wg/thread/8143532";
         private const string InfinitechanURL = "https://8ch.net/tech/res/100.html";
 
+        // Linux and macOS keep the '?' of the image file name "1005.webm?x=1&y=2" (G4), so they compare against
+        // generic-images.unix.txt, which differs from the Windows file only in that name
         [TestMethod]
-        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the file name of "1005.webm?x=1&y=2" keeps its '?', see MP-4b
-        [TestCategory("PendingUnix")]
         public void GenericGetImages() {
             AssertGetImages("http://example.com/b/res/1.html", "generic-thread.html", "generic-images");
         }
 
+        // Linux and macOS keep the '<' and '>' of "sun <rise> & set.jpg" (G4), so they compare against
+        // 4chan-edge-images.unix.txt, which differs from the Windows file only in that name
         [TestMethod]
-        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so "sun <rise> & set.jpg" keeps its '<' and '>', see MP-4b
-        [TestCategory("PendingUnix")]
         public void FourChanGetImagesEdgeCases() {
             AssertGetImages(FourChanURL, "4chan-edge-cases.html", "4chan-edge-images");
         }
@@ -179,11 +179,17 @@ namespace JDP.Tests {
 
         private static void AssertMatchesGolden(string name, string actual) {
             string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Fixtures", "expected");
-            string expected = File.ReadAllText(Path.Combine(directory, name + ".txt")).Replace("\r\n", "\n");
+            string expected = File.ReadAllText(GoldenPath(directory, name)).Replace("\r\n", "\n");
             if (expected == actual) return;
             string actualPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, name + ".actual.txt");
             File.WriteAllText(actualPath, actual);
             Assert.Fail("Output differs from Fixtures/expected/" + name + ".txt. Actual output: " + actualPath);
+        }
+
+        // Off Windows a "<name>.unix.txt" file, where there is one, holds the values that differ by OS (G4)
+        private static string GoldenPath(string directory, string name) {
+            string unixPath = Path.Combine(directory, name + ".unix.txt");
+            return !OperatingSystem.IsWindows() && File.Exists(unixPath) ? unixPath : Path.Combine(directory, name + ".txt");
         }
 
         private static SiteHelper CreateHelper(string url, string fixture) {

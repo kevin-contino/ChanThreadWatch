@@ -789,6 +789,62 @@ namespace JDP {
             return Path.TrimEndingDirectorySeparator(Path.GetRelativePath(baseDir, dir));
         }
 
+        // Returns a folder path from the settings or the thread list in this OS's form. A path written
+        // on Windows uses backslashes, which are separators there but name characters on Linux and
+        // macOS, so they are read as separators there. An absolute path of the other OS can't name a
+        // folder here, so it throws with the setting's name rather than being read as a relative path.
+        public static string ToLocalDirectoryPath(string path, string settingName) {
+            return ToLocalDirectoryPath(path, settingName, OperatingSystem.IsWindows());
+        }
+
+        internal static string ToLocalDirectoryPath(string path, string settingName, bool isWindows) {
+            if (String.IsNullOrEmpty(path)) return path;
+            if (isWindows ? IsUnixAbsolutePath(path) : IsWindowsAbsolutePath(path)) {
+                throw new FormatException(settingName + " holds \"" + path + "\", an absolute path of another operating system, which can't be used here.");
+            }
+            return isWindows ? path : path.Replace('\\', '/');
+        }
+
+        // "/home/x", but not a UNC path ("//server/share")
+        private static bool IsUnixAbsolutePath(string path) {
+            return path[0] == '/' && (path.Length == 1 || (path[1] != '/' && path[1] != '\\'));
+        }
+
+        // "C:\x", "\\server\share" or "\x". Only the backslash form counts: Linux and macOS keep ':' in
+        // names, so "Q: help" or "A: misc/x" is a folder there, and a path written there never holds a
+        // backslash (CleanFileName removes it on every OS).
+        private static bool IsWindowsAbsolutePath(string path) {
+            return (path.Length >= 3 && path[1] == ':' && path[2] == '\\' && Char.IsAsciiLetter(path[0])) || path[0] == '\\';
+        }
+
+        // Returns the existing folder whose names match the path' names ignoring case, for a folder
+        // written on a case-insensitive OS and looked up on Linux. A name that matches more than one
+        // folder (they differ only in case) is not a match, and then the path is returned as written.
+        public static string FindDirectoryIgnoringCase(string path) {
+            if (Directory.Exists(path)) return path;
+            string root = Path.GetPathRoot(path);
+            if (String.IsNullOrEmpty(root)) return path;
+            string current = root;
+            foreach (string name in path.Substring(root.Length).Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)) {
+                current = FindChildDirectoryIgnoringCase(current, name);
+                if (current == null) return path;
+            }
+            return current;
+        }
+
+        // Returns null if no folder or more than one matches
+        private static string FindChildDirectoryIgnoringCase(string dir, string name) {
+            string exact = Path.Combine(dir, name);
+            if (Directory.Exists(exact)) return exact;
+            try {
+                string[] matches = Array.FindAll(Directory.GetDirectories(dir), d => String.Equals(Path.GetFileName(d), name, StringComparison.OrdinalIgnoreCase));
+                return matches.Length == 1 ? matches[0] : null;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                return null;
+            }
+        }
+
         public static string GetAbsoluteDirectoryPath(string dir, string baseDir) {
             if (dir.Length != 0 && !Path.IsPathRooted(dir)) {
                 dir = Path.GetFullPath(Path.Combine(baseDir, dir));
@@ -804,6 +860,31 @@ namespace JDP {
                 filePath = (dir == ".") ? fileName : Path.Combine(dir, fileName);
             }
             return filePath;
+        }
+
+        // Returns a relative path from a saved page to a saved file as a link path: '/' separators,
+        // and in each name the characters that a URL reads differently ('%', '?', '#', space and
+        // control characters) percent-encoded, so a name such as "a#b.jpg" or "100%.png" links to its own file
+        public static string ToLinkPath(string relativePath) {
+            string[] names = relativePath.Replace(Path.DirectorySeparatorChar, '/').Split('/');
+            for (int i = 0; i < names.Length; i++) {
+                names[i] = EscapeLinkName(names[i]);
+            }
+            return String.Join("/", names);
+        }
+
+        private static string EscapeLinkName(string name) {
+            StringBuilder sb = new StringBuilder(name.Length);
+            foreach (char c in name) {
+                if (IsEscapedInLinks(c)) sb.Append('%').Append(((int)c).ToString("X2", CultureInfo.InvariantCulture));
+                else sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        // Control characters, space, DEL, and the characters a URL reads as an escape, query or fragment
+        private static bool IsEscapedInLinks(char c) {
+            return c <= ' ' || c == '\u007F' || c == '%' || c == '?' || c == '#';
         }
 
         public static string GetAbsoluteFilePath(string filePath, string baseDir) {
@@ -874,6 +955,20 @@ namespace JDP {
         // older versions did and download them again.
         internal const int MaxFilePathLength = 259;
         private const int ErrorInvalidName = unchecked((int)0x8007007B);
+
+        // The longest name of one path part, in UTF-8 bytes, that Linux (ext4 and most other file
+        // systems) and macOS (APFS) accept. Windows counts UTF-16 characters (255 per part) instead.
+        private const int MaxUnixFileNameBytes = 255;
+
+        // True if the file name is longer than maxFileNameLength characters, or on Linux and macOS
+        // longer than 255 UTF-8 bytes, where a name in a non-Latin script has fewer characters than that
+        public static bool IsFileNameLongerThan(string fileName, int maxFileNameLength) {
+            return IsFileNameLongerThan(fileName, maxFileNameLength, !OperatingSystem.IsWindows());
+        }
+
+        internal static bool IsFileNameLongerThan(string fileName, int maxFileNameLength, bool limitUTF8Bytes) {
+            return fileName.Length > maxFileNameLength || (limitUTF8Bytes && Encoding.UTF8.GetByteCount(fileName) > MaxUnixFileNameBytes);
+        }
 
         private static bool IsFilePathTooLong(string path) {
             return Path.GetFullPath(path).Length > MaxFilePathLength || !CanCreateFile(path);
@@ -1293,6 +1388,26 @@ namespace JDP {
             return IsReservedDeviceName(name) ? "_" + name : name;
         }
 
+        // CleanFileName for a folder name (thread, category or poster folder). On Linux and macOS
+        // the name is also cut to the 255 UTF-8 bytes one path part can hold there; Windows keeps it.
+        public static string CleanFolderName(string src) {
+            return CleanFolderName(src, !OperatingSystem.IsWindows());
+        }
+
+        internal static string CleanFolderName(string src, bool limitUTF8Bytes) {
+            string name = CleanFileName(src);
+            return limitUTF8Bytes ? CutToUTF8Bytes(name, MaxUnixFileNameBytes).TrimEnd('.', ' ') : name;
+        }
+
+        // Cuts whole characters (never half of a surrogate pair) from the end until the name fits
+        private static string CutToUTF8Bytes(string name, int maxBytes) {
+            int length = name.Length;
+            while (Encoding.UTF8.GetByteCount(name.AsSpan(0, length)) > maxBytes) {
+                length -= (length >= 2 && Char.IsSurrogatePair(name[length - 2], name[length - 1])) ? 2 : 1;
+            }
+            return name.Substring(0, length);
+        }
+
         private static bool IsReservedDeviceName(string name) {
             int pos = name.IndexOf('.');
             string baseName = (pos == -1) ? name : name.Substring(0, pos);
@@ -1305,9 +1420,21 @@ namespace JDP {
             "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT\u00B9", "LPT\u00B2", "LPT\u00B3"
         };
 
+        // Each OS removes its own invalid characters, so on Linux and macOS a name keeps < > : " | ? *
+        // and control characters other than NUL. The backslash is removed everywhere: a folder path
+        // read from the thread list or settings treats it as a separator (see ToLocalDirectoryPath),
+        // so a folder name holding one would not be found again.
+        private static readonly char[] _invalidFileNameChars = GetInvalidFileNameChars();
+
+        private static char[] GetInvalidFileNameChars() {
+            List<char> chars = new List<char>(Path.GetInvalidFileNameChars());
+            if (!chars.Contains('\\')) chars.Add('\\');
+            return chars.ToArray();
+        }
+
         private static string RemoveInvalidFileNameChars(string src) {
             char[] dst = new char[src.Length];
-            char[] inv = Path.GetInvalidFileNameChars();
+            char[] inv = _invalidFileNameChars;
             int iDst = 0;
             for (int iSrc = 0; iSrc < src.Length; iSrc++) {
                 char c = src[iSrc];

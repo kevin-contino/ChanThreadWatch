@@ -68,8 +68,17 @@ namespace JDP {
 
         public static string DownloadFolder {
             get { return Get("DownloadFolder"); }
-            set { Set("DownloadFolder", value); }
+            set {
+                Set("DownloadFolder", value);
+                DownloadFolderForSession = null;
+            }
         }
+
+        // An absolute folder this session uses in place of the DownloadFolder setting, which is kept as
+        // written: set at startup when the setting is an absolute path of another OS, so a portable
+        // settings folder used on Windows and on Linux or macOS keeps each OS's path. Cleared when the
+        // setting is changed or the settings are loaded.
+        public static string DownloadFolderForSession { get; set; }
 
         public static bool? CompletedFolderIsRelative {
             get { return GetBool("CompletedFolderIsRelative"); }
@@ -78,8 +87,14 @@ namespace JDP {
 
         public static string CompletedFolder {
             get { return Get("CompletedFolder"); }
-            set { Set("CompletedFolder", value); }
+            set {
+                Set("CompletedFolder", value);
+                CompletedFolderForSession = null;
+            }
         }
+
+        // As DownloadFolderForSession, for the CompletedFolder setting
+        public static string CompletedFolderForSession { get; set; }
         
         public static bool? MoveToCompletedFolder {
             get { return GetBool("MoveToCompletedFolder"); }
@@ -286,32 +301,31 @@ namespace JDP {
             }
         }
 
+        // Throws FormatException if the folder is an absolute path of another OS (see General.ToLocalDirectoryPath)
         public static string AbsoluteDownloadDirectory {
-            get {
-                #if DEBUG
-                    string dir = Path.Combine(DownloadFolder, DebugFolderName);
-                #else
-                    string dir = DownloadFolder;
-                #endif
-                if (!String.IsNullOrEmpty(dir) && (DownloadFolderIsRelative == true)) {
-                    dir = General.GetAbsoluteDirectoryPath(dir, ExeDirectory);
-                }
-                return dir;
-            }
+            get { return GetAbsoluteDirectory("DownloadFolder", DownloadFolderForSession, DownloadFolderIsRelative); }
         }
 
+        // Throws FormatException if the folder is an absolute path of another OS (see General.ToLocalDirectoryPath)
         public static string AbsoluteCompletedDirectory {
-            get {
-                #if DEBUG
-                    string dir = Path.Combine(CompletedFolder, DebugFolderName);
-                #else
-                    string dir = CompletedFolder;
-                #endif
-                if (!String.IsNullOrEmpty(dir) && (CompletedFolderIsRelative == true)) {
-                    dir = General.GetAbsoluteDirectoryPath(dir, ExeDirectory);
-                }
-                return dir;
+            get { return GetAbsoluteDirectory("CompletedFolder", CompletedFolderForSession, CompletedFolderIsRelative); }
+        }
+
+        private static string GetAbsoluteDirectory(string settingName, string folderForSession, bool? isRelative) {
+            if (folderForSession != null) return WithDebugFolder(folderForSession);
+            string dir = WithDebugFolder(General.ToLocalDirectoryPath(Get(settingName), settingName));
+            if (!String.IsNullOrEmpty(dir) && (isRelative == true)) {
+                dir = General.GetAbsoluteDirectoryPath(dir, ExeDirectory);
             }
+            return dir;
+        }
+
+        private static string WithDebugFolder(string folder) {
+            #if DEBUG
+                return Path.Combine(folder, DebugFolderName);
+            #else
+                return folder;
+            #endif
         }
 
         public static Size? ClientSize {
@@ -463,6 +477,8 @@ namespace JDP {
                 _saveBlocked = saveBlocked;
                 _checkedCopies = false;
             }
+            DownloadFolderForSession = null;
+            CompletedFolderForSession = null;
         }
 
         private static void ReadSettingsFile(string path, Dictionary<string, string> settings) {

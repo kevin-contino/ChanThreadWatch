@@ -709,7 +709,7 @@ namespace JDP {
                 HashType = imageMD5 != null ? HashType.MD5 : HashType.None,
                 Hash = imageMD5 != null ? General.TryBase64Decode(imageMD5) : null,
                 OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName) ?? ""),
-                Poster = General.CleanFileName(poster)
+                Poster = General.CleanFolderName(poster)
             };
         }
 
@@ -845,7 +845,7 @@ namespace JDP {
                 OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
                 HashType = HashType.MD5,
                 Hash = General.TryBase64Decode(imageMD5),
-                Poster = General.CleanFileName(poster)
+                Poster = General.CleanFolderName(poster)
             };
             return IsMissingFileNameOrHash(image) ? null : image;
         }
@@ -1044,7 +1044,7 @@ namespace JDP {
                 OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
                 HashType = imageMD5 != null ? HashType.MD5 : HashType.None,
                 Hash = General.TryBase64Decode(imageMD5),
-                Poster = General.CleanFileName(HttpUtility.HtmlDecode(poster))
+                Poster = General.CleanFolderName(HttpUtility.HtmlDecode(poster))
             };
             return IsMissingImageData(image) ? null : image;
         }
@@ -1177,7 +1177,7 @@ namespace JDP {
                 OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
                 HashType = HashType.MD5,
                 Hash = General.TryBase64Decode(imageMD5),
-                Poster = General.CleanFileName(HttpUtility.HtmlDecode(poster))
+                Poster = General.CleanFolderName(HttpUtility.HtmlDecode(poster))
             };
             return IsMissingFileNameOrHash(image) ? null : image;
         }
@@ -1362,7 +1362,7 @@ namespace JDP {
                 URL = General.GetAbsoluteURL(_url, HttpUtility.HtmlDecode(file.ImageURL)),
                 Referer = _url,
                 OriginalFileName = General.CleanFileName(HttpUtility.HtmlDecode(originalFileName)),
-                Poster = General.CleanFileName(poster)
+                Poster = General.CleanFolderName(poster)
             };
         }
 

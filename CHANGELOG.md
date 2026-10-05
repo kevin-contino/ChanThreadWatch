@@ -20,6 +20,7 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 - The app keeps a file named `ctw.lock` in the settings folder while it runs. When the settings folder is shared (for example the app in portable mode on a network drive) and the app is already running on another computer, starting it shows a warning that names that computer, and you choose whether to start anyway. If both keep running, their saves can overwrite each other's thread list. Versions before 1.40.0 don't create the file, so a copy of an older version is not detected. If you start anyway, the app takes the lock once the other copy closes. The file stays after the app closes and can be ignored.
 - The app no longer starts when it can't write to its settings folder (for example a read-only program folder in portable mode). It shows the folder and how to fix it. Before, it started, but its settings and thread list could not be saved.
 - `threads.txt`, `threads.txt.bak` and `settings.txt` no longer keep their own permissions, hidden attribute or creation time when they are saved. They get the permissions of the settings folder, as a new file there does.
+- A download or completed folder written as a Unix-style path (for example `/x`) is no longer read as `C:\x`. At startup the app logs it and uses the default folder for that session; the setting itself is kept. The settings window rejects such a folder with an error. A thread whose folder in the thread list starts with `/` no longer loads; it is logged, and the thread list is kept aside as for any thread that does not load.
 
 ### Fixed
 
@@ -28,6 +29,8 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 - A thread folder on a network share (for example `\\server\share\...`) is now saved correctly in the thread list when the download folder is on a local drive, and a thread folder on a local drive when the download folder is on a share. Before, the saved folder was wrong, so after a restart the thread saved to a different folder or could not save its files.
 - Moving a finished thread to the completed folder no longer deletes an empty thread folder that is on another drive or network share than the download folder.
 - Threads already saved in the thread list with a wrong folder keep that folder.
+- Saved thread pages link correctly to files and folders whose names contain `%`, and thread links also to names that contain `#` (image links already handled `#`). Before, such a link opened the wrong file or none.
+- Spaces in the links of saved thread pages are now written as `%20`, so the offline page helper also shows images whose names contain spaces in the page.
 
 ### Security
 

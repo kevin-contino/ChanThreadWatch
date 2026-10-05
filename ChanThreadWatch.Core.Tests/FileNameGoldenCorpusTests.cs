@@ -113,6 +113,39 @@ namespace JDP.Tests {
             new[] { "end&#46;&#46;&#46;", "end...", "end" }
         };
 
+        // G4 deltas. Each OS removes its own invalid file name characters (Path.GetInvalidFileNameChars),
+        // so Linux and macOS keep < > : " | ? * and control characters other than NUL. Every OS removes
+        // '/', '\' and NUL, trims trailing dots and spaces, and prefixes Windows device names, so no
+        // other value differs. The columns above hold the Windows values, which are unchanged.
+        //
+        //   Function                          Input                         Windows                  Linux and macOS
+        //   CleanFileName                     a:b*c?d"e<f>g|h               abcdefgh                 a:b*c?d"e<f>g|h
+        //   CleanFileName                     tab\u0009here                 tabhere                  tab\u0009here
+        //   CleanFileName                     ctl\u0001\u001F\u007Fend      ctl\u007Fend             ctl\u0001\u001F\u007Fend
+        //   ImageInfo/ThumbnailInfo.FileName  .../img.jpg?size=large&x=1    img.jpgsize=large&x=1    img.jpg?size=large&x=1
+        //   ImageInfo/ThumbnailInfo.FileName  .../img.jpg?a=b|c<d>          img.jpga=bcd             img.jpg?a=b|c<d>
+        //   CleanFileName(HtmlDecode)         &lt;b&gt;bold&lt;/b&gt;      bboldb                   <b>bold<b>
+        //   CleanFileName(HtmlDecode)         &quot;quoted&quot;            quoted                   "quoted"
+        //   CleanFileName(HtmlDecode)         a&#58;b                       ab                       a:b
+        //
+        // Input, Linux and macOS value
+        private static readonly Dictionary<string, string> UnixDeltas = new Dictionary<string, string>(StringComparer.Ordinal) {
+            { "a:b*c?d\"e<f>g|h", "a:b*c?d\"e<f>g|h" },
+            { "tab\u0009here", "tab\u0009here" },
+            { "ctl\u0001\u001F\u007Fend", "ctl\u0001\u001F\u007Fend" },
+            { "http://media.test/w1/img.jpg?size=large&x=1", "img.jpg?size=large&x=1" },
+            { "http://media.test/w1/img.jpg?a=b|c<d>", "img.jpg?a=b|c<d>" },
+            { "&lt;b&gt;bold&lt;/b&gt;", "<b>bold<b>" },
+            { "&quot;quoted&quot;", "\"quoted\"" },
+            { "a&#58;b", "a:b" }
+        };
+
+        // The recorded Windows value, or off Windows the G4 delta for the input where there is one
+        private static string ExpectedOnThisOS(string input, string windowsValue) {
+            string unixValue;
+            return !OperatingSystem.IsWindows() && UnixDeltas.TryGetValue(input, out unixValue) ? unixValue : windowsValue;
+        }
+
         // Thread name, page index, ThreadWatcher.GetPageFileName(threadName, pageIndex)
         private static readonly object[][] PageFileNameCases = {
             new object[] { "7770000004", 0, "7770000004.html" },
@@ -126,41 +159,35 @@ namespace JDP.Tests {
         };
 
         [TestMethod]
-        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the Windows-invalid characters stay in the name, see MP-4b
-        [TestCategory("PendingUnix")]
         public void CleanFileNameMatchesGoldenCorpus() {
             var failures = new List<string>();
             foreach (string[] c in CleanFileNameCases) {
-                Check(failures, "CleanFileName", c[0], c[1], General.CleanFileName(c[0]));
+                Check(failures, "CleanFileName", c[0], ExpectedOnThisOS(c[0], c[1]), General.CleanFileName(c[0]));
             }
             AssertNoFailures(failures);
         }
 
         [TestMethod]
-        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the Windows-invalid characters stay in the name, see MP-4b
-        [TestCategory("PendingUnix")]
         public void URLFileNamesMatchGoldenCorpus() {
             var failures = new List<string>();
             foreach (string[] c in URLFileNameCases) {
                 Check(failures, "URLFileName", c[0], c[1], General.URLFileName(c[0]));
-                Check(failures, "ImageInfo.FileName", c[0], c[2], new ImageInfo { URL = c[0] }.FileName);
-                Check(failures, "ThumbnailInfo.FileName", c[0], c[2], new ThumbnailInfo { URL = c[0] }.FileName);
+                Check(failures, "ImageInfo.FileName", c[0], ExpectedOnThisOS(c[0], c[2]), new ImageInfo { URL = c[0] }.FileName);
+                Check(failures, "ThumbnailInfo.FileName", c[0], ExpectedOnThisOS(c[0], c[2]), new ThumbnailInfo { URL = c[0] }.FileName);
             }
             AssertNoFailures(failures);
         }
 
         [TestMethod]
-        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the Windows-invalid characters stay in the name, see MP-4b
-        [TestCategory("PendingUnix")]
         public void DecodedNamesMatchGoldenCorpus() {
             var failures = new List<string>();
             foreach (string[] c in DecodedNameCases) {
-                Check(failures, "CleanFileName(HtmlDecode)", c[0], c[2], General.CleanFileName(HttpUtility.HtmlDecode(c[0])));
+                Check(failures, "CleanFileName(HtmlDecode)", c[0], ExpectedOnThisOS(c[0], c[2]), General.CleanFileName(HttpUtility.HtmlDecode(c[0])));
             }
             AssertNoFailures(failures);
         }
 
-        // Decoding alone does not depend on the OS, so unlike DecodedNamesMatchGoldenCorpus this runs everywhere
+        // Decoding alone does not depend on the OS, so unlike DecodedNamesMatchGoldenCorpus it has no G4 deltas
         [TestMethod]
         public void HtmlDecodeMatchesRecordedNetFrameworkOutput() {
             var failures = new List<string>();

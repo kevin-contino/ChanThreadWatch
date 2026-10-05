@@ -63,8 +63,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c;
-        // its SaveDir Cat\a_1 uses a backslash separator, see MP-4b
+        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c.
+        // Off Windows the SaveDir Cat\a_1 is read as Cat/a_1 (MP-4b) and saved back in that form, so the
+        // file is no longer byte for byte the same there; MP-4c has to compare it with that line changed.
         [TestCategory("PendingUnix")]
         public void ALoadedThreadListIsSavedBackUnchanged() {
             File.WriteAllLines(_threadListPath, SterileThreadListLines());
@@ -152,8 +153,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c;
-        // its SaveDir Cat\a_1 uses a backslash separator, see MP-4b
+        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c
         [TestCategory("PendingUnix")]
         public void ADuplicateEntryFailsTheLoadAndKeepsTheFirst() {
             List<string> lines = new List<string>(SterileThreadListLines());
@@ -314,6 +314,168 @@ namespace JDP.Tests {
             // The download folder itself is never deleted
             Assert.IsTrue(Directory.Exists(first.MainDownloadDirectory));
             Assert.HasCount(0, session.ThreadWatchers);
+        }
+
+        private static string[] StoppedThreadLines(string url, string saveDir) {
+            return new[] { url, "", "", "600", "0", saveDir, "1", "T", Ticks(AddedOnUtc), "", "", "", "0" };
+        }
+
+        // A thread list as the Windows app writes it: CRLF line ends and backslash separators
+        private void WriteWindowsThreadList(params string[][] threads) {
+            List<string> lines = new List<string> { "4" };
+            foreach (string[] thread in threads) lines.AddRange(thread);
+            File.WriteAllText(_threadListPath, String.Join("\r\n", lines) + "\r\n");
+        }
+
+        // MP-4b acceptance: every SaveDir of a Windows-written thread list maps to its existing folder on
+        // this OS. Each thread is stopped by the user, so nothing is downloaded.
+        [TestMethod]
+        public void AWindowsWrittenThreadListMapsEverySaveDirToItsFolder() {
+            string downloadDir = Settings.AbsoluteDownloadDirectory;
+            string[][] saveDirs = {
+                new[] { @"Cat\a_1", "Cat", "a_1" },
+                new[] { "b_2", "b_2" },
+                new[] { @"Cat\Sub\c_3", "Cat", "Sub", "c_3" },
+                new[] { @"..\Elsewhere\d_4", "..", "Elsewhere", "d_4" }
+            };
+            List<string[]> threads = new List<string[]>();
+            for (int i = 0; i < saveDirs.Length; i++) {
+                string[] parts = saveDirs[i];
+                Directory.CreateDirectory(Path.Combine(downloadDir, Path.Combine(parts[1..])));
+                threads.Add(StoppedThreadLines("https://boards.4chan.org/a/thread/" + (i + 1), parts[0]));
+            }
+            WriteWindowsThreadList(threads.ToArray());
+            WatchSession session = CreateSession();
+
+            session.LoadThreadList();
+
+            Assert.HasCount(saveDirs.Length, session.ThreadWatchers);
+            for (int i = 0; i < saveDirs.Length; i++) {
+                string expected = Path.GetFullPath(Path.Combine(downloadDir, Path.Combine(saveDirs[i][1..])));
+                ThreadWatcher watcher = GetWatcher(session, "4chan/a/" + (i + 1));
+                Assert.AreEqual(expected, watcher.ThreadDownloadDirectory, saveDirs[i][0]);
+                Assert.IsTrue(Directory.Exists(watcher.ThreadDownloadDirectory), saveDirs[i][0]);
+            }
+            // The list loaded fully, so it was not copied aside
+            Assert.HasCount(0, Directory.GetFiles(_dir, TextFile.GetCopySearchPattern(_threadListPath)));
+        }
+
+        // An absolute SaveDir of the other OS fails only its own thread, like any entry that doesn't load:
+        // the error names SaveDir, the other threads load, and the file is copied aside before saving
+        [TestMethod]
+        public void AForeignAbsoluteSaveDirFailsOnlyItsThread() {
+            string foreignDir = OperatingSystem.IsWindows() ? "/home/user/Threads/b_2" : @"C:\Threads\b_2";
+            Directory.CreateDirectory(Path.Combine(Settings.AbsoluteDownloadDirectory, "a_1"));
+            WriteWindowsThreadList(
+                StoppedThreadLines("https://boards.4chan.org/a/thread/1", "a_1"),
+                StoppedThreadLines("https://boards.4chan.org/a/thread/2", foreignDir));
+            Logger.Log("WatchSessionTests foreign SaveDir marker");
+            int start = ReadLog().Length;
+            WatchSession session = CreateSession();
+
+            session.LoadThreadList();
+
+            Assert.HasCount(1, session.ThreadWatchers);
+            GetWatcher(session, "4chan/a/1");
+            string log = ReadLog().Substring(start);
+            Assert.Contains("SaveDir holds \"" + foreignDir + "\"", log);
+            Assert.HasCount(1, Directory.GetFiles(_dir, TextFile.GetCopySearchPattern(_threadListPath)));
+        }
+
+        [TestMethod]
+        public void AForeignAbsoluteDownloadFolderFailsWithTheSettingName() {
+            Settings.DownloadFolder = OperatingSystem.IsWindows() ? "/home/user/Threads" : @"C:\Threads";
+            Settings.CompletedFolder = Settings.DownloadFolder;
+
+            FormatException download = Assert.ThrowsExactly<FormatException>(() => Settings.AbsoluteDownloadDirectory);
+            FormatException completed = Assert.ThrowsExactly<FormatException>(() => Settings.AbsoluteCompletedDirectory);
+
+            Assert.Contains("DownloadFolder", download.Message);
+            Assert.Contains("CompletedFolder", completed.Message);
+        }
+
+        // At startup a download folder that is an absolute path of another OS is reported with the setting
+        // name, and the default folder is used for this session only. The setting is kept as written, so a
+        // portable settings folder used on Windows and on Linux or macOS keeps its path for the other OS.
+        [TestMethod]
+        public void AForeignAbsoluteDownloadFolderIsUsedForTheSessionOnlyAndKept() {
+            string foreign = OperatingSystem.IsWindows() ? "/home/user/Threads" : @"C:\Threads";
+            Settings.DownloadFolder = foreign;
+            Logger.Log("WatchSessionTests foreign DownloadFolder marker");
+            int start = ReadLog().Length;
+
+            WatchSession.EnsureDownloadFolderExists();
+
+            string sessionFolder = WatchSession.GetDefaultFolder("Watched Threads");
+            Assert.AreEqual(foreign, Settings.DownloadFolder);
+            Assert.AreEqual(sessionFolder, Settings.DownloadFolderForSession);
+            Assert.AreEqual(ExpectedAbsolute(sessionFolder), Settings.AbsoluteDownloadDirectory);
+            Assert.Contains("DownloadFolder holds", ReadLog().Substring(start));
+            string settingsPath = Path.Combine(_dir, "settings-saved.txt");
+            Settings.Save(settingsPath);
+            CollectionAssert.Contains(File.ReadAllLines(settingsPath), "DownloadFolder=" + foreign);
+        }
+
+        [TestMethod]
+        public void ChangingTheDownloadFolderEndsTheSessionFolder() {
+            Settings.DownloadFolder = OperatingSystem.IsWindows() ? "/home/user/Threads" : @"C:\Threads";
+            WatchSession.EnsureDownloadFolderExists();
+            string downloads = Path.Combine(_dir, "downloads");
+
+            Settings.DownloadFolder = downloads;
+
+            Assert.IsNull(Settings.DownloadFolderForSession);
+            Assert.AreEqual(ExpectedAbsolute(downloads), Settings.AbsoluteDownloadDirectory);
+        }
+
+        // The completed folder falls back the same way when finished threads are moved
+        [TestMethod]
+        public void AForeignAbsoluteCompletedFolderIsUsedForTheSessionOnlyAndKept() {
+            string foreign = OperatingSystem.IsWindows() ? "/home/user/Completed" : @"C:\Completed";
+            Settings.CompletedFolder = foreign;
+            Settings.MoveToCompletedFolder = true;
+            WatchSession session = CreateSession();
+
+            session.RemoveCompletedThreads(new ThreadWatcher[0]);
+
+            Assert.AreEqual(foreign, Settings.CompletedFolder);
+            Assert.AreEqual(WatchSession.GetDefaultFolder("Completed Threads"), Settings.CompletedFolderForSession);
+        }
+
+        // The Debug build keeps its files in a Debug subfolder of the download folder
+        private static string ExpectedAbsolute(string folder) {
+            #if DEBUG
+                return Path.Combine(folder, Settings.DebugFolderName);
+            #else
+                return folder;
+            #endif
+        }
+
+        // On Linux a Windows-written SaveDir finds its folder when only the case differs
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux)]
+        public void AWindowsWrittenSaveDirFindsItsFolderIgnoringCaseOnLinux() {
+            string existing = Path.Combine(Settings.AbsoluteDownloadDirectory, "Anime", "a_1");
+            Directory.CreateDirectory(existing);
+            WriteWindowsThreadList(StoppedThreadLines("https://boards.4chan.org/a/thread/1", @"anime\A_1"));
+            WatchSession session = CreateSession();
+
+            session.LoadThreadList();
+
+            Assert.AreEqual(existing, GetWatcher(session, "4chan/a/1").ThreadDownloadDirectory);
+        }
+
+        // A relative download folder written on Windows is read with this OS's separators
+        [TestMethod]
+        public void ARelativeDownloadFolderWrittenOnWindowsIsReadOnThisOS() {
+            Settings.DownloadFolder = @"rel\sub";
+            Settings.DownloadFolderIsRelative = true;
+
+            string expected = Path.GetFullPath(Path.Combine(Settings.ExeDirectory, "rel", "sub"));
+            #if DEBUG
+                expected = Path.Combine(expected, Settings.DebugFolderName);
+            #endif
+            Assert.AreEqual(expected, Settings.AbsoluteDownloadDirectory);
         }
     }
 }

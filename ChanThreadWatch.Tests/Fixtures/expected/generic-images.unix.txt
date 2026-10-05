@@ -1,0 +1,27 @@
+images:
+  http://example.com/b/src/1001.jpg | http://example.com/b/res/1.html | (null) | [] | None | (null)
+  http://example.com/b/src/1002.png | http://example.com/b/res/1.html | (null) | [] | None | (null)
+  http://example.com/b/src/1003.gif | http://example.com/b/res/1.html | (null) | [] | None | (null)
+  ftp://files.example.net/src/1004.jpg | http://example.com/b/res/1.html | (null) | [] | None | (null)
+  https://example.com/b/src/1005.webm?x=1&y=2 | http://example.com/b/res/1.html | (null) | [] | None | (null)
+  http://other.example.org/img/1006.jpg | http://example.com/redirect/src/http://other.example.org/img/1006.jpg | (null) | [] | None | (null)
+  http://example.com/b/src/1007.jpg | http://example.com/b/res/1.html | (null) | [] | None | (null)
+thumbnails:
+  http://example.com/b/thumb/1001s.jpg | http://example.com/b/res/1.html
+  http://example.com/b/thumb/1004s.jpg | http://example.com/b/res/1.html
+  http://cdn.example.com/b/thumb/1005s.jpg | http://example.com/b/res/1.html
+  http://example.com/b/thumb/1006s.jpg | http://example.com/b/res/1.html
+replaces:
+  263 | 22 | ImageLinkHref | [1001.jpg] | (null) | href="/b/src/1001.jpg"
+  291 | 24 | ImageSrc | [1001s.jpg] | (null) | src="/b/thumb/1001s.jpg"
+  324 | 22 | ImageLinkHref | [1002.png] | (null) | href="/b/src/1002.png"
+  375 | 22 | ImageLinkHref | [1003.gif] | (null) | href="/b/src/1003.gif"
+  424 | 22 | ImageLinkHref | [1001.jpg] | (null) | href="/b/src/1001.jpg"
+  452 | 24 | ImageSrc | [1001s.jpg] | (null) | src="/b/thumb/1001s.jpg"
+  523 | 43 | ImageLinkHref | [1004.jpg] | (null) | href="ftp://files.example.net/src/1004.jpg"
+  572 | 24 | ImageSrc | [1004s.jpg] | (null) | src="/b/thumb/1004s.jpg"
+  605 | 54 | ImageLinkHref | [1005.webm?x=1&y=2] | (null) | href="https://example.com/b/src/1005.webm?x=1&amp;y=2"
+  665 | 41 | ImageSrc | [1005s.jpg] | (null) | src="//cdn.example.com/b/thumb/1005s.jpg"
+  715 | 58 | ImageLinkHref | [1006.jpg] | (null) | href="/redirect/src/http://other.example.org/img/1006.jpg"
+  779 | 24 | ImageSrc | [1006s.jpg] | (null) | src="/b/thumb/1006s.jpg"
+  812 | 22 | ImageLinkHref | [1007.jpg] | (null) | href="/b/src/1007.jpg"

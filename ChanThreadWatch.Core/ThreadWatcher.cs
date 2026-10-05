@@ -173,9 +173,21 @@ namespace JDP {
                     return !String.IsNullOrEmpty(_threadDownloadDirectory) &&
                            Settings.RenameDownloadFolderWithDescription == true &&
                            !String.IsNullOrEmpty(_description) &&
-                           !String.Equals(General.GetLastDirectory(_threadDownloadDirectory), General.CleanFileName(_description + ParentThreadFormattedDescription), StringComparison.Ordinal);
+                           IsDescriptionFolderNameChanged();
                 }
             }
+        }
+
+        // False if the description gives no folder name (for example "..."), since the folder is never renamed to that.
+        // Must be called while holding _settingsSync.
+        private bool IsDescriptionFolderNameChanged() {
+            string folderName = GetDescriptionFolderName();
+            return folderName.Length != 0 && !String.Equals(General.GetLastDirectory(_threadDownloadDirectory), folderName, StringComparison.Ordinal);
+        }
+
+        // Must be called while holding _settingsSync
+        private string GetDescriptionFolderName() {
+            return General.CleanFolderName(_description + ParentThreadFormattedDescription);
         }
 
         private bool ThreadDownloadDirectoryPendingCategoryRename {
@@ -186,7 +198,7 @@ namespace JDP {
                     }
                     string categoryPath = General.RemoveLastDirectory(_threadDownloadDirectory);
                     string categoryName = categoryPath != _mainDownloadDirectory ? General.GetLastDirectory(categoryPath) : String.Empty;
-                    return !String.Equals(categoryName, General.CleanFileName(_category), StringComparison.Ordinal);
+                    return !String.Equals(categoryName, General.CleanFolderName(_category), StringComparison.Ordinal);
                 }
             }
         }
@@ -590,7 +602,7 @@ namespace JDP {
             }
 
             string savePath = GetReparseImageSavePath(image, imageDir, currentPath, false);
-            if (Path.GetFileName(savePath).Length > maxFileNameLength) {
+            if (General.IsFileNameLongerThan(Path.GetFileName(savePath), maxFileNameLength)) {
                 // Path too long, fall back to the URL file name
                 savePath = GetReparseImageSavePath(image, imageDir, currentPath, true);
             }
@@ -927,7 +939,7 @@ namespace JDP {
             if (String.IsNullOrEmpty(_threadDownloadDirectory)) {
                 _threadDownloadDirectory = Path.Combine(
                     GetCategoryDownloadDirectory(),
-                    General.CleanFileName(String.Format("{0}_{1}_{2}{3}", siteHelper.GetSiteName(), siteHelper.GetBoardName(), _threadName, ParentThreadFormattedDescription)));
+                    General.CleanFolderName(String.Format("{0}_{1}_{2}{3}", siteHelper.GetSiteName(), siteHelper.GetBoardName(), _threadName, ParentThreadFormattedDescription)));
             }
             if (!Directory.Exists(_threadDownloadDirectory)) {
                 Directory.CreateDirectory(_threadDownloadDirectory);
@@ -943,7 +955,7 @@ namespace JDP {
 
         // Must be called while holding _settingsSync
         private string GetCategoryDownloadDirectory() {
-            return Path.Combine(_mainDownloadDirectory, Settings.RenameDownloadFolderWithCategory == true ? General.CleanFileName(_category) : String.Empty);
+            return Path.Combine(_mainDownloadDirectory, Settings.RenameDownloadFolderWithCategory == true ? General.CleanFolderName(_category) : String.Empty);
         }
 
         private void DownloadPages(SiteHelper siteHelper, string threadDir, string imageDir, string thumbDir, Queue<ImageInfo> pendingImages, Queue<ThumbnailInfo> pendingThumbs) {
@@ -1247,7 +1259,7 @@ namespace JDP {
         private string GetImageSavePath(ImageInfo image, string imageDir) {
             if (!UpdateMaxFileNameLength(image, imageDir)) return null;
             string savePath = GetUnusedImageSavePath(image, imageDir, false);
-            if (Path.GetFileName(savePath).Length > _maxFileNameLength) {
+            if (General.IsFileNameLongerThan(Path.GetFileName(savePath), _maxFileNameLength)) {
                 // Path too long, fall back to the URL file name
                 savePath = GetUnusedImageSavePath(image, imageDir, true);
             }
@@ -1577,8 +1589,7 @@ namespace JDP {
         }
 
         private static string GetRelativeDownloadPath(DownloadInfo downloadInfo, string fileDownloadDir, string threadDir) {
-            return General.GetRelativeFilePath(Path.Combine(fileDownloadDir, downloadInfo.Path),
-                threadDir).Replace(Path.DirectorySeparatorChar, '/');
+            return General.ToLinkPath(General.GetRelativeFilePath(Path.Combine(fileDownloadDir, downloadInfo.Path), threadDir));
         }
 
         // Returns false if the replace refers to a thread that hasn't been initialized yet and
@@ -1601,7 +1612,7 @@ namespace JDP {
         }
 
         private string GetEncodedRelativeThreadPath(ThreadWatcher watcher) {
-            return HttpUtility.HtmlAttributeEncode(General.GetRelativeFilePath(Path.Combine(watcher.ThreadDownloadDirectory, General.CleanFileName(watcher.ThreadName) + ".html"), _threadDownloadDirectory));
+            return HttpUtility.HtmlAttributeEncode(General.ToLinkPath(General.GetRelativeFilePath(Path.Combine(watcher.ThreadDownloadDirectory, General.CleanFileName(watcher.ThreadName) + ".html"), _threadDownloadDirectory)));
         }
 
         private static string GetDeadLinkInnerHTML(string[] tagSplit, string boardName) {
@@ -1654,12 +1665,7 @@ namespace JDP {
         // it stays set if an exception is thrown after the directory has already been moved.
         private void RenameThreadDownloadDirectory(ref bool renamedDir) {
             if (DoNotRename) return;
-            string destDir = Path.Combine(
-                GetCategoryDownloadDirectory(),
-                General.CleanFileName(_description + ParentThreadFormattedDescription));
-            if (String.Equals(destDir, _threadDownloadDirectory, StringComparison.Ordinal)) return;
-
-            destDir = FindAvailableRenameDirectory(destDir);
+            string destDir = GetRenameDestination();
             if (destDir == null) return;
 
             if (String.Equals(destDir, _threadDownloadDirectory, StringComparison.OrdinalIgnoreCase)) {
@@ -1671,6 +1677,16 @@ namespace JDP {
             DeleteEmptyCategoryDirectory(General.RemoveLastDirectory(_threadDownloadDirectory));
             _threadDownloadDirectory = destDir;
             renamedDir = true;
+        }
+
+        // Returns null if there is nothing to rename. Must be called while holding _settingsSync.
+        private string GetRenameDestination() {
+            string folderName = GetDescriptionFolderName();
+            // An empty name would make the destination the category or download folder itself
+            if (folderName.Length == 0) return null;
+            string destDir = Path.Combine(GetCategoryDownloadDirectory(), folderName);
+            if (String.Equals(destDir, _threadDownloadDirectory, StringComparison.Ordinal)) return null;
+            return FindAvailableRenameDirectory(destDir);
         }
 
         // Returns null if the search reaches the current thread download directory

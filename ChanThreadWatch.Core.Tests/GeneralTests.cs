@@ -98,12 +98,13 @@ namespace JDP.Tests {
             Assert.AreEqual(-1, General.ParseVersionNumber(version));
         }
 
+        // Each OS removes its own invalid characters (G4): Linux and macOS keep < > : " | ? * and
+        // control characters other than NUL. Every OS removes '/', '\' and NUL.
         [TestMethod]
-        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the Windows-invalid characters stay in the name, see MP-4b
-        [TestCategory("PendingUnix")]
         public void CleanFileNameRemovesInvalidCharacters() {
-            Assert.AreEqual("abcdefghij", General.CleanFileName("a<b>c:d\"e/f\\g|h?i*j"));
-            Assert.AreEqual("tab", General.CleanFileName("t\ta\0b"));
+            bool windows = System.OperatingSystem.IsWindows();
+            Assert.AreEqual(windows ? "abcdefghij" : "a<b>c:d\"efg|h?i*j", General.CleanFileName("a<b>c:d\"e/f\\g|h?i*j"));
+            Assert.AreEqual(windows ? "tab" : "t\tab", General.CleanFileName("t\ta\0b"));
         }
 
         [TestMethod]

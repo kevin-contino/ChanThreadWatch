@@ -94,12 +94,12 @@ namespace JDP {
             try {
                 string downloadFolder = txtDownloadFolder.Text.Trim();
 
-                EnsureFolderExists(downloadFolder, "download");
+                EnsureFolderExists(downloadFolder, "download", "DownloadFolder");
 
                 string completedFolder = txtCompletedFolder.Text.Trim();
 
                 if (chkCompletedFolder.Checked) {
-                    EnsureFolderExists(completedFolder, "completed");
+                    EnsureFolderExists(completedFolder, "completed", "CompletedFolder");
                 }
 
                 if (!TryChangeSettingsFolder()) {
@@ -125,11 +125,14 @@ namespace JDP {
             }
         }
 
-        // Throws an exception with a user-facing message if the folder is empty or cannot be created.
-        private static void EnsureFolderExists(string folder, string folderKind) {
+        // Throws an exception with a user-facing message if the folder is empty, is an absolute path
+        // of another OS (for example "/Threads" on Windows), or cannot be created. This runs before
+        // anything is saved, so a rejected folder leaves the setting unchanged.
+        internal static void EnsureFolderExists(string folder, string folderKind, string settingName) {
             if (folder.Length == 0) {
                 throw new Exception("You must enter a " + folderKind + " folder.");
             }
+            General.ToLocalDirectoryPath(folder, settingName);
             if (Directory.Exists(folder)) {
                 return;
             }

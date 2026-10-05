@@ -33,10 +33,9 @@ namespace JDP.Tests {
         }
 
         // .NET Framework checked the limit against the normalized path, so a folder written with
-        // "." or ".." segments or doubled separators gets the same names as its normal form
+        // "." or ".." segments or doubled separators gets the same names as its normal form. The rows
+        // are written with backslashes and use this OS's separator.
         [TestMethod]
-        // PendingUnix: the folder is written with backslash separators, see MP-4b
-        [TestCategory("PendingUnix")]
         [DataRow(@"sub\..")]
         [DataRow(@".\.")]
         [DataRow(@"\\\")]
@@ -44,7 +43,8 @@ namespace JDP.Tests {
             string dir = Path.Combine(Path.GetTempPath(), "ctw-len-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(dir, "sub"));
             try {
-                Assert.AreEqual(General.MaxFilePathLength - (dir.Length + 1), General.GetMaximumFileNameLength(dir + @"\" + suffix));
+                string localSuffix = suffix.Replace('\\', Path.DirectorySeparatorChar);
+                Assert.AreEqual(General.MaxFilePathLength - (dir.Length + 1), General.GetMaximumFileNameLength(dir + Path.DirectorySeparatorChar + localSuffix));
             }
             finally {
                 Directory.Delete(dir, true);

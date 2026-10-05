@@ -74,11 +74,54 @@ namespace JDP {
             }
         }
 
+        // A missing download folder is replaced by the default one. A setting that is an absolute path
+        // of another OS is kept, and the default folder is used for this session only.
         internal static void EnsureDownloadFolderExists() {
-            if ((Settings.DownloadFolder == null) || !Directory.Exists(Settings.AbsoluteDownloadDirectory)) {
-                Settings.DownloadFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Watched Threads");
+            FolderState state = Settings.DownloadFolder == null ? FolderState.Missing : GetFolderState(() => Settings.AbsoluteDownloadDirectory);
+            if (state == FolderState.Exists) return;
+            string folder = GetDefaultFolder("Watched Threads");
+            if (state == FolderState.Foreign || Settings.DownloadFolderForSession != null) {
+                Settings.DownloadFolderForSession = folder;
+            }
+            else {
+                Settings.DownloadFolder = folder;
                 Settings.DownloadFolderIsRelative = false;
             }
+        }
+
+        private enum FolderState { Exists, Missing, Foreign }
+
+        // Foreign if the setting holds an absolute path of another OS, which is logged with the setting's name
+        private static FolderState GetFolderState(Func<string> getFolder) {
+            try {
+                return Directory.Exists(getFolder()) ? FolderState.Exists : FolderState.Missing;
+            }
+            catch (FormatException ex) {
+                Logger.Log(ex.Message + " The default folder is used for this session, and the setting is kept.");
+                return FolderState.Foreign;
+            }
+        }
+
+        // Windows uses Documents (GetFolderPath). Linux and macOS use ~/Documents, built from the home
+        // folder because GetFolderPath(MyDocuments) can return the home folder itself there.
+        internal static string GetDefaultFolder(string name) {
+            bool isWindows = OperatingSystem.IsWindows();
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string documents = isWindows ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : GetUnixDocumentsFolder(home);
+            return Path.Combine(GetDefaultFoldersParent(documents, home, isWindows), name);
+        }
+
+        private static string GetUnixDocumentsFolder(string home) {
+            return home.Length != 0 ? Path.Combine(home, "Documents") : String.Empty;
+        }
+
+        // The folder that holds the default download and completed folders: Documents, or on Linux
+        // and macOS the home folder when there is no Documents folder. Windows always uses Documents,
+        // as it did before.
+        internal static string GetDefaultFoldersParent(string documents, string home, bool isWindows) {
+            if (isWindows || (documents.Length != 0 && Directory.Exists(documents))) return documents;
+            if (home.Length == 0) throw new InvalidOperationException("No Documents or home folder was found for the default download folder.");
+            return home;
         }
 
         // Returns true if this is the first page download for the watcher.
@@ -259,9 +302,16 @@ namespace JDP {
             }
         }
 
+        // As EnsureDownloadFolderExists, for the completed folder
         private static void EnsureCompletedFolderExists() {
-            if (!Directory.Exists(Settings.AbsoluteCompletedDirectory)) {
-                Settings.CompletedFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Completed Threads");
+            FolderState state = GetFolderState(() => Settings.AbsoluteCompletedDirectory);
+            if (state == FolderState.Exists) return;
+            string folder = GetDefaultFolder("Completed Threads");
+            if (state == FolderState.Foreign || Settings.CompletedFolderForSession != null) {
+                Settings.CompletedFolderForSession = folder;
+            }
+            else {
+                Settings.CompletedFolder = folder;
                 Settings.CompletedFolderIsRelative = false;
             }
         }
@@ -403,9 +453,11 @@ namespace JDP {
             return failedCount == 0;
         }
 
+        // A SaveDir written on another OS is read in this OS's form; one that is an absolute path of
+        // another OS fails this thread only, like any other entry that doesn't load
         private bool TryAddLoadedThread(ThreadInfo thread) {
             try {
-                thread.SaveDir = thread.SaveDir.Length != 0 ? General.GetAbsoluteDirectoryPath(thread.SaveDir, Settings.AbsoluteDownloadDirectory) : null;
+                thread.SaveDir = thread.SaveDir.Length != 0 ? GetLoadedThreadDirectory(thread.SaveDir) : null;
                 _runOnOwnerThread(() => {
                     // A second entry for the same thread fails the load, so the first one is kept and the file is copied aside
                     if (IsThreadWatched(thread.URL)) throw new InvalidOperationException("Duplicate entry in the thread list");
@@ -417,6 +469,12 @@ namespace JDP {
                 Logger.Log("Unable to load thread " + thread.URL + Environment.NewLine + ex);
                 return false;
             }
+        }
+
+        // On Linux a folder written on Windows or macOS can differ in case from the one on disk
+        private static string GetLoadedThreadDirectory(string saveDir) {
+            string dir = General.GetAbsoluteDirectoryPath(General.ToLocalDirectoryPath(saveDir, "SaveDir"), Settings.AbsoluteDownloadDirectory);
+            return OperatingSystem.IsWindows() ? dir : General.FindDirectoryIgnoringCase(dir);
         }
 
         internal bool IsThreadWatched(string url) {
