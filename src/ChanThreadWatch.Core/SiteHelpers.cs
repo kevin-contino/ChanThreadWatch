@@ -55,6 +55,16 @@ namespace JDP {
             return new SiteHelper();
         }
 
+        // True when GetInstance gives a site helper of its own for the host rather than the generic one. The host
+        // is matched as GetInstance matches it (ignoring case only), so a caller passes the host GetInstance will get,
+        // Uri.Host, and refuses a URL whose Uri.Host differs from its Uri.IdnHost; a host with a trailing dot
+        // ("4chan.org.") is not known.
+        public static bool IsKnownHost(string host) {
+            if (String.IsNullOrEmpty(host)) return false;
+            Type type = FindTestHostHelperType(host) ?? FindHelperType(host);
+            return type != null && type.IsSubclassOf(typeof(SiteHelper));
+        }
+
         private static Type FindTestHostHelperType(string host) {
             lock (_testHostHelpers) {
                 Type type;
@@ -62,7 +72,7 @@ namespace JDP {
             }
         }
 
-        // Returns the helper type of the shortest matching domain suffix, or null if none matches
+        // Returns the helper type of the longest matching domain suffix, or null if none matches
         private static Type FindHelperType(string host) {
             Type type = null;
             string[] hostSplit = host.ToLower(CultureInfo.InvariantCulture).Split('.');

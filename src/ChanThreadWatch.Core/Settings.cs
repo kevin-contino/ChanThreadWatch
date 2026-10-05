@@ -226,7 +226,37 @@ namespace JDP {
             get { return GetLong("MaximumBytesPerSecond"); }
             set { SetLong("MaximumBytesPerSecond", value); }
         }
-        
+
+        // The local API (ChanThreadWatch.Api) is off unless the user turns it on. Its on/off settings are security
+        // opt-ins, so only "1" is on (the other on/off settings read anything but "0" as on).
+        public static bool? ApiEnabled {
+            get { return GetStrictBool("ApiEnabled"); }
+            set { SetBool("ApiEnabled", value); }
+        }
+
+        public const int DefaultApiPort = 47710;
+        public const int MinimumApiPort = 1024;
+        public const int MaximumApiPort = 65535;
+
+        // The default port when the setting is missing or not a port from 1024 to 65535. Null removes the setting.
+        public static int? ApiPort {
+            get {
+                int? port = GetInt("ApiPort");
+                return IsValidApiPort(port) ? port : DefaultApiPort;
+            }
+            set { SetInt("ApiPort", value); }
+        }
+
+        public static bool IsValidApiPort(int? port) {
+            return port >= MinimumApiPort && port <= MaximumApiPort;
+        }
+
+        // Adding a thread of a site without a site helper through the API is refused unless the user allows it
+        public static bool? ApiAllowUnknownHosts {
+            get { return GetStrictBool("ApiAllowUnknownHosts"); }
+            set { SetBool("ApiAllowUnknownHosts", value); }
+        }
+
         public static string WindowTitle {
             get { return Get("WindowTitle"); }
             set { Set("WindowTitle", value); }
@@ -398,6 +428,11 @@ namespace JDP {
             string value = Get(name);
             if (value == null) return null;
             return value != "0";
+        }
+
+        // On only for the exact value "1"; missing or anything else is off
+        private static bool GetStrictBool(string name) {
+            return Get(name) == "1";
         }
 
         private static int? GetInt(string name) {
