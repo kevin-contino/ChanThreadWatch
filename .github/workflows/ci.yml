@@ -15,8 +15,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Build and test
+  # Path filters live only on the jobs below that are not required checks. The required check names
+  # ("Build and test", "Core tests") belong to aggregator jobs that always run and pass only when
+  # "changes" succeeded and the gated job either succeeded or was skipped because nothing it covers
+  # changed. Fail safe: push and workflow_dispatch run everything; on a pull request a failed diff fails
+  # this job (and so the required checks), an empty diff runs everything, and any path that is not
+  # documentation (*.md, LICENSE.txt, .claude/) counts as code.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      script: ${{ steps.classify.outputs.script }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify the changed files
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Event $EVENT_NAME: running every job"
+            flags="$(printf 'code=true\nscript=true\n')"
+          else
+            changed="$RUNNER_TEMP/changed-files.txt"
+            git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$changed"
+            echo "Changed files ($BASE_SHA...$HEAD_SHA):"
+            # File names are PR content; stop workflow commands while they are printed
+            stop_token="$(openssl rand -hex 16)"
+            echo "::stop-commands::$stop_token"
+            cat "$changed"
+            echo "::$stop_token::"
+            flags="$(bash .github/scripts/classify-changes.sh < "$changed")"
+          fi
+          echo "$flags"
+          echo "$flags" >> "$GITHUB_OUTPUT"
+
+  windows-app:
+    name: Windows build and test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -67,6 +116,32 @@ jobs:
           name: test-results
           path: TestResults
 
+  # The required "Build and test" check (see the note above "changes")
+  build-and-test:
+    name: Build and test
+    needs: [changes, windows-app]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the Windows job
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          RESULT: ${{ needs.windows-app.result }}
+        run: |
+          echo "changes: $CHANGES_RESULT (code=$CODE_CHANGED), Windows build and test: $RESULT"
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            exit 1
+          fi
+          if [ "$RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RESULT" = "skipped" ] && [ "$CODE_CHANGED" = "false" ]; then
+            exit 0
+          fi
+          exit 1
+
   # ChanThreadWatch.Core on each OS. Linux and macOS skip the tests marked PendingUnix (each names
   # the MP-4 row that fixes it); Windows runs them all. Only "Core tests" below is a required check.
   # Saved logins: macOS gets a throwaway keychain and Linux a throwaway Secret Service (gnome-keyring in
@@ -74,6 +149,8 @@ jobs:
   # name. The tests honor it only in CI (GITHUB_ACTIONS), so a local run never touches a login store.
   core-tests:
     name: Core tests (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -162,26 +239,38 @@ jobs:
           security default-keychain -d user -s login.keychain || true
           security delete-keychain ctw-test.keychain || true
 
-  # One stable check name for all the legs: passes only if every leg succeeded, so a failed,
-  # cancelled or skipped matrix fails this required check
+  # One stable check name for all the legs: passes only if every leg succeeded, or the matrix was
+  # skipped because "changes" found no code change. A failed or cancelled leg, or a failed "changes",
+  # fails this required check.
   core-tests-result:
     name: Core tests
-    needs: [core-tests]
+    needs: [changes, core-tests]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check the legs
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
           RESULT: ${{ needs.core-tests.result }}
         run: |
-          echo "Core tests legs: $RESULT"
-          if [ "$RESULT" != "success" ]; then
+          echo "changes: $CHANGES_RESULT (code=$CODE_CHANGED), Core tests legs: $RESULT"
+          if [ "$CHANGES_RESULT" != "success" ]; then
             exit 1
           fi
+          if [ "$RESULT" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RESULT" = "skipped" ] && [ "$CODE_CHANGED" = "false" ]; then
+            exit 0
+          fi
+          exit 1
 
   offline-page-script:
     name: Offline page script
+    needs: changes
+    if: needs.changes.outputs.script == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

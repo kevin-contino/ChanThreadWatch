@@ -25,7 +25,7 @@ On Linux and macOS only `ChanThreadWatch.Core` and its tests build. Run them wit
 dotnet test ChanThreadWatch.Core.Tests -c Release --filter "TestCategory!=PendingUnix&TestCategory!=UI"
 ```
 
-CI runs the Core tests on Windows, Ubuntu and macOS (the "Core tests" check), and the full Windows build and tests in "Build and test".
+CI runs the Core tests on Windows, Ubuntu and macOS (the "Core tests" check), and the full Windows build and tests in "Windows build and test". The required checks "Build and test" and "Core tests" pass when those jobs pass, or when a pull request changes only documentation and the jobs are skipped.
 
 The release exes are self-contained single files, one per architecture: `pwsh .github/scripts/publish-app.ps1` writes `publish/ChanThreadWatch-win-x64.exe` and `publish/ChanThreadWatch-win-arm64.exe`.
 
