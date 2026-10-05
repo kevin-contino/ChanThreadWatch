@@ -3,8 +3,8 @@
 # then recomputes every hash and compares it with SHA256SUMS.txt.
 #
 # Environment:
-#   RELEASE_FILES  space-separated paths of the files the release uploads (besides SHA256SUMS.txt), including
-#                  the command line zip ctw-<version>.zip
+#   RELEASE_FILES  space-separated paths of the files the release uploads (besides SHA256SUMS.txt): exactly the two
+#                  app exes (publish-app.ps1) and the six command line files ctw-<version>-<rid> (publish-cli.ps1)
 #   DRY_RUN        'true' or 'false'; a dry run warns instead of failing when the CHANGELOG section is missing
 #   TAG            the release tag; when empty, the tag is derived from AssemblyVersion
 $ErrorActionPreference = 'Stop'
@@ -17,7 +17,7 @@ $dryRun = switch ($env:DRY_RUN) {
 }
 
 # The in-app update check compares Major.Minor.Revision of AssemblyVersion with the release tag
-$match = Select-String -Path src/ChanThreadWatch/Properties/AssemblyInfo.cs -Pattern 'AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)'
+$match = Select-String -Path src/ChanThreadWatch/Properties/AssemblyInfo.cs -Pattern '^\[assembly: AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)\]'
 if (-not $match) { throw 'AssemblyVersion not found in src/ChanThreadWatch/Properties/AssemblyInfo.cs' }
 $g = $match.Matches[0].Groups
 $expected = "v$($g[1].Value).$($g[2].Value).$($g[4].Value)"
@@ -45,9 +45,17 @@ $files = @($env:RELEASE_FILES -split ' ' | Where-Object { $_ })
 foreach ($file in $files) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Release file not found: $file" }
 }
-# Every app is released with the one shared version (G13), so the command line zip is named with the tag's version
-$cliZip = "ctw-$($tag.Substring(1)).zip"
-if (-not ($files | Where-Object { (Split-Path $_ -Leaf) -ceq $cliZip })) { throw "RELEASE_FILES has no $cliZip (see publish-cli.ps1)" }
+# Every app is released with the one shared version (G13), so the command line files are named with the tag's version:
+# a self-contained single file per system (.exe on Windows)
+$version = $tag.Substring(1)
+$expectedNames = @('ChanThreadWatch-win-x64.exe', 'ChanThreadWatch-win-arm64.exe') +
+    @('win-x64', 'win-arm64' | ForEach-Object { "ctw-$version-$_.exe" }) +
+    @('linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64' | ForEach-Object { "ctw-$version-$_" })
+$names = @($files | ForEach-Object { Split-Path $_ -Leaf })
+$missing = @($expectedNames | Where-Object { $names -cnotcontains $_ })
+if ($missing) { throw "RELEASE_FILES has no $($missing -join ', ') (see publish-app.ps1 and publish-cli.ps1)" }
+$unexpected = @($names | Where-Object { $expectedNames -cnotcontains $_ })
+if ($unexpected) { throw "RELEASE_FILES has files the release does not expect: $($unexpected -join ', ')" }
 # Assets are uploaded by file name, so two files with one name (e.g. the exe of two architectures) would collide
 $duplicates = @($files | ForEach-Object { Split-Path $_ -Leaf } | Group-Object | Where-Object Count -gt 1)
 if ($duplicates) { throw "Release file names must be unique: $($duplicates.Name -join ', ')" }

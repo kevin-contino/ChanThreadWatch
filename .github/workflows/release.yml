@@ -16,17 +16,65 @@ permissions:
   contents: read
 
 # The files the release uploads, besides SHA256SUMS.txt, are in RELEASE_FILES, which the "List the release files"
-# step of each job sets once they are published (the command line zip's name holds the version).
+# step of each job sets once they are published: the two app exes and the six command line files (their names hold
+# the version). prepare-release.ps1 fails unless all eight are there.
 
 jobs:
+  # The command line (ctw) for Linux and macOS, published on each system: macOS runs an arm64 file only when it is
+  # code-signed, and the SDK signs only on macOS (publish-cli.ps1 signs ad hoc). Read-only token; the files go to the
+  # release job below as a workflow artifact, which it downloads with gh (no download Action).
+  ctw-unix:
+    name: Publish ctw (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rids: linux-x64,linux-arm64
+            artifact: ctw-linux
+          - os: macos-latest
+            rids: osx-x64,osx-arm64
+            artifact: ctw-macos
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      # One shared version (G13): fails when ctw's version differs from the app's AssemblyVersion. The file for the
+      # runner's own system is run with --version.
+      - name: Publish the command line and check its version
+        shell: pwsh
+        env:
+          CTW_RIDS: ${{ matrix.rids }}
+        run: ./.github/scripts/publish-cli.ps1 -RuntimeIdentifiers $env:CTW_RIDS
+
+      # Only the release files (publish/ctw-<version>-<rid>), not the publish folders under publish/build-ctw
+      - name: Keep the files for the release job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: publish/ctw-*
+          if-no-files-found: error
+          retention-days: 5
+
   # Tag pushes only. This is the one job with write access, and the only place that creates a release.
   release:
     name: Build and publish release
+    needs: ctw-unix
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
       contents: write
+      # gh run download of the ctw-unix files of this run
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,7 +86,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          $match = Select-String -Path src/ChanThreadWatch/Properties/AssemblyInfo.cs -Pattern 'AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)'
+          $match = Select-String -Path src/ChanThreadWatch/Properties/AssemblyInfo.cs -Pattern '^\[assembly: AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)\]'
           if (-not $match) { throw 'AssemblyVersion not found in src/ChanThreadWatch/Properties/AssemblyInfo.cs' }
           $g = $match.Matches[0].Groups
           $expected = "v$($g[1].Value).$($g[2].Value).$($g[4].Value)"
@@ -59,18 +107,27 @@ jobs:
         run: ./.github/scripts/publish-app.ps1
 
       # One shared version (G13): fails when ctw's version differs from the app's AssemblyVersion
-      - name: Publish the command line and check its version
+      - name: Publish the command line for Windows and check its version
         shell: pwsh
-        run: ./.github/scripts/publish-cli.ps1
+        run: ./.github/scripts/publish-cli.ps1 -RuntimeIdentifiers win-x64,win-arm64
 
-      # One self-contained single-file exe per Windows architecture (publish-app.ps1) and the command line zip for
-      # every OS (publish-cli.ps1)
+      - name: Download the command line for Linux and macOS
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($name in 'ctw-linux', 'ctw-macos') {
+            gh run download $env:GITHUB_RUN_ID --repo $env:GITHUB_REPOSITORY --name $name --dir publish
+            if ($LASTEXITCODE -ne 0) { throw "gh run download of $name failed with exit code $LASTEXITCODE" }
+          }
+
+      # One self-contained single-file exe per Windows architecture (publish-app.ps1) and one self-contained single
+      # file of the command line per system (publish-cli.ps1); prepare-release.ps1 checks that all eight are there
       - name: List the release files
         shell: pwsh
         run: |
-          $cliZip = @(Get-ChildItem -LiteralPath publish -Filter 'ctw-*.zip' -File)
-          if ($cliZip.Count -ne 1) { throw "Expected one publish/ctw-*.zip, found $($cliZip.Count)" }
-          "RELEASE_FILES=publish/ChanThreadWatch-win-x64.exe publish/ChanThreadWatch-win-arm64.exe publish/$($cliZip[0].Name)" | Add-Content -LiteralPath $env:GITHUB_ENV
+          $files = @(Get-ChildItem -LiteralPath publish -File | Where-Object { $_.Name -like 'ChanThreadWatch-*.exe' -or $_.Name -like 'ctw-*' } | Sort-Object Name | ForEach-Object { "publish/$($_.Name)" })
+          "RELEASE_FILES=$($files -join ' ')" | Add-Content -LiteralPath $env:GITHUB_ENV
 
       # Strict: a release is only published after a clean scan with updated signatures
       - name: Defender scan
@@ -99,11 +156,14 @@ jobs:
   # and any process in a job can read that job's token, so a dry run never holds a token that can write.
   dry-run:
     name: Release dry run (no publish)
+    needs: ctw-unix
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
       contents: read
+      # gh run download of the ctw-unix files of this run
+      actions: read
     steps:
       - name: Refuse to publish from a manual run
         shell: pwsh
@@ -132,16 +192,25 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/publish-app.ps1
 
-      - name: Publish the command line and check its version
+      - name: Publish the command line for Windows and check its version
         shell: pwsh
-        run: ./.github/scripts/publish-cli.ps1
+        run: ./.github/scripts/publish-cli.ps1 -RuntimeIdentifiers win-x64,win-arm64
+
+      - name: Download the command line for Linux and macOS
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($name in 'ctw-linux', 'ctw-macos') {
+            gh run download $env:GITHUB_RUN_ID --repo $env:GITHUB_REPOSITORY --name $name --dir publish
+            if ($LASTEXITCODE -ne 0) { throw "gh run download of $name failed with exit code $LASTEXITCODE" }
+          }
 
       - name: List the release files
         shell: pwsh
         run: |
-          $cliZip = @(Get-ChildItem -LiteralPath publish -Filter 'ctw-*.zip' -File)
-          if ($cliZip.Count -ne 1) { throw "Expected one publish/ctw-*.zip, found $($cliZip.Count)" }
-          "RELEASE_FILES=publish/ChanThreadWatch-win-x64.exe publish/ChanThreadWatch-win-arm64.exe publish/$($cliZip[0].Name)" | Add-Content -LiteralPath $env:GITHUB_ENV
+          $files = @(Get-ChildItem -LiteralPath publish -File | Where-Object { $_.Name -like 'ChanThreadWatch-*.exe' -or $_.Name -like 'ctw-*' } | Sort-Object Name | ForEach-Object { "publish/$($_.Name)" })
+          "RELEASE_FILES=$($files -join ' ')" | Add-Content -LiteralPath $env:GITHUB_ENV
 
       - name: Defender scan
         shell: pwsh

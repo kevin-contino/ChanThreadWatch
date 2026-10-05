@@ -29,7 +29,7 @@ namespace JDP.Cli.Tests {
         }
 
         [TestMethod]
-        [DataRow(new[] { "watch" }, "Unknown command 'watch'.")]
+        [DataRow(new[] { "serve" }, "Unknown command 'serve'.")]
         [DataRow(new[] { "add" }, "Wrong arguments. Usage: ctw add <url>")]
         [DataRow(new[] { "add", "https://boards.4chan.org/a/thread/1", "https://boards.4chan.org/a/thread/2" }, "Wrong arguments.")]
         [DataRow(new[] { "add", "https://boards.4chan.org/a/thread/1", "--title", "x" }, "Unknown option '--title'.")]

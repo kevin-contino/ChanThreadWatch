@@ -8,9 +8,11 @@
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <!-- One framework-dependent zip for every OS (run with "dotnet ctw.dll"), so no native launcher for the build machine's OS.
-         Single-file builds per OS come with MP-6c. -->
-    <UseAppHost>false</UseAppHost>
+    <!-- The release architectures (see .github/scripts/publish-cli.ps1). Pinned so the lock file lists their runtime
+         packs, and the locked restore in CI does not depend on the SDK's default -->
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <!-- The release is a single file per OS, so code that needs a file path for an assembly is reported -->
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
     <!-- The version below is the whole version; no commit hash appended to it -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
@@ -37,6 +39,16 @@
   <Target Name="RequireWinFormsVersion" BeforeTargets="PrepareForBuild;GetAssemblyVersion">
     <Error Condition="'$(WinFormsVersion)' == ''" Text="AssemblyVersion(&quot;1.N.0.R&quot;) not found in $(WinFormsAssemblyInfoPath); ctw takes its version from there." />
   </Target>
+
+  <!-- Release assets: dotnet publish ChanThreadWatch.Cli.csproj -c Release -r <rid> gives one self-contained file that
+       needs no .NET install, as the app's exe (see ChanThreadWatch.csproj). A build without a runtime identifier (the
+       tests) stays framework-dependent. -->
+  <PropertyGroup Condition=" '$(RuntimeIdentifier)' != '' ">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
 
   <ItemGroup>
     <!-- The same globalization mode as the app (see ChanThreadWatch.csproj); ignored off Windows -->

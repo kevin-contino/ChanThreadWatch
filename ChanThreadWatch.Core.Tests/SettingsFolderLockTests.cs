@@ -278,9 +278,13 @@ namespace JDP.Tests {
         }
 
         // Only a window held by another window on another computer may start anyway, and a window
-        // held by the command line (on any computer) waits longer for it; a null machine stands
-        // for no record
+        // held by the command line (on any computer) waits longer for it, but not for ctw watch, which
+        // holds it until it is stopped; a null machine stands for no record
         [TestMethod]
+        [DataRow("winforms", "watch", "OTHER-PC", HeldLockAction.RefuseForWatch)]
+        [DataRow("winforms", "watch", "THIS-PC", HeldLockAction.RefuseForWatch)]
+        [DataRow("watch", "watch", "OTHER-PC", HeldLockAction.Refuse)]
+        [DataRow("watch", "winforms", "OTHER-PC", HeldLockAction.Refuse)]
         [DataRow("winforms", "winforms", "OTHER-PC", HeldLockAction.AskToStartAnyway)]
         [DataRow("winforms", "winforms", "other-pc", HeldLockAction.AskToStartAnyway)]
         [DataRow("winforms", "winforms", "THIS-PC", HeldLockAction.Refuse)]
@@ -302,6 +306,7 @@ namespace JDP.Tests {
         public void UnreadableRecordIsRefused() {
             Assert.AreEqual(HeldLockAction.Refuse, SettingsFolderLockHolder.Decide(SettingsFolderLockHolder.Parse("kind=winforms"), "winforms", "THIS-PC"));
             Assert.AreEqual(HeldLockAction.Refuse, SettingsFolderLockHolder.Decide(SettingsFolderLockHolder.Parse("kind=cli"), "winforms", "THIS-PC"));
+            Assert.AreEqual(HeldLockAction.Refuse, SettingsFolderLockHolder.Decide(SettingsFolderLockHolder.Parse("kind=watch"), "winforms", "THIS-PC"));
         }
 
         // The window waits about 10 seconds in all for the command line

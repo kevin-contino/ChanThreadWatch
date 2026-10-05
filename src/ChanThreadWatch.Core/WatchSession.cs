@@ -102,9 +102,15 @@ namespace JDP {
             }
         }
 
+        // Test only: the folder that holds the default download and completed folders in place of Documents (or the
+        // home folder), so a test that falls back to a default folder never writes to the user's folders. Every test
+        // assembly sets it to a temporary folder. Never set by production code.
+        internal static string DefaultFoldersParentForTesting { get; set; }
+
         // Windows uses Documents (GetFolderPath). Linux and macOS use ~/Documents, built from the home
         // folder because GetFolderPath(MyDocuments) can return the home folder itself there.
         internal static string GetDefaultFolder(string name) {
+            if (DefaultFoldersParentForTesting != null) return Path.Combine(DefaultFoldersParentForTesting, name);
             bool isWindows = OperatingSystem.IsWindows();
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             string documents = isWindows ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : GetUnixDocumentsFolder(home);

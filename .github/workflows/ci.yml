@@ -99,10 +99,11 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/publish-app.ps1
 
-      # The command line release zip (framework-dependent, one for every OS); fails if its version differs from the app's
+      # The command line's self-contained single file for x64, run with --version and --help; fails if its version
+      # differs from the app's. The Linux and macOS legs of "Core tests" do the same for their own system.
       - name: Publish the command line
         shell: pwsh
-        run: ./.github/scripts/publish-cli.ps1
+        run: ./.github/scripts/publish-cli.ps1 -RuntimeIdentifiers win-x64
 
       # Starts the published x64 exe from a temp folder, with settings.txt next to it and then without it (the
       # runner's own AppData; this runner is a throwaway VM). Each run must reach the main window, save its
@@ -166,12 +167,15 @@ jobs:
           - os: windows-latest
             filter: TestCategory!=UI
             keyring-tests: ''
+            ctw-rid: ''
           - os: ubuntu-latest
             filter: TestCategory!=PendingUnix&TestCategory!=UI
             keyring-tests: '1'
+            ctw-rid: linux-x64
           - os: macos-latest
             filter: TestCategory!=PendingUnix&TestCategory!=UI
             keyring-tests: '1'
+            ctw-rid: osx-arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -228,12 +232,23 @@ jobs:
           dbus-run-session -- bash -c 'printf "%s" "$KEYRING_PASSWORD" | gnome-keyring-daemon --unlock --components=secrets > /dev/null && dotnet test ChanThreadWatch.Core.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"'
         shell: bash
 
-      # ctw never asks a login store (it keeps saved logins as they are in the file), so its tests need no keyring
+      # ctw list, add and remove never ask a login store (they keep saved logins as they are in the file), and the ctw watch
+      # tests put a fake login store in place of the system's, so these tests need no keyring. They include ctw watch
+      # against the loopback test server.
       - name: CLI tests
         env:
           TEST_FILTER: ${{ matrix.filter }}
         run: dotnet test ChanThreadWatch.Cli.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"
         shell: bash
+
+      # The release file of this system (self-contained single file, ad-hoc signed on macOS) runs --version and --help.
+      # Windows publishes and runs its own in "Windows build and test".
+      - name: Publish the command line and run it
+        if: matrix.ctw-rid != ''
+        env:
+          CTW_RID: ${{ matrix.ctw-rid }}
+        run: ./.github/scripts/publish-cli.ps1 -RuntimeIdentifiers $env:CTW_RID
+        shell: pwsh
 
       # The fallback when no Secret Service can be reached: logins are for the session only and nothing
       # throws. The test fails rather than skips when the variable is missing, and no test found is an error.

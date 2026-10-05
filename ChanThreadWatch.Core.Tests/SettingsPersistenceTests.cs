@@ -31,6 +31,27 @@ namespace JDP.Tests {
             Directory.Delete(_dir, true);
         }
 
+        // ctw watch uses the settings folder it found, and bases relative folders on a portable settings folder
+        [TestMethod]
+        public void OverridesSetTheSettingsFolderAndTheBaseOfRelativeFolders() {
+            Settings.Load(_path);
+            Settings.DownloadFolder = "rel";
+            Settings.DownloadFolderIsRelative = true;
+            StringAssert.StartsWith(Settings.AbsoluteDownloadDirectory, Path.Combine(Settings.ExeDirectory, "rel"));
+            try {
+                Settings.SettingsDirectoryOverride = _dir;
+                Settings.RelativeFolderBaseOverride = _dir;
+
+                Assert.AreEqual(_dir, Settings.GetSettingsDirectory());
+                StringAssert.StartsWith(Settings.AbsoluteDownloadDirectory, Path.Combine(_dir, "rel"));
+            }
+            finally {
+                Settings.SettingsDirectoryOverride = null;
+                Settings.RelativeFolderBaseOverride = null;
+            }
+            Assert.AreNotEqual(_dir, Settings.GetSettingsDirectory());
+        }
+
         [TestMethod]
         public void SettingsRoundTrip() {
             Settings.Load(_path);

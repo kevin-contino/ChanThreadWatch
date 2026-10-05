@@ -8,7 +8,7 @@ using System.Threading;
 namespace JDP.Cli {
     // The settings folder ctw uses. As the app (Settings.GetSettingsDirectory): the program's own folder when it
     // holds settings.txt (portable mode), otherwise the app's folder in the application data. ctw also looks in the
-    // parent folder, so the zip's ctw folder can sit next to ChanThreadWatch.exe. Finding it creates nothing.
+    // parent folder, so ctw can also sit in a folder next to ChanThreadWatch.exe. Finding it creates nothing.
     internal sealed class SettingsFolder {
         public SettingsFolder(string path, bool isAppData) {
             Path = path;
@@ -37,38 +37,52 @@ namespace JDP.Cli {
         }
     }
 
-    // Takes the settings folder's lock for a command that changes the thread list
+    // Takes the settings folder's lock for a command that changes the thread list (add, remove), or for ctw watch
     internal static class SettingsFolderAccess {
         private static readonly Dictionary<string, string> _holderNames = new Dictionary<string, string>(StringComparer.Ordinal) {
             { SettingsFolderLockHolder.WinForms, "Chan Thread Watch" },
             { SettingsFolderLockHolder.Cli, "Another ctw command" },
+            { SettingsFolderLockHolder.Watch, "ctw watch" },
             { SettingsFolderLockHolder.Service, "The Chan Thread Watch service" }
         };
+
+        // What the user is told when ctw watch holds the lock
+        public const string StopWatchAdvice = "Stop it first (Ctrl+C where it runs), then try again.";
 
         // verb is what the command does to the thread ("add", "remove"), for the message. Waits as the app does
         // for a program that is just closing. Throws CliException naming the holder if another program keeps the
         // lock, if the app runs with the folder on this computer (its mutex, which also a window started without
         // the lock and versions before 1.40.0 hold), or if the lock file can't be written.
         public static SettingsFolderLock Lock(string folder, string verb) {
-            SettingsFolderLock folderLock;
-            if (!TryAcquire(folder, out folderLock)) throw CreateHeldException(folder, verb);
-            if (!IsAppRunningOnThisComputer(folder)) return folderLock;
-            folderLock.Dispose();
-            throw new CliException("Chan Thread Watch is running with the settings folder " + folder + " on this computer. Close it, or " + verb + " the thread in the app.");
+            return Lock(folder, SettingsFolderLockHolder.Cli, "Close it, or " + verb + " the thread in the app.");
         }
 
-        private static bool TryAcquire(string folder, out SettingsFolderLock folderLock) {
+        // As Lock, for ctw watch, which keeps the lock until it stops
+        public static SettingsFolderLock LockForWatch(string folder) {
+            return Lock(folder, SettingsFolderLockHolder.Watch, "Close it, then start ctw watch again.");
+        }
+
+        // appAdvice is what the message advises when the app uses the folder
+        private static SettingsFolderLock Lock(string folder, string hostKind, string appAdvice) {
+            SettingsFolderLock folderLock;
+            if (!TryAcquire(folder, hostKind, out folderLock)) throw CreateHeldException(folder, appAdvice);
+            if (!IsAppRunningOnThisComputer(folder)) return folderLock;
+            folderLock.Dispose();
+            throw new CliException("Chan Thread Watch is running with the settings folder " + folder + " on this computer. " + appAdvice);
+        }
+
+        private static bool TryAcquire(string folder, string hostKind, out SettingsFolderLock folderLock) {
             try {
-                return SettingsFolderLock.TryAcquire(folder, SettingsFolderLockHolder.Cli, SettingsFolderLock.DefaultWait, out folderLock);
+                return SettingsFolderLock.TryAcquire(folder, hostKind, SettingsFolderLock.DefaultWait, out folderLock);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
                 throw new CliException("Cannot write to the settings folder " + folder + ": " + ex.Message);
             }
         }
 
-        private static CliException CreateHeldException(string folder, string verb) {
+        private static CliException CreateHeldException(string folder, string appAdvice) {
             SettingsFolderLockHolder holder = SettingsFolderLock.ReadHolderAfterRecordIsWritten(folder);
-            return new CliException(DescribeHolder(holder) + " is using the settings folder " + folder + ". " + GetAdvice(holder, verb));
+            return new CliException(DescribeHolder(holder) + " is using the settings folder " + folder + ". " + GetAdvice(holder, appAdvice));
         }
 
         internal static bool IsAppRunningOnThisComputer(string folder) {
@@ -97,9 +111,10 @@ namespace JDP.Cli {
             return name + " (pid " + holder.ProcessId.ToString(CultureInfo.InvariantCulture) + " on " + ConsoleText.Clean(holder.MachineName) + ")";
         }
 
-        private static string GetAdvice(SettingsFolderLockHolder holder, string verb) {
-            bool isApp = holder != null && holder.Kind == SettingsFolderLockHolder.WinForms;
-            return isApp ? "Close it, or " + verb + " the thread in the app." : "Wait until it has finished, then try again.";
+        private static string GetAdvice(SettingsFolderLockHolder holder, string appAdvice) {
+            string kind = holder != null ? holder.Kind : null;
+            if (kind == SettingsFolderLockHolder.WinForms) return appAdvice;
+            return kind == SettingsFolderLockHolder.Watch ? StopWatchAdvice : "Wait until it has finished, then try again.";
         }
     }
 }

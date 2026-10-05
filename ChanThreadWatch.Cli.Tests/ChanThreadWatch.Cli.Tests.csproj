@@ -30,4 +30,15 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- ctw watch runs against the loopback test server and the sterile 4chan thread of the Core integration tests -->
+    <Compile Include="..\ChanThreadWatch.Core.Tests\Integration\LoopbackHttpServer.cs" Link="Integration\LoopbackHttpServer.cs" />
+    <Compile Include="..\ChanThreadWatch.Core.Tests\Integration\FourChanThreadFixture.cs" Link="Integration\FourChanThreadFixture.cs" />
+    <!-- Every test assembly sends the default folders and the application data folder to a temporary folder -->
+    <Compile Include="..\ChanThreadWatch.Core.Tests\TestDefaultFolders.cs" Link="TestDefaultFolders.cs" />
+    <None Include="..\ChanThreadWatch.Tests\Fixtures\4chan-thread-loopback.html" Link="Fixtures\4chan-thread-loopback.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

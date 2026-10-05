@@ -195,6 +195,9 @@ namespace JDP.Tests {
             string originalHome = Environment.GetEnvironmentVariable("HOME");
             string home = Path.Combine(Path.GetTempPath(), "ctw-home-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(home);
+            // The real rule, under a temporary HOME (the run's redirect is put back below)
+            string redirected = WatchSession.DefaultFoldersParentForTesting;
+            WatchSession.DefaultFoldersParentForTesting = null;
             try {
                 Environment.SetEnvironmentVariable("HOME", home);
                 Assert.AreEqual(home, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "HOME could not be set for the process");
@@ -204,6 +207,7 @@ namespace JDP.Tests {
             }
             finally {
                 Environment.SetEnvironmentVariable("HOME", originalHome);
+                WatchSession.DefaultFoldersParentForTesting = redirected;
                 Directory.Delete(home, true);
             }
         }

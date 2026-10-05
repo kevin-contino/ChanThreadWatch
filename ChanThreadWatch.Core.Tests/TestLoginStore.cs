@@ -21,6 +21,8 @@ namespace JDP.Tests {
 
         [AssemblyInitialize]
         public static void UseTestLoginStore(TestContext context) {
+            // Not about logins, but MSTest allows one AssemblyInitialize per assembly
+            TestDefaultFolders.Redirect();
             if (OperatingSystem.IsWindows()) return;
             IStoredAuthProtector keyring = IsEnabled ? KeyringStoredAuthProtector.CreateForThisSystem(ServiceName) : null;
             if (keyring == null) {
@@ -34,6 +36,7 @@ namespace JDP.Tests {
         [AssemblyCleanup]
         public static void DeleteTestItems() {
             if (_tracking != null) _tracking.DeleteAll();
+            TestDefaultFolders.Delete();
         }
 
         public static bool IsCI {
