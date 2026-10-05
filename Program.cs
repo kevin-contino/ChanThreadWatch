@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -8,6 +9,11 @@ using System.Windows.Forms;
 namespace JDP {
     internal static class Program {
         private static Mutex _mutex;
+        private static SettingsFolderLock _settingsFolderLock;
+
+        // Shown when the settings folder's lock is held by a program the window can't run beside
+        internal const string SettingsFolderInUseMessage = "The settings folder is in use by another copy of Chan Thread Watch " +
+            "(on this or another computer). Close it and try again.";
 
         [STAThread]
         private static void Main() {
@@ -19,7 +25,79 @@ namespace JDP {
                 MessageBox.Show("Another instance of this program is running.", "Already Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
+            // Taken after the mutex, before the thread list is loaded
+            SettingsFolderLock folderLock;
+            if (!TryLockSettingsFolder(null, Settings.GetSettingsDirectory(), true, out folderLock)) return;
+            ReplaceSettingsFolderLock(folderLock);
             Application.Run(new frmChanThreadWatch());
+        }
+
+        // Returns false (after showing a message) if the window must not use the folder: the
+        // lock file can't be written, or another program holds the lock and the user didn't
+        // choose to start anyway. On true, folderLock is null if the user chose to start
+        // without the lock (another window holds it on another computer).
+        // atStartup picks the advice shown when the folder can't be written.
+        internal static bool TryLockSettingsFolder(IWin32Window owner, string folder, bool atStartup, out SettingsFolderLock folderLock) {
+            try {
+                if (SettingsFolderLock.TryAcquire(folder, SettingsFolderLockHolder.WinForms, SettingsFolderLock.DefaultWait, out folderLock)) return true;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                Logger.Log("The settings folder lock could not be written: " + ex.Message);
+                MessageBox.Show(owner, GetCannotWriteSettingsFolderMessage(folder, atStartup), "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                folderLock = null;
+                return false;
+            }
+            return ConfirmStartWithoutLock(owner, folder);
+        }
+
+        private static bool ConfirmStartWithoutLock(IWin32Window owner, string folder) {
+            SettingsFolderLockHolder holder = SettingsFolderLock.ReadHolderAfterRecordIsWritten(folder);
+            if (SettingsFolderLockHolder.Decide(holder, SettingsFolderLockHolder.WinForms, SettingsFolderLockHolder.GetThisMachineName()) == HeldLockAction.Refuse) {
+                MessageBox.Show(owner, SettingsFolderInUseMessage, "Already Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+            if (MessageBox.Show(owner, GetRunningOnOtherComputerMessage(holder.MachineName), "Already Running",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return false;
+            Logger.Log("Started without the settings folder lock, which Chan Thread Watch on " + holder.MachineName + " holds.");
+            return true;
+        }
+
+        internal static string GetRunningOnOtherComputerMessage(string machineName) {
+            return "Chan Thread Watch is already running on " + machineName + " with this settings folder. " +
+                "If both keep running, their saves can overwrite each other's thread list. Start anyway?";
+        }
+
+        // At startup the folder comes from where the program is (portable mode) or AppData; when
+        // the settings folder is being changed, the user picks another
+        internal static string GetCannotWriteSettingsFolderMessage(string folder, bool atStartup) {
+            string advice = atStartup
+                ? "Move the program to a folder you can write to, or remove " + Settings.SettingsFileName + " from the program folder to keep settings in AppData."
+                : "Choose a folder you can write to.";
+            return "Chan Thread Watch cannot write to its settings folder " + folder + ". " + advice;
+        }
+
+        // For a window that started without the lock (the user chose to start anyway): takes
+        // the lock once the other program has let go of it, so a program started later is warned
+        // or refused again. Returns true if it took the lock now. Never waits or throws.
+        internal static bool TryTakeMissingSettingsFolderLock(string folder) {
+            if (_settingsFolderLock != null) return false;
+            try {
+                SettingsFolderLock folderLock;
+                if (!SettingsFolderLock.TryAcquire(folder, SettingsFolderLockHolder.WinForms, out folderLock)) return false;
+                ReplaceSettingsFolderLock(folderLock);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                return false;
+            }
+            General.LogQuietly("Took the settings folder lock, which another program held when this one started.");
+            return true;
+        }
+
+        // Keeps the new lock (null for none) and releases the one held before
+        public static void ReplaceSettingsFolderLock(SettingsFolderLock folderLock) {
+            SettingsFolderLock oldLock = _settingsFolderLock;
+            _settingsFolderLock = folderLock;
+            if (oldLock != null) oldLock.Dispose();
         }
 
         // General.Version (About box, update check) reports this app's version, not ChanThreadWatch.Core's

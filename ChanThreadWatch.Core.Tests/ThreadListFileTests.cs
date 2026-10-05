@@ -633,29 +633,22 @@ namespace JDP.Tests {
             yield return "outer 2";
         }
 
-        // A second write of the file starts while the first still writes its temporary file. On
-        // Windows they share it, so the second fails on the first's sharing mode and the file
-        // keeps its old content. On Unix, where a rename ignores locks and a shared temporary
-        // file could be swapped in half written, each has its own, so both finish and the last
-        // rename wins with complete content.
+        // A second write of the file starts while the first still writes its temporary file.
+        // Each has its own (a shared one could be swapped in half written on Unix, where a
+        // rename ignores locks, and made the second write fail on Windows), so both finish and
+        // the last swap wins with complete content.
         [TestMethod]
-        public void TwoWritesOfTheSameFileDoNotShareATempFileOnUnix() {
+        public void TwoWritesOfTheSameFileDoNotShareATempFile() {
             File.WriteAllLines(_path, new[] { "old" });
 
-            if (OperatingSystem.IsWindows()) {
-                Assert.ThrowsExactly<IOException>(() => TextFile.WriteAllLinesAtomic(_path, LinesWrittenAroundAnotherWrite(_path)));
-                CollectionAssert.AreEqual(new[] { "old" }, File.ReadAllLines(_path));
-            }
-            else {
-                TextFile.WriteAllLinesAtomic(_path, LinesWrittenAroundAnotherWrite(_path));
-                CollectionAssert.AreEqual(new[] { "outer 1", "outer 2" }, File.ReadAllLines(_path));
-                CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
-            }
+            TextFile.WriteAllLinesAtomic(_path, LinesWrittenAroundAnotherWrite(_path));
+
+            CollectionAssert.AreEqual(new[] { "outer 1", "outer 2" }, File.ReadAllLines(_path));
+            CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
         }
 
-        // The name a write's temporary file has: fixed on Windows, with a unique part on Unix
+        // The name a write's temporary file has
         private string CrashedWriteTempPath(string fileName) {
-            if (OperatingSystem.IsWindows()) return Path.Combine(_dir, fileName + ".tmp");
             return Path.Combine(_dir, "~" + fileName + "." + Guid.NewGuid().ToString("N") + ".tmp");
         }
 
@@ -667,8 +660,8 @@ namespace JDP.Tests {
         }
 
         // A crash between creating the temporary file and swapping it in leaves it behind: the
-        // next write overwrites it (Windows) or deletes it (Unix). The backup's own temporary
-        // file is not taken for the thread list's.
+        // next write deletes it. The backup's own temporary file is not taken for the thread
+        // list's.
         [TestMethod]
         public void TempFileLeftByACrashIsGoneAfterTheNextWrite() {
             string stale = CrashedWriteTempPath("threads.txt");
@@ -684,7 +677,7 @@ namespace JDP.Tests {
         }
 
         // A temporary file that is locked or was written in the last 10 minutes may belong to a
-        // write in progress (Unix; on Windows these names are not a write's)
+        // write in progress
         [TestMethod]
         public void TempFileOfAWriteInProgressIsLeft() {
             string locked = Path.Combine(_dir, "~threads.txt." + Guid.NewGuid().ToString("N") + ".tmp");
@@ -698,6 +691,78 @@ namespace JDP.Tests {
 
             CollectionAssert.AreEqual(new[] { "new" }, File.ReadAllLines(_path));
             CollectionAssert.AreEquivalent(new[] { _path, locked, recent }, Directory.GetFiles(_dir));
+        }
+
+        // Versions before 1.40 wrote "<name>.tmp" on Windows. One left by a crash is deleted
+        // like the others; one that is locked or recent may be an older version's write in
+        // progress (e.g. on another computer sharing the folder) and is left.
+        [TestMethod]
+        public void FixedNameTempFileOfAnOlderVersionIsDeletedWhenStale() {
+            string legacy = _path + ".tmp";
+            WriteTempFile(legacy, true);
+
+            TextFile.WriteAllLinesAtomic(_path, new[] { "new" });
+
+            CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
+        }
+
+        [TestMethod]
+        public void FixedNameTempFileOfAnOlderVersionIsLeftWhenLockedOrRecent() {
+            string legacy = _path + ".tmp";
+            string backupPath = _path + ".bak";
+            string backupLegacy = backupPath + ".tmp";
+            WriteTempFile(legacy, true);
+            WriteTempFile(backupLegacy, false);
+
+            using (new FileStream(legacy, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                TextFile.WriteAllLinesAtomic(_path, new[] { "new" });
+            }
+            TextFile.WriteAllLinesAtomic(backupPath, new[] { "backup" });
+
+            CollectionAssert.AreEquivalent(new[] { _path, legacy, backupPath, backupLegacy }, Directory.GetFiles(_dir));
+        }
+
+        // Another program (e.g. a backup tool or an editor) has the file open. A rename over it
+        // fails on Windows then, also with delete sharing, so the write falls back to
+        // File.Replace, which delete sharing lets through.
+        [TestMethod]
+        public void WriteSucceedsWhileAnotherProgramHasTheFileOpen() {
+            File.WriteAllLines(_path, new[] { "old" });
+
+            using (FileStream open = new FileStream(_path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete)) {
+                TextFile.WriteAllLinesAtomic(_path, new[] { "new" });
+            }
+
+            CollectionAssert.AreEqual(new[] { "new" }, File.ReadAllLines(_path));
+            CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
+        }
+
+        // A read-only file can't be replaced (neither by a rename nor by File.Replace, as before):
+        // the write fails without waiting for it, keeps the content and leaves no temporary file
+        [TestMethod]
+        [OSCondition(OperatingSystems.Windows)]
+        public void WriteOverAReadOnlyFileFailsAndLeavesNoTempFile() {
+            File.WriteAllLines(_path, new[] { "old" });
+            File.SetAttributes(_path, FileAttributes.ReadOnly);
+            try {
+                Assert.ThrowsExactly<UnauthorizedAccessException>(() => TextFile.WriteAllLinesAtomic(_path, new[] { "new" }));
+
+                CollectionAssert.AreEqual(new[] { "old" }, File.ReadAllLines(_path));
+                CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
+            }
+            finally {
+                File.SetAttributes(_path, FileAttributes.Normal);
+            }
+        }
+
+        // A write that fails before the swap deletes its own temporary file
+        [TestMethod]
+        public void FailedAtomicWriteLeavesNoTempFile() {
+            File.WriteAllLines(_path, new[] { "old" });
+
+            Assert.ThrowsExactly<IOException>(() => TextFile.WriteAllLinesAtomic(_path, LinesThatFailAfter(10)));
+
+            CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
         }
 
         private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;

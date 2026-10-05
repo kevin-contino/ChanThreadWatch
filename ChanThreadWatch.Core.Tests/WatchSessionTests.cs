@@ -97,6 +97,54 @@ namespace JDP.Tests {
             Assert.IsFalse(session.IsLoadingThreadsFromFile);
         }
 
+        // The form keeps a failed save pending, so the next timer tick tries again
+        [TestMethod]
+        public void SaveThreadListReportsWhetherTheListWasSaved() {
+            WatchSession session = CreateSession();
+            session.LoadThreadList();
+
+            Assert.IsTrue(session.SaveThreadList());
+            File.Delete(_threadListPath);
+            // A folder where the file goes makes the save fail
+            Directory.CreateDirectory(_threadListPath);
+
+            Assert.IsFalse(session.SaveThreadList());
+        }
+
+        private static string ReadLog() {
+            string logPath = Path.Combine(Settings.GetSettingsDirectory(), Settings.LogFileName);
+            using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (StreamReader sr = new StreamReader(fs)) {
+                return sr.ReadToEnd();
+            }
+        }
+
+        private static int CountOf(string text, string part) {
+            return text.Split(new[] { part }, StringSplitOptions.None).Length - 1;
+        }
+
+        // A failed save is tried again every minute, so only the first failure is logged in full,
+        // and the next save that succeeds says how many failed
+        [TestMethod]
+        public void RepeatedSaveFailuresAreLoggedOnce() {
+            WatchSession session = CreateSession();
+            session.LoadThreadList();
+            Directory.CreateDirectory(_threadListPath);
+            Logger.Log("WatchSessionTests marker");
+            int start = ReadLog().Length;
+
+            Assert.IsFalse(session.SaveThreadList());
+            Assert.IsFalse(session.SaveThreadList());
+            Assert.IsFalse(session.SaveThreadList());
+            Directory.Delete(_threadListPath);
+            Assert.IsTrue(session.SaveThreadList());
+            Assert.IsTrue(session.SaveThreadList());
+
+            string log = ReadLog().Substring(start);
+            Assert.AreEqual(1, CountOf(log, "Exception: "), log);
+            Assert.AreEqual(1, CountOf(log, "The thread list was saved after 3 failed saves."), log);
+        }
+
         private static ThreadWatcher GetWatcher(WatchSession session, string pageID) {
             ThreadWatcher watcher;
             Assert.IsTrue(session.TryGetThreadWatcher(pageID, out watcher), "Missing watcher: " + pageID);

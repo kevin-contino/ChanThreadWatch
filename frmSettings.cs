@@ -154,18 +154,33 @@ namespace JDP {
                     "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
+            // The old folder's lock is kept until the files are moved, so a failure leaves this
+            // program holding it
+            SettingsFolderLock newLock;
+            if (!Program.TryLockSettingsFolder(this, newSettingsFolder, false, out newLock)) {
+                Program.ObtainMutex(oldSettingsFolder);
+                return false;
+            }
             try {
                 MoveSettingsFiles(oldSettingsFolder, newSettingsFolder);
             }
             catch {
                 // Settings stay in the old folder, so take back its mutex (this releases the new one).
                 // If another instance took the old folder in the meantime, the new mutex is kept.
+                ReleaseNewFolderLock(newLock);
                 Program.ObtainMutex(oldSettingsFolder);
                 MessageBox.Show(this, "Unable to move the settings files.",
                     "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
+            // Null if the user chose to use the new folder without its lock
+            Program.ReplaceSettingsFolderLock(newLock);
             return true;
+        }
+
+        // Null when the user chose to use the new folder without its lock
+        private static void ReleaseNewFolderLock(SettingsFolderLock newLock) {
+            if (newLock != null) newLock.Dispose();
         }
 
         private static void MoveSettingsFiles(string oldSettingsFolder, string newSettingsFolder) {
