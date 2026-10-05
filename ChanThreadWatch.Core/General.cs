@@ -1475,15 +1475,23 @@ namespace JDP {
                 if (!File.Exists(path)) return;
                 var backupInfo = new FileInfo(path + ".bak");
                 if (ShouldBackupThreadList(path, backupInfo, checkSize)) {
-                    string[] backupLines = ThreadListFile.GetBackupLines(File.ReadAllLines(path));
-                    // Never replace the backup with a thread list that wouldn't load
-                    if (backupLines == null) return;
-                    TextFile.WriteAllLinesAtomic(path + ".bak", backupLines);
+                    WriteThreadListBackup(path);
                 }
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
             }
+        }
+
+        private static void WriteThreadListBackup(string path) {
+            string[] lines = File.ReadAllLines(path);
+            // Where logins go to the login store (Keychain, Secret Service), a backup of plaintext
+            // logins would add items for the backup alone; the next save protects the list first
+            if (StoredAuth.KeepsLoginsOutsideTheFiles && ThreadListFile.HasPlaintextAuth(lines)) return;
+            string[] backupLines = ThreadListFile.GetBackupLines(lines);
+            // Never replace the backup with a thread list that wouldn't load
+            if (backupLines == null) return;
+            TextFile.WriteAllLinesAtomic(path + ".bak", backupLines);
         }
 
         // When checking size, avoid overwriting a larger backup with a smaller thread list

@@ -5,8 +5,8 @@ using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
-    // S6 on a system that can't keep logins (macOS and Linux until the Keychain and libsecret
-    // backends, see MP-4c): a login is never written as plaintext, an encrypted value from
+    // S6 on a system that can't keep logins (no backend, or its login store can't be used, see
+    // KeyringStoredAuthProtector): a login is never written as plaintext, an encrypted value from
     // Windows is kept, and saving never fails or logs an exception because of a login. The
     // backend is swapped in on every system, so Windows runs these too. All credentials are fake.
     [TestClass]
@@ -233,12 +233,15 @@ namespace JDP.Tests {
                 get { return true; }
             }
 
-            public string Protect(string line) {
+            public string Protect(string line, string previousStored) {
                 return StoredAuth.Prefix + "kept";
             }
 
             public string Unprotect(string stored) {
                 return String.Empty;
+            }
+
+            public void Delete(string stored) {
             }
         }
 

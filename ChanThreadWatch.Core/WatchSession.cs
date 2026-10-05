@@ -261,16 +261,28 @@ namespace JDP {
         }
 
         // Removes the given threads that this session watches and that are stopped and not reparsing, in the given order.
-        // preRemoveAction runs on each one first; a failure is logged and the thread is removed anyway.
+        // preRemoveAction runs on each one first; a failure is logged and the thread is removed anyway. The thread's
+        // saved logins are deleted from the system's login store after the next save, if they are kept there
+        // (see StoredAuth.ScheduleDelete).
         internal void RemoveThreads(IEnumerable<ThreadWatcher> threads, Action<ThreadWatcher> preRemoveAction = null) {
             foreach (ThreadWatcher watcher in threads) {
                 if (IsRegistered(watcher) && ShouldRemoveThread(watcher)) {
                     RunPreRemoveAction(preRemoveAction, watcher);
                     ThreadWatcherRemoved?.Invoke(watcher);
                     UnregisterThreadWatcher(watcher);
+                    DeleteSavedLogins(watcher);
                 }
             }
             SaveThreadListPending = true;
+        }
+
+        private static void DeleteSavedLogins(ThreadWatcher watcher) {
+            WatcherExtraData extraData = watcher.Tag as WatcherExtraData;
+            if (extraData == null) return;
+            StoredAuth.ScheduleDelete(extraData.StoredPageAuth);
+            StoredAuth.ScheduleDelete(extraData.StoredImageAuth);
+            extraData.StoredPageAuth = null;
+            extraData.StoredImageAuth = null;
         }
 
         private bool IsRegistered(ThreadWatcher watcher) {
@@ -361,7 +373,7 @@ namespace JDP {
                 // The thread list store refuses to save until the load has finished, and
                 // writes atomically so a failure can't leave a partially written file.
                 bool saved = _threadListStore.Save(ThreadListPath, GetSavedThreadInfos());
-                if (saved) LogSaveSucceeded();
+                if (saved) OnSaveSucceeded();
                 return saved;
             }
             catch (Exception ex) {
@@ -376,6 +388,22 @@ namespace JDP {
 
         private void LogSaveFailed(Exception ex) {
             if (_failedSaves++ == 0) Logger.Log(ex.ToString());
+        }
+
+        // Items of removed threads and cleared logins go once the list without them is saved,
+        // unless a thread still uses them
+        private void OnSaveSucceeded() {
+            LogSaveSucceeded();
+            StoredAuthDeletes.Flush(SettingsDirectory, GetLiveStoredAuth());
+        }
+
+        private List<string> GetLiveStoredAuth() {
+            List<string> values = new List<string>();
+            foreach (ThreadWatcher watcher in ThreadWatchers) {
+                WatcherExtraData extraData = watcher.Tag as WatcherExtraData;
+                if (extraData != null) values.AddRange(new[] { extraData.StoredPageAuth, extraData.StoredImageAuth, extraData.UndecryptablePageAuth, extraData.UndecryptableImageAuth });
+            }
+            return values;
         }
 
         private void LogSaveSucceeded() {
@@ -434,6 +462,8 @@ namespace JDP {
         private bool LoadThreadListFile() {
             ThreadListData data = _threadListStore.Read(ThreadListPath);
             if (data == null) return true;
+            // Plaintext logins are protected by the next save, before the periodic backup can copy them
+            if (data.HasPlaintextAuth) SaveThreadListPending = true;
             bool allThreadsAdded = data.Threads.Count == 0 || AddLoadedThreads(data.Threads);
             return allThreadsAdded && data.TrailingLineCount == 0;
         }
