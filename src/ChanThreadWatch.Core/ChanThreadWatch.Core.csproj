@@ -28,6 +28,10 @@
     <InternalsVisibleTo Include="ChanThreadWatch" />
     <InternalsVisibleTo Include="ChanThreadWatch.Tests" />
     <InternalsVisibleTo Include="ChanThreadWatch.Core.Tests" />
+    <!-- The command line (assembly ctw) replaces the saved-login backend so it never reads or writes a login, and
+         reads the blacklist through the session; its tests check that no login store item is scheduled for deletion -->
+    <InternalsVisibleTo Include="ctw" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Cli.Tests" />
   </ItemGroup>
 
 </Project>

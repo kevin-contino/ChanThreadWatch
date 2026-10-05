@@ -15,10 +15,8 @@ on:
 permissions:
   contents: read
 
-env:
-  # The files the release uploads, besides SHA256SUMS.txt: one self-contained single-file exe per architecture
-  # (written by .github/scripts/publish-app.ps1)
-  RELEASE_FILES: publish/ChanThreadWatch-win-x64.exe publish/ChanThreadWatch-win-arm64.exe
+# The files the release uploads, besides SHA256SUMS.txt, are in RELEASE_FILES, which the "List the release files"
+# step of each job sets once they are published (the command line zip's name holds the version).
 
 jobs:
   # Tag pushes only. This is the one job with write access, and the only place that creates a release.
@@ -59,6 +57,20 @@ jobs:
       - name: Publish
         shell: pwsh
         run: ./.github/scripts/publish-app.ps1
+
+      # One shared version (G13): fails when ctw's version differs from the app's AssemblyVersion
+      - name: Publish the command line and check its version
+        shell: pwsh
+        run: ./.github/scripts/publish-cli.ps1
+
+      # One self-contained single-file exe per Windows architecture (publish-app.ps1) and the command line zip for
+      # every OS (publish-cli.ps1)
+      - name: List the release files
+        shell: pwsh
+        run: |
+          $cliZip = @(Get-ChildItem -LiteralPath publish -Filter 'ctw-*.zip' -File)
+          if ($cliZip.Count -ne 1) { throw "Expected one publish/ctw-*.zip, found $($cliZip.Count)" }
+          "RELEASE_FILES=publish/ChanThreadWatch-win-x64.exe publish/ChanThreadWatch-win-arm64.exe publish/$($cliZip[0].Name)" | Add-Content -LiteralPath $env:GITHUB_ENV
 
       # Strict: a release is only published after a clean scan with updated signatures
       - name: Defender scan
@@ -119,6 +131,17 @@ jobs:
       - name: Publish
         shell: pwsh
         run: ./.github/scripts/publish-app.ps1
+
+      - name: Publish the command line and check its version
+        shell: pwsh
+        run: ./.github/scripts/publish-cli.ps1
+
+      - name: List the release files
+        shell: pwsh
+        run: |
+          $cliZip = @(Get-ChildItem -LiteralPath publish -Filter 'ctw-*.zip' -File)
+          if ($cliZip.Count -ne 1) { throw "Expected one publish/ctw-*.zip, found $($cliZip.Count)" }
+          "RELEASE_FILES=publish/ChanThreadWatch-win-x64.exe publish/ChanThreadWatch-win-arm64.exe publish/$($cliZip[0].Name)" | Add-Content -LiteralPath $env:GITHUB_ENV
 
       - name: Defender scan
         shell: pwsh

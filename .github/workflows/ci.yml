@@ -99,6 +99,11 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/publish-app.ps1
 
+      # The command line release zip (framework-dependent, one for every OS); fails if its version differs from the app's
+      - name: Publish the command line
+        shell: pwsh
+        run: ./.github/scripts/publish-cli.ps1
+
       # Starts the published x64 exe from a temp folder, with settings.txt next to it and then without it (the
       # runner's own AppData; this runner is a throwaway VM). Each run must reach the main window, save its
       # settings in the expected folder and exit with code 0. The arm64 exe cannot run on this x64 runner.
@@ -142,8 +147,9 @@ jobs:
           fi
           exit 1
 
-  # ChanThreadWatch.Core on each OS. Linux and macOS skip the tests marked PendingUnix (each names
-  # the MP-4 row that fixes it); Windows runs them all. Only "Core tests" below is a required check.
+  # ChanThreadWatch.Core and the command line (ctw) on each OS. Linux and macOS skip the tests marked
+  # PendingUnix (each names the MP-4 row that fixes it); Windows runs them all. Only "Core tests" below is
+  # a required check.
   # Saved logins: macOS gets a throwaway keychain and Linux a throwaway Secret Service (gnome-keyring in
   # its own D-Bus session), and CTW_KEYRING_TESTS=1 lets the tests use them under a unique test service
   # name. The tests honor it only in CI (GITHUB_ACTIONS), so a local run never touches a login store.
@@ -220,6 +226,13 @@ jobs:
           export XDG_DATA_HOME="$RUNNER_TEMP/ctw-xdg-data"
           mkdir -p "$XDG_DATA_HOME"
           dbus-run-session -- bash -c 'printf "%s" "$KEYRING_PASSWORD" | gnome-keyring-daemon --unlock --components=secrets > /dev/null && dotnet test ChanThreadWatch.Core.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"'
+        shell: bash
+
+      # ctw never asks a login store (it keeps saved logins as they are in the file), so its tests need no keyring
+      - name: CLI tests
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+        run: dotnet test ChanThreadWatch.Cli.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"
         shell: bash
 
       # The fallback when no Secret Service can be reached: logins are for the session only and nothing

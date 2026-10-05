@@ -9,6 +9,7 @@ updates:
     directories:
       - /src/*
       - /ChanThreadWatch.Core.Tests
+      - /ChanThreadWatch.Cli.Tests
       - /ChanThreadWatch.Tests
       - /ChanThreadWatch.UITests
       - /tools/stored-auth-check

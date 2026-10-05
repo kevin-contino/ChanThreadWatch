@@ -3,7 +3,8 @@
 # then recomputes every hash and compares it with SHA256SUMS.txt.
 #
 # Environment:
-#   RELEASE_FILES  space-separated paths of the files the release uploads (besides SHA256SUMS.txt)
+#   RELEASE_FILES  space-separated paths of the files the release uploads (besides SHA256SUMS.txt), including
+#                  the command line zip ctw-<version>.zip
 #   DRY_RUN        'true' or 'false'; a dry run warns instead of failing when the CHANGELOG section is missing
 #   TAG            the release tag; when empty, the tag is derived from AssemblyVersion
 $ErrorActionPreference = 'Stop'
@@ -44,6 +45,9 @@ $files = @($env:RELEASE_FILES -split ' ' | Where-Object { $_ })
 foreach ($file in $files) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Release file not found: $file" }
 }
+# Every app is released with the one shared version (G13), so the command line zip is named with the tag's version
+$cliZip = "ctw-$($tag.Substring(1)).zip"
+if (-not ($files | Where-Object { (Split-Path $_ -Leaf) -ceq $cliZip })) { throw "RELEASE_FILES has no $cliZip (see publish-cli.ps1)" }
 # Assets are uploaded by file name, so two files with one name (e.g. the exe of two architectures) would collide
 $duplicates = @($files | ForEach-Object { Split-Path $_ -Leaf } | Group-Object | Where-Object Count -gt 1)
 if ($duplicates) { throw "Release file names must be unique: $($duplicates.Name -join ', ')" }

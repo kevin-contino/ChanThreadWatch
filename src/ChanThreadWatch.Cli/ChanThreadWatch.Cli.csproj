@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ctw</AssemblyName>
+    <RootNamespace>JDP.Cli</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- One framework-dependent zip for every OS (run with "dotnet ctw.dll"), so no native launcher for the build machine's OS.
+         Single-file builds per OS come with MP-6c. -->
+    <UseAppHost>false</UseAppHost>
+    <!-- The version below is the whole version; no commit hash appended to it -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!-- One shared version for every app (G13): the WinForms app's Properties\AssemblyInfo.cs is the only version source.
+       Its AssemblyVersion ("1.N.0.R") is read here at build time; the build fails if it is not found. -->
+  <PropertyGroup>
+    <WinFormsAssemblyInfoPath>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'ChanThreadWatch', 'Properties', 'AssemblyInfo.cs'))</WinFormsAssemblyInfoPath>
+    <WinFormsAssemblyVersionPattern>(?m)^\[assembly: AssemblyVersion\("(\d+\.\d+\.\d+\.\d+)"\)\]</WinFormsAssemblyVersionPattern>
+  </PropertyGroup>
+  <PropertyGroup Condition="Exists('$(WinFormsAssemblyInfoPath)')">
+    <WinFormsAssemblyInfoText>$([System.IO.File]::ReadAllText('$(WinFormsAssemblyInfoPath)'))</WinFormsAssemblyInfoText>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(WinFormsAssemblyInfoText)' != '' And $([System.Text.RegularExpressions.Regex]::IsMatch('$(WinFormsAssemblyInfoText)', '$(WinFormsAssemblyVersionPattern)'))">
+    <WinFormsVersion>$([System.Text.RegularExpressions.Regex]::Match('$(WinFormsAssemblyInfoText)', '$(WinFormsAssemblyVersionPattern)').Groups.get_Item(1).Value)</WinFormsVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(WinFormsVersion)' != ''">
+    <Version>$(WinFormsVersion)</Version>
+    <AssemblyVersion>$(WinFormsVersion)</AssemblyVersion>
+    <FileVersion>$(WinFormsVersion)</FileVersion>
+    <InformationalVersion>$(WinFormsVersion)</InformationalVersion>
+  </PropertyGroup>
+
+  <Target Name="RequireWinFormsVersion" BeforeTargets="PrepareForBuild;GetAssemblyVersion">
+    <Error Condition="'$(WinFormsVersion)' == ''" Text="AssemblyVersion(&quot;1.N.0.R&quot;) not found in $(WinFormsAssemblyInfoPath); ctw takes its version from there." />
+  </Target>
+
+  <ItemGroup>
+    <!-- The same globalization mode as the app (see ChanThreadWatch.csproj); ignored off Windows -->
+    <RuntimeHostConfigurationOption Include="System.Globalization.UseNls" Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ChanThreadWatch.Cli.Tests" />
+  </ItemGroup>
+
+</Project>

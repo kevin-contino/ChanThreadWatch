@@ -96,5 +96,53 @@ namespace JDP.Tests {
 
             Assert.IsTrue(IsFree(_oldFolder));
         }
+
+        // The command line holds the lock only while it changes the thread list, so the window waits
+        // past DefaultWait for it rather than refusing to start
+        [TestMethod]
+        public void WindowWaitsLongerForTheCommandLine() {
+            SettingsFolderLock cliLock;
+            Assert.IsTrue(SettingsFolderLock.TryAcquire(_newFolder, SettingsFolderLockHolder.Cli, out cliLock));
+            System.Threading.Tasks.Task release = System.Threading.Tasks.Task.Delay(SettingsFolderLock.DefaultWait + TimeSpan.FromSeconds(1)).ContinueWith(_ => cliLock.Dispose());
+
+            SettingsFolderLock windowLock;
+            bool acquired = Program.TryAcquireWaitingForCommandLine(_newFolder, true, out windowLock);
+
+            release.Wait();
+            Assert.IsTrue(acquired);
+            windowLock.Dispose();
+        }
+
+        // The settings window switches folders on the UI thread, so it waits only DefaultWait even for the
+        // command line, and the user can try again
+        [TestMethod]
+        public void SettingsWindowDoesNotWaitLongerForTheCommandLine() {
+            SettingsFolderLock cliLock;
+            Assert.IsTrue(SettingsFolderLock.TryAcquire(_newFolder, SettingsFolderLockHolder.Cli, out cliLock));
+            using (cliLock) {
+                System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+                SettingsFolderLock windowLock;
+
+                Assert.IsFalse(Program.TryAcquireWaitingForCommandLine(_newFolder, false, out windowLock));
+                Assert.IsLessThan(SettingsFolderLock.DefaultWait + TimeSpan.FromSeconds(3), elapsed.Elapsed);
+            }
+        }
+
+        [TestMethod]
+        public void WindowDoesNotWaitLongerForAnotherWindow() {
+            using (Acquire(_newFolder)) {
+                System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+                SettingsFolderLock windowLock;
+
+                Assert.IsFalse(Program.TryAcquireWaitingForCommandLine(_newFolder, true, out windowLock));
+                Assert.IsLessThan(SettingsFolderLock.DefaultWait + TimeSpan.FromSeconds(3), elapsed.Elapsed);
+            }
+        }
+
+        [TestMethod]
+        public void HeldLockMessageNamesTheCommandLine() {
+            StringAssert.Contains(Program.GetHeldLockMessage(HeldLockAction.WaitForCommandLine), "command line tool (ctw)");
+            Assert.AreEqual(Program.SettingsFolderInUseMessage, Program.GetHeldLockMessage(HeldLockAction.Refuse));
+        }
     }
 }

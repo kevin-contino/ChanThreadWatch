@@ -54,8 +54,20 @@ namespace JDP {
             _stream = stream;
         }
 
+        // How much longer the window waits when the command line holds the lock: ctw holds it only while it
+        // changes the thread list, so the window waits about 10 seconds in all before it gives up
+        public static readonly TimeSpan CommandLineWait = TimeSpan.FromSeconds(8.5);
+
         public static string GetLockPath(string folderPath) {
             return Path.Combine(folderPath, FileName);
+        }
+
+        // The name of the named mutex the window holds for a settings folder on Windows (one window per folder on
+        // this computer). Every version uses this name, also those before 1.40.0 that take no lock file, so the
+        // command line checks it too. It must never change.
+        public static string GetAppMutexName(string settingsFolder) {
+            return @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
+                settingsFolder.ToUpperInvariant())).ToString("X16");
         }
 
         // Returns false (with folderLock null) if another program holds the folder's lock.
@@ -290,19 +302,26 @@ namespace JDP {
             return values;
         }
 
-        // What a program of the given kind does when this holder has the lock: the window only
-        // offers to start anyway when another window holds it on another computer (on this
-        // computer the mutex already stopped it). Anything else, including a missing or
+        // What a program of the given kind does when this holder has the lock: the window waits
+        // longer for the command line (which holds it only while it changes the thread list),
+        // and only offers to start anyway when another window holds it on another computer (on
+        // this computer the mutex already stopped it). Anything else, including a missing or
         // unreadable record, is refused.
         public static HeldLockAction Decide(SettingsFolderLockHolder holder, string hostKind, string thisMachineName) {
-            if (hostKind != WinForms || holder == null || holder.Kind != WinForms) return HeldLockAction.Refuse;
-            if (String.Equals(holder.MachineName, thisMachineName, StringComparison.OrdinalIgnoreCase)) return HeldLockAction.Refuse;
+            if (hostKind != WinForms || holder == null) return HeldLockAction.Refuse;
+            return holder.Kind == Cli ? HeldLockAction.WaitForCommandLine : DecideForWindow(holder, thisMachineName);
+        }
+
+        private static HeldLockAction DecideForWindow(SettingsFolderLockHolder holder, string thisMachineName) {
+            if (holder.Kind != WinForms || String.Equals(holder.MachineName, thisMachineName, StringComparison.OrdinalIgnoreCase)) return HeldLockAction.Refuse;
             return HeldLockAction.AskToStartAnyway;
         }
     }
 
     public enum HeldLockAction {
         Refuse,
-        AskToStartAnyway
+        AskToStartAnyway,
+        // Wait for the command line (SettingsFolderLock.CommandLineWait), and refuse if it still holds the lock
+        WaitForCommandLine
     }
 }

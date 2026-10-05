@@ -640,7 +640,8 @@ namespace JDP {
             }
         }
 
-        private void AddBlacklistRules(string[] lines) {
+        // Also used by the command line, which reads the file itself
+        internal void AddBlacklistRules(string[] lines) {
             for (int i = 0; i < lines.Length; i++) {
                 string rule = lines[i];
                 if (rule.Split('/').Length == 3) {
