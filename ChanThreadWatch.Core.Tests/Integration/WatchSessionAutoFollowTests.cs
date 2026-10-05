@@ -118,7 +118,9 @@ namespace JDP.Tests.Integration {
 
                 // A link to a thread that is already watched neither adds nor restarts it
                 ThreadWatcher child = session.ThreadWatchers.Find(w => w.PageURL == childrenOfA[0]);
-                Assert.IsTrue(child.WaitUntilStopped((int)RunTimeout.TotalMilliseconds), "Check did not finish");
+                // WaitUntilStopped alone returns at once while the first check is still queued (its
+                // event starts set), so wait until the 404 has stopped the child
+                Assert.IsTrue(SpinWait.SpinUntil(() => !child.IsRunning, RunTimeout), "Check did not finish");
                 session.SaveThreadListPending = false;
                 RaiseAddThread(parentA, childrenOfA[0]);
                 Assert.AreEqual(1, DrainPosted());

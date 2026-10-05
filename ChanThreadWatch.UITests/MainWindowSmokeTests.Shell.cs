@@ -32,6 +32,9 @@ namespace JDP.UITests {
             Assert.IsTrue(folder.StartsWith(Path.Combine(_appDir, "downloads") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase), "Open Folder target " + folder + " is not in the download folder");
             Assert.AreEqual(1, Directory.GetFiles(folder, "123.html", SearchOption.AllDirectories).Length, "Open Folder target " + folder + " is not the thread's folder");
 
+            // Until the first menu has closed, opening the menu again can find that closing menu, and
+            // a click on its Open URL item is lost
+            WaitUntil(() => ProcessMenus().Length == 0, "the thread menu to close after Open Folder");
             FindItem(RightClickFirstRow(threadList), "Open URL").DoDefaultAction();
             Assert.AreEqual(threadURL, WaitForShellTargets(2)[1]);
 
