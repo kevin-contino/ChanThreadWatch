@@ -21,8 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ChanThreadWatch.csproj" />
-    <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+    <ProjectReference Include="..\src\ChanThreadWatch\ChanThreadWatch.csproj" />
+    <ProjectReference Include="..\src\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

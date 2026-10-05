@@ -19,16 +19,16 @@
   <ItemGroup Condition=" '$(TargetFramework)' == 'net48' ">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
     <Reference Include="System.Security" />
-    <Compile Include="..\..\ChanThreadWatch.Core\StoredAuth.cs" Link="Core\StoredAuth.cs" />
-    <Compile Include="..\..\ChanThreadWatch.Core\IStoredAuthProtector.cs" Link="Core\IStoredAuthProtector.cs" />
-    <Compile Include="..\..\ChanThreadWatch.Core\DpapiStoredAuthProtector.cs" Link="Core\DpapiStoredAuthProtector.cs" />
-    <Compile Include="..\..\ChanThreadWatch.Core\UnavailableStoredAuthProtector.cs" Link="Core\UnavailableStoredAuthProtector.cs" />
-    <Compile Include="..\..\ChanThreadWatch.Core\TextFile.cs" Link="Core\TextFile.cs" />
+    <Compile Include="..\..\src\ChanThreadWatch.Core\StoredAuth.cs" Link="Core\StoredAuth.cs" />
+    <Compile Include="..\..\src\ChanThreadWatch.Core\IStoredAuthProtector.cs" Link="Core\IStoredAuthProtector.cs" />
+    <Compile Include="..\..\src\ChanThreadWatch.Core\DpapiStoredAuthProtector.cs" Link="Core\DpapiStoredAuthProtector.cs" />
+    <Compile Include="..\..\src\ChanThreadWatch.Core\UnavailableStoredAuthProtector.cs" Link="Core\UnavailableStoredAuthProtector.cs" />
+    <Compile Include="..\..\src\ChanThreadWatch.Core\TextFile.cs" Link="Core\TextFile.cs" />
   </ItemGroup>
 
   <!-- .NET 10: the real Core, so its Settings and ThreadListFile read and write the files -->
   <ItemGroup Condition=" '$(TargetFramework)' == 'net10.0' ">
-    <ProjectReference Include="..\..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+    <ProjectReference Include="..\..\src\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
   </ItemGroup>
 
 </Project>

@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="..\Resources\OfflinePageScript.js" LogicalName="OfflinePageScript.js" />
+    <EmbeddedResource Include="Resources\OfflinePageScript.js" LogicalName="OfflinePageScript.js" />
   </ItemGroup>
 
   <ItemGroup>

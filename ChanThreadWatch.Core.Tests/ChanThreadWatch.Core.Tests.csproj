@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+    <ProjectReference Include="..\src\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

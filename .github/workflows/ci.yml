@@ -196,7 +196,7 @@ jobs:
       - name: Install jsdom
         run: npm ci --ignore-scripts
 
-      # Runs Resources/OfflinePageScript.js in jsdom against each site fixture
+      # Runs src/ChanThreadWatch.Core/Resources/OfflinePageScript.js in jsdom against each site fixture
       - name: Test
         run: npm test
 

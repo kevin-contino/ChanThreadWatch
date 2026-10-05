@@ -16,8 +16,8 @@ $dryRun = switch ($env:DRY_RUN) {
 }
 
 # The in-app update check compares Major.Minor.Revision of AssemblyVersion with the release tag
-$match = Select-String -Path Properties/AssemblyInfo.cs -Pattern 'AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)'
-if (-not $match) { throw 'AssemblyVersion not found in Properties/AssemblyInfo.cs' }
+$match = Select-String -Path src/ChanThreadWatch/Properties/AssemblyInfo.cs -Pattern 'AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)'
+if (-not $match) { throw 'AssemblyVersion not found in src/ChanThreadWatch/Properties/AssemblyInfo.cs' }
 $g = $match.Matches[0].Groups
 $expected = "v$($g[1].Value).$($g[2].Value).$($g[4].Value)"
 if ($env:TAG) {

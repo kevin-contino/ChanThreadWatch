@@ -1,6 +1,6 @@
 # Publishes the release exes: one self-contained single-file ChanThreadWatch per Windows architecture (G14),
 # copied to <OutputDir>/ChanThreadWatch-<rid>.exe. Used by ci.yml and release.yml; also runs locally.
-# The publish settings (self-contained, single file, compression) are in ChanThreadWatch.csproj.
+# The publish settings (self-contained, single file, compression) are in src/ChanThreadWatch/ChanThreadWatch.csproj.
 #
 # Example: pwsh .github/scripts/publish-app.ps1
 param(
@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$project = Join-Path $PSScriptRoot '../../ChanThreadWatch.csproj'
+$project = Join-Path $PSScriptRoot '../../src/ChanThreadWatch/ChanThreadWatch.csproj'
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 foreach ($rid in $RuntimeIdentifiers) {
     $ridDir = Join-Path $OutputDir $rid

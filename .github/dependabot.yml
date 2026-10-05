@@ -7,8 +7,7 @@ updates:
 
   - package-ecosystem: nuget
     directories:
-      - /
-      - /ChanThreadWatch.Core
+      - /src/*
       - /ChanThreadWatch.Core.Tests
       - /ChanThreadWatch.Tests
       - /ChanThreadWatch.UITests
@@ -20,3 +19,8 @@ updates:
         patterns:
           - MSTest.*
           - Microsoft.NET.Test.Sdk
+
+  - package-ecosystem: npm
+    directory: /tools/offline-page-script
+    schedule:
+      interval: weekly
