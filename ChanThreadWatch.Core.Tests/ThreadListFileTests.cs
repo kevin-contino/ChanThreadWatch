@@ -92,9 +92,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
-        [TestCategory("PendingUnix")]
         public void Version1FileLoadsAndRoundTrips() {
+            // Needs a backend that keeps logins: DPAPI on Windows, a test keychain or Secret Service elsewhere
+            TestLoginStore.RequireLoginStore();
             List<ThreadInfo> threads = ThreadListFile.Parse(Version1Lines()).Threads;
 
             Assert.HasCount(1, threads);
@@ -108,9 +108,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
-        [TestCategory("PendingUnix")]
         public void Version2FileLoadsAndRoundTrips() {
+            // Needs a backend that keeps logins: DPAPI on Windows, a test keychain or Secret Service elsewhere
+            TestLoginStore.RequireLoginStore();
             List<ThreadInfo> threads = ThreadListFile.Parse(Version2Lines()).Threads;
 
             Assert.HasCount(1, threads);
@@ -132,9 +132,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
-        [TestCategory("PendingUnix")]
         public void Version4FileLoadsAndRoundTrips() {
+            // Needs a backend that keeps logins: DPAPI on Windows, a test keychain or Secret Service elsewhere
+            TestLoginStore.RequireLoginStore();
             List<ThreadInfo> threads = ThreadListFile.Parse(Version4Lines()).Threads;
 
             Assert.HasCount(2, threads);
@@ -148,9 +148,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
-        [TestCategory("PendingUnix")]
         public void Version4FileIsWrittenLineForLine() {
+            // Needs a backend that keeps logins: DPAPI on Windows, a test keychain or Secret Service elsewhere
+            TestLoginStore.RequireLoginStore();
             List<ThreadInfo> threads = ThreadListFile.Parse(Version4Lines()).Threads;
 
             string[] written = ThreadListFile.Serialize(threads);
@@ -312,9 +312,9 @@ namespace JDP.Tests {
         // A backup written before logins were encrypted is rewritten by the first save, with
         // its own threads (not the saved list) and encrypted logins
         [TestMethod]
-        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
-        [TestCategory("PendingUnix")]
         public void FirstSaveEncryptsPlaintextLoginsInTheBackup() {
+            // Needs a backend that keeps logins: DPAPI on Windows, a test keychain or Secret Service elsewhere
+            TestLoginStore.RequireLoginStore();
             string backupPath = _path + ".bak";
             File.WriteAllLines(_path, Version4Lines());
             File.WriteAllLines(backupPath, Version1Lines());
@@ -334,9 +334,9 @@ namespace JDP.Tests {
 
         // E.g. antivirus or a sync tool holding the backup during the first save
         [TestMethod]
-        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
-        [TestCategory("PendingUnix")]
         public void BackupInUseDuringTheFirstSaveIsEncryptedByALaterSave() {
+            // Needs a backend that keeps logins: DPAPI on Windows, a test keychain or Secret Service elsewhere
+            TestLoginStore.RequireLoginStore();
             string backupPath = _path + ".bak";
             File.WriteAllLines(_path, Version4Lines());
             File.WriteAllLines(backupPath, Version1Lines());

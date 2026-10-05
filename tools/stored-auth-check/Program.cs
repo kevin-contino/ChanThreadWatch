@@ -26,10 +26,11 @@ namespace JDP {
             return Usage();
         }
 
-        // Elsewhere logins are written empty, which read would then report as a mismatch
+        // DPAPI is Windows only. Elsewhere the logins would go to the user's real Keychain or Secret Service (or be
+        // written empty), so write refuses to run there; the Core tests cover those backends.
         private static int WriteIfLoginsAreKept(string settingsPath, string threadsPath) {
-            if (StoredAuth.CanProtect) return WriteAndCheck(settingsPath, threadsPath);
-            Console.Error.WriteLine("This system can't keep saved logins (no DPAPI), so write has nothing to check; run it on Windows");
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && StoredAuth.CanProtect) return WriteAndCheck(settingsPath, threadsPath);
+            Console.Error.WriteLine("This tool checks DPAPI logins only, so write has nothing to check here; run it on Windows");
             return 1;
         }
 

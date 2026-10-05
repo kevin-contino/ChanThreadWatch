@@ -435,23 +435,35 @@ namespace JDP {
 
         // Setting the login that is already read back keeps the stored value, so a saved login
         // that can't be decrypted (read as empty) survives until a different login is set.
-        // A login this system can't keep is used for the session only.
+        // A login this system can't keep is used for the session only. The login store (Keychain,
+        // Secret Service) can be slow or wait for the user, so it is called outside the lock that
+        // the getters take.
         private static void SetAuth(string name, string value) {
+            if (value == GetAuth(name)) return;
+            string previous;
             lock (_sync) {
-                if (value == GetAuth(name)) return;
                 if (ClearsSessionLoginOnly(name, value)) {
                     _sessionAuth.Remove(name);
                     return;
                 }
-                string stored = value != null ? StoredAuth.Protect(value) : null;
-                _sessionAuth.Remove(name);
-                if (IsNotKept(value, stored)) {
-                    _sessionAuth[name] = TextFile.ToSingleLine(value);
-                }
-                else {
-                    Set(name, stored);
-                }
+                previous = Get(name);
             }
+            string stored = value != null ? StoredAuth.Protect(value, previous) : null;
+            lock (_sync) {
+                ApplyStoredAuth(name, value, previous, stored);
+            }
+        }
+
+        // The login's item in the login store is updated in place, and scheduled for deletion
+        // when the login is cleared or no longer refers to it (see StoredAuth.ScheduleDelete)
+        private static void ApplyStoredAuth(string name, string value, string previous, string stored) {
+            _sessionAuth.Remove(name);
+            if (IsNotKept(value, stored)) {
+                _sessionAuth[name] = TextFile.ToSingleLine(value);
+                return;
+            }
+            Set(name, stored);
+            if (previous != stored) StoredAuth.ScheduleDelete(previous);
         }
 
         // Clearing a session login keeps an encrypted value the file still holds (e.g. one
@@ -563,24 +575,28 @@ namespace JDP {
                 // logins, so after the first save following a load they are written again without
                 // them. That reads every copy, so it runs outside the lock, which the getters
                 // also take. A copy that fails is left unchanged and tried again next session.
-                if (WriteSettingsFile(path)) {
-                    TextFile.RewriteCopies(path, BlankPlaintextAuth);
-                }
+                // Items of replaced or cleared logins are deleted once the file is saved.
+                ProtectPlaintextAuth();
+                bool checkCopies;
+                if (!WriteSettingsFile(path, out checkCopies)) return;
+                if (checkCopies) TextFile.RewriteCopies(path, BlankPlaintextAuth);
+                StoredAuthDeletes.Flush(Path.GetDirectoryName(Path.GetFullPath(path)), null);
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
             }
         }
 
-        // Returns true if the file was written and the copies have yet to be checked since
-        // the last load (only one caller gets true).
-        private static bool WriteSettingsFile(string path) {
+        // Returns false if saving is blocked. checkCopies is true if the copies have yet to be
+        // checked since the last load (only one caller gets true).
+        private static bool WriteSettingsFile(string path, out bool checkCopies) {
             lock (_sync) {
+                checkCopies = false;
                 if (_saveBlocked) return false;
                 TextFile.WriteAllLinesAtomic(path, GetSettingLines());
-                bool checkCopies = !_checkedCopies;
+                checkCopies = !_checkedCopies;
                 _checkedCopies = true;
-                return checkCopies;
+                return true;
             }
         }
 
@@ -611,11 +627,34 @@ namespace JDP {
             return lines;
         }
 
-        // Plaintext logins loaded from a file written by an older version are encrypted
-        // when the settings are written back, or written empty on a system that can't keep
-        // them (see StoredAuth.CanProtect).
+        // Plaintext logins loaded from a file written by an older version are protected once and
+        // kept protected in memory, so a login store gets one item for each, not one per save.
+        // Runs outside the lock, as SetAuth does.
+        private static void ProtectPlaintextAuth() {
+            foreach (string name in _authSettingNames) {
+                string value = Get(name);
+                if (!StoredAuth.IsPlaintext(value)) continue;
+                string stored = StoredAuth.Protect(value);
+                if (stored.Length != 0) ReplacePlaintextAuth(name, value, stored);
+            }
+        }
+
+        // A login set meanwhile wins, and the item just written for the plaintext one goes
+        private static void ReplacePlaintextAuth(string name, string value, string stored) {
+            lock (_sync) {
+                if (Get(name) == value) {
+                    _settings[name] = stored;
+                }
+                else {
+                    StoredAuth.ScheduleDelete(stored);
+                }
+            }
+        }
+
+        // A plaintext login that ProtectPlaintextAuth couldn't protect is written empty, on a
+        // system that can't keep logins (see StoredAuth.CanProtect).
         private static string ToStoredValue(string name, string value) {
-            return IsAuthSettingName(name) && !StoredAuth.IsProtected(value) ? StoredAuth.Protect(value) : value;
+            return IsAuthSettingName(name) && !StoredAuth.IsProtected(value) ? String.Empty : value;
         }
     }
 }

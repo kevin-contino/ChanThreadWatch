@@ -31,7 +31,7 @@ namespace JDP {
             int fileVersion = ParseInt(lines[0]);
             int linesPerThread = GetLinesPerThread(fileVersion);
             if (linesPerThread == 0) throw new FormatException("Unsupported thread list file version: " + lines[0]);
-            ThreadListData data = new ThreadListData { FileVersion = fileVersion };
+            ThreadListData data = new ThreadListData { FileVersion = fileVersion, HasPlaintextAuth = HasPlaintextAuth(lines) };
             int i = 1;
             while (i <= lines.Length - linesPerThread) {
                 data.Threads.Add(ParseThreadInfo(lines, ref i, fileVersion));
@@ -165,6 +165,12 @@ namespace JDP {
             thread.ImageAuth = StoredAuth.Unprotect(storedImageAuth);
             thread.ExtraData.UndecryptablePageAuth = StoredAuth.GetUndecryptable(storedPageAuth, thread.PageAuth);
             thread.ExtraData.UndecryptableImageAuth = StoredAuth.GetUndecryptable(storedImageAuth, thread.ImageAuth);
+            thread.ExtraData.StoredPageAuth = ProtectedOrNull(storedPageAuth);
+            thread.ExtraData.StoredImageAuth = ProtectedOrNull(storedImageAuth);
+        }
+
+        private static string ProtectedOrNull(string stored) {
+            return StoredAuth.IsProtected(stored) ? stored : null;
         }
 
         private static void ParseStopReason(ThreadInfo thread, string stopReasonLine) {
@@ -219,8 +225,7 @@ namespace JDP {
         private static void AddThreadLines(List<string> lines, ThreadInfo thread) {
             WatcherExtraData extraData = thread.ExtraData;
             lines.Add(TextFile.ToSingleLine(thread.URL));
-            lines.Add(StoredAuth.ToStored(thread.PageAuth, extraData.UndecryptablePageAuth));
-            lines.Add(StoredAuth.ToStored(thread.ImageAuth, extraData.UndecryptableImageAuth));
+            AddAuthLines(lines, thread, extraData);
             lines.Add(thread.CheckIntervalSeconds.ToString(CultureInfo.InvariantCulture));
             lines.Add(FormatBool(thread.OneTimeDownload));
             lines.Add(TextFile.ToSingleLine(thread.SaveDir));
@@ -231,6 +236,16 @@ namespace JDP {
             lines.Add(TextFile.ToSingleLine(extraData.AddedFrom));
             lines.Add(TextFile.ToSingleLine(thread.Category));
             lines.Add(FormatBool(thread.AutoFollow));
+        }
+
+        // Each login's stored value is kept in ExtraData, so the next save reuses its item (see StoredAuth.ToStored)
+        private static void AddAuthLines(List<string> lines, ThreadInfo thread, WatcherExtraData extraData) {
+            string pageAuth = StoredAuth.ToStored(thread.PageAuth, extraData.StoredPageAuth, extraData.UndecryptablePageAuth);
+            string imageAuth = StoredAuth.ToStored(thread.ImageAuth, extraData.StoredImageAuth, extraData.UndecryptableImageAuth);
+            extraData.StoredPageAuth = ProtectedOrNull(pageAuth);
+            extraData.StoredImageAuth = ProtectedOrNull(imageAuth);
+            lines.Add(pageAuth);
+            lines.Add(imageAuth);
         }
 
         private static string FormatBool(bool value) {
@@ -252,6 +267,8 @@ namespace JDP {
         }
 
         public int FileVersion { get; set; }
+        // A login in the file is plaintext, written by an older version
+        public bool HasPlaintextAuth { get; set; }
         public List<ThreadInfo> Threads { get; private set; }
         public int TrailingLineCount { get; set; }
     }

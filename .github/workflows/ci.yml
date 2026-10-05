@@ -69,6 +69,9 @@ jobs:
 
   # ChanThreadWatch.Core on each OS. Linux and macOS skip the tests marked PendingUnix (each names
   # the MP-4 row that fixes it); Windows runs them all. Only "Core tests" below is a required check.
+  # Saved logins: macOS gets a throwaway keychain and Linux a throwaway Secret Service (gnome-keyring in
+  # its own D-Bus session), and CTW_KEYRING_TESTS=1 lets the tests use them under a unique test service
+  # name. The tests honor it only in CI (GITHUB_ACTIONS), so a local run never touches a login store.
   core-tests:
     name: Core tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -79,10 +82,13 @@ jobs:
         include:
           - os: windows-latest
             filter: TestCategory!=UI
+            keyring-tests: ''
           - os: ubuntu-latest
             filter: TestCategory!=PendingUnix&TestCategory!=UI
+            keyring-tests: '1'
           - os: macos-latest
             filter: TestCategory!=PendingUnix&TestCategory!=UI
+            keyring-tests: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,11 +98,69 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # Unlocked, without an auto-lock timeout, first in the search list and the default, so SecItemAdd
+      # writes there and never to the runner's login keychain. Its password exists only in this step.
+      - name: Create a test keychain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" ctw-test.keychain
+          security set-keychain-settings ctw-test.keychain
+          security unlock-keychain -p "$password" ctw-test.keychain
+          security list-keychains -d user -s ctw-test.keychain $(security list-keychains -d user | tr -d '"')
+          security default-keychain -d user -s ctw-test.keychain
+
+      - name: Install the Secret Service
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnome-keyring libsecret-1-0 dbus
+
       - name: Test
+        if: runner.os != 'Linux'
         env:
           TEST_FILTER: ${{ matrix.filter }}
+          CTW_KEYRING_TESTS: ${{ matrix.keyring-tests }}
         run: dotnet test ChanThreadWatch.Core.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"
         shell: bash
+
+      # The tests run in a private D-Bus session (dbus-run-session, from the dbus package) whose
+      # gnome-keyring is unlocked with a random password. Its keyring files go under RUNNER_TEMP
+      # (XDG_DATA_HOME), not the runner's home; the daemon stops when the session ends. HOME is left
+      # as it is, so dotnet keeps its NuGet cache.
+      - name: Test
+        if: runner.os == 'Linux'
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+          CTW_KEYRING_TESTS: ${{ matrix.keyring-tests }}
+        run: |
+          KEYRING_PASSWORD="$(openssl rand -hex 16)"
+          echo "::add-mask::$KEYRING_PASSWORD"
+          export KEYRING_PASSWORD
+          export XDG_DATA_HOME="$RUNNER_TEMP/ctw-xdg-data"
+          mkdir -p "$XDG_DATA_HOME"
+          dbus-run-session -- bash -c 'printf "%s" "$KEYRING_PASSWORD" | gnome-keyring-daemon --unlock --components=secrets > /dev/null && dotnet test ChanThreadWatch.Core.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"'
+        shell: bash
+
+      # The fallback when no Secret Service can be reached: logins are for the session only and nothing
+      # throws. The test fails rather than skips when the variable is missing, and no test found is an error.
+      - name: Saved logins without a Secret Service
+        if: runner.os == 'Linux'
+        env:
+          CTW_KEYRING_TESTS: unavailable
+          DBUS_SESSION_BUS_ADDRESS: unix:path=/nonexistent/ctw-no-session-bus
+        run: dotnet test ChanThreadWatch.Core.Tests -c Release --no-build --filter "TestCategory=KeyringFallback" -- RunConfiguration.TreatNoTestsAsError=true
+        shell: bash
+
+      - name: Delete the test keychain
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          security default-keychain -d user -s login.keychain || true
+          security delete-keychain ctw-test.keychain || true
 
   # One stable check name for all the legs: passes only if every leg succeeded, so a failed,
   # cancelled or skipped matrix fails this required check

@@ -63,6 +63,10 @@ namespace JDP {
         // Saved logins that couldn't be decrypted, written back unchanged until a new login is set
         public string UndecryptablePageAuth { get; set; }
         public string UndecryptableImageAuth { get; set; }
+        // The stored values the logins were last read from or written as (null for none), so a
+        // backend that keeps logins outside the file reuses or deletes their items (see StoredAuth.ToStored)
+        public string StoredPageAuth { get; set; }
+        public string StoredImageAuth { get; set; }
     }
 
     public class ThreadInfo {
