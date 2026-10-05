@@ -2037,9 +2037,19 @@ namespace JDP {
                 // left incomplete when one exists), so it is kept and the page is overwritten.
                 // Otherwise the page is moved to the backup; if that fails, File.Move throws and
                 // the attempt fails as a local file error before the page is overwritten.
+                // On Unix an open file doesn't stop a rename, so the page is locked while it is
+                // moved, as TextFile.RewriteCopy does: a program that holds it with a lock (as any
+                // .NET FileStream does) makes the backup fail, as a sharing violation does on
+                // Windows. The lock is advisory (flock): only programs that also lock are seen.
                 private void BackupExistingPage() {
                     if (!File.Exists(_download._path) || File.Exists(_download._backupPath)) return;
-                    File.Move(_download._path, _download._backupPath);
+                    if (OperatingSystem.IsWindows()) {
+                        File.Move(_download._path, _download._backupPath);
+                        return;
+                    }
+                    using (new FileStream(_download._path, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                        File.Move(_download._path, _download._backupPath);
+                    }
                 }
 
                 private void OnResponse(HttpResponseMessage response) {

@@ -353,9 +353,9 @@ namespace JDP.Tests.Integration {
 
         // When the saved page can't be moved to its backup, the download fails as a disk error
         // and the saved page is not overwritten
+        // (on Windows the open handle blocks the move; on Unix the backup locks the page
+        // first, and the reader's FileStream holds a shared flock that makes that lock fail)
         [TestMethod]
-        // PendingUnix: FileShare without Delete does not stop File.Move (a rename) on Unix, see MP-4d
-        [TestCategory("PendingUnix")]
         public void PageIsNotOverwrittenWhenItsBackupCannotBeMade() {
             var fixture = new FourChanThreadFixture();
             LoopbackHttpServer server = StartServer();
