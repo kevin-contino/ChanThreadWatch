@@ -121,6 +121,35 @@ namespace JDP.Tests {
             Assert.AreEqual("http://example.com/", General.GetAbsoluteURL(page, "http://example.com/"));
         }
 
+        // Runs on every OS. A root-relative link ("/b/src/1.jpg") must resolve against the page, never
+        // to an implicit Unix file path (file:///b/src/1.jpg): Uri.TryCreate(Uri, string) parses the
+        // link as RelativeOrAbsolute, where a relative Uri wins over an implicit Unix path.
+        [TestMethod]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "/b/src/1.jpg", "https://boards.4chan.org/b/src/1.jpg")]
+        [DataRow("http://example.com/b/res/1.html", "/b/src/1001.jpg", "http://example.com/b/src/1001.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "/", "https://boards.4chan.org/")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "/b/../c/1.jpg", "https://boards.4chan.org/c/1.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "/b/src/a b.jpg", "https://boards.4chan.org/b/src/a%20b.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "/b/src/1.jpg?x=1#f", "https://boards.4chan.org/b/src/1.jpg?x=1#f")]
+        [DataRow("http://example.com/b/res/1.html", "/redirect/src/http://other.example.org/img/1.jpg", "http://example.com/redirect/src/http://other.example.org/img/1.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "\\b\\src\\1.jpg", "https://boards.4chan.org/b/src/1.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "//i.4cdn.org/wg/1.jpg", "https://i.4cdn.org/wg/1.jpg")]
+        [DataRow("http://example.com/b/res/1.html", "//cdn.example.com/b/thumb/1s.jpg", "http://cdn.example.com/b/thumb/1s.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "../catalog", "https://boards.4chan.org/wg/catalog")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "1.jpg", "https://boards.4chan.org/wg/thread/1.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "?page=2", "https://boards.4chan.org/wg/thread/8143532?page=2")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "#p1", "https://boards.4chan.org/wg/thread/8143532#p1")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "", "https://boards.4chan.org/wg/thread/8143532")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "http://example.com/", "http://example.com/")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "HTTPS://Example.COM/A", "https://example.com/A")]
+        [DataRow("http://example.com/b/res/1.html", "ftp://files.example.net/src/1.jpg", "ftp://files.example.net/src/1.jpg")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "mailto:someone@example.com", "mailto:someone@example.com")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "javascript:void(0)", "javascript:void(0)")]
+        [DataRow("https://boards.4chan.org/wg/thread/8143532", "data:image/png;base64,AAAA", "data:image/png;base64,AAAA")]
+        public void GetAbsoluteURLResolvesTheSameOnEveryOS(string baseURL, string relativeURL, string expected) {
+            Assert.AreEqual(expected, General.GetAbsoluteURL(baseURL, relativeURL));
+        }
+
         [TestMethod]
         public void GetAbsoluteURLReturnsNullForInvalidBase() {
             Assert.IsNull(General.GetAbsoluteURL("not a url", "x.jpg"));
