@@ -21,37 +21,64 @@ namespace JDP {
             lock (_parentForm.DownloadProgresses) {
                 downloadProgresses = new List<DownloadProgressInfo>(_parentForm.DownloadProgresses.Values);
             }
-            long ticksNow = TickCount.Now;
-            long totalDownloadedSize = 0;
-            long minTotalDownloadedStartTicks = Int64.MaxValue;
             downloadProgresses.Sort((a, b) => a.StartTicks.CompareTo(b.StartTicks));
+            Dictionary<long, long?> bytesPerSecByID = new Dictionary<long, long?>();
+            Text = TakeSnapshots(downloadProgresses, _snapshotLists, TickCount.Now, bytesPerSecByID);
             foreach (DownloadProgressInfo info in downloadProgresses) {
-                List<DownloadedSizeSnapshot> snapshotList = GetSnapshotList(info);
-                RemoveExpiredSnapshots(snapshotList, ticksNow);
-                snapshotList.Add(new DownloadedSizeSnapshot(ticksNow, info.DownloadedSize));
-                int iLast = snapshotList.Count - 1;
-                long? bytesPerSec = GetBytesPerSecond(snapshotList);
-                int iFirstForTotalWindow = GetFirstIndexForTotalWindow(snapshotList, ticksNow);
-                totalDownloadedSize += snapshotList[iLast].DownloadedSize - snapshotList[iFirstForTotalWindow].DownloadedSize;
-                minTotalDownloadedStartTicks = Math.Min(minTotalDownloadedStartTicks, snapshotList[iFirstForTotalWindow].Ticks);
-                if (info.EndTicks == null) {
-                    UpdateDownloadProgress(info, bytesPerSec);
-                    oldDownloadIDs.Remove(info.DownloadID);
-                }
+                // A finished download stays listed with its result until the main form drops it
+                // after the hold time (frmChanThreadWatch.FinishedDownloadHoldMilliseconds)
+                UpdateDownloadProgress(info, bytesPerSecByID[info.DownloadID]);
+                oldDownloadIDs.Remove(info.DownloadID);
             }
             foreach (long downloadID in oldDownloadIDs) {
                 RemoveDownloadProgress(downloadID);
             }
-            long totalDownloadedTicks = ticksNow - minTotalDownloadedStartTicks;
-            UpdateTitle(totalDownloadedSize, totalDownloadedTicks);
         }
 
-        private List<DownloadedSizeSnapshot> GetSnapshotList(DownloadProgressInfo info) {
+        // Adds a size snapshot to each download's list (finished downloads too, so the total speed
+        // counts their last bytes), puts each download's speed in bytesPerSecByID and returns the
+        // window title with the total speed
+        internal static string TakeSnapshots(List<DownloadProgressInfo> downloadProgresses, Dictionary<long, List<DownloadedSizeSnapshot>> snapshotLists,
+            long ticksNow, Dictionary<long, long?> bytesPerSecByID)
+        {
+            long totalDownloadedSize = 0;
+            long minTotalDownloadedStartTicks = Int64.MaxValue;
+            foreach (DownloadProgressInfo info in downloadProgresses) {
+                List<DownloadedSizeSnapshot> snapshotList = GetSnapshotList(snapshotLists, info);
+                RemoveExpiredSnapshots(snapshotList, ticksNow);
+                snapshotList.Add(new DownloadedSizeSnapshot(ticksNow, info.DownloadedSize));
+                int iLast = snapshotList.Count - 1;
+                bytesPerSecByID[info.DownloadID] = GetBytesPerSecond(snapshotList);
+                int iFirstForTotalWindow = GetFirstIndexForTotalWindow(snapshotList, ticksNow);
+                totalDownloadedSize += snapshotList[iLast].DownloadedSize - snapshotList[iFirstForTotalWindow].DownloadedSize;
+                minTotalDownloadedStartTicks = Math.Min(minTotalDownloadedStartTicks, snapshotList[iFirstForTotalWindow].Ticks);
+            }
+            RemoveUnlistedSnapshotLists(snapshotLists, downloadProgresses);
+            long totalDownloadedTicks = ticksNow - minTotalDownloadedStartTicks;
+            return GetTitle(totalDownloadedSize, totalDownloadedTicks);
+        }
+
+        // Drops the snapshots of downloads the main form no longer lists
+        private static void RemoveUnlistedSnapshotLists(Dictionary<long, List<DownloadedSizeSnapshot>> snapshotLists, List<DownloadProgressInfo> downloadProgresses) {
+            HashSet<long> listedIDs = new HashSet<long>();
+            foreach (DownloadProgressInfo info in downloadProgresses) {
+                listedIDs.Add(info.DownloadID);
+            }
+            List<long> unlistedIDs = new List<long>();
+            foreach (long downloadID in snapshotLists.Keys) {
+                if (!listedIDs.Contains(downloadID)) unlistedIDs.Add(downloadID);
+            }
+            foreach (long downloadID in unlistedIDs) {
+                snapshotLists.Remove(downloadID);
+            }
+        }
+
+        private static List<DownloadedSizeSnapshot> GetSnapshotList(Dictionary<long, List<DownloadedSizeSnapshot>> snapshotLists, DownloadProgressInfo info) {
             List<DownloadedSizeSnapshot> snapshotList;
-            if (!_snapshotLists.TryGetValue(info.DownloadID, out snapshotList)) {
+            if (!snapshotLists.TryGetValue(info.DownloadID, out snapshotList)) {
                 snapshotList = new List<DownloadedSizeSnapshot>();
                 snapshotList.Add(new DownloadedSizeSnapshot(info.StartTicks, 0));
-                _snapshotLists[info.DownloadID] = snapshotList;
+                snapshotLists[info.DownloadID] = snapshotList;
             }
             return snapshotList;
         }
@@ -87,14 +114,12 @@ namespace JDP {
             return iLast;
         }
 
-        private void UpdateTitle(long totalDownloadedSize, long totalDownloadedTicks) {
+        private static string GetTitle(long totalDownloadedSize, long totalDownloadedTicks) {
             if (totalDownloadedSize > 0 && totalDownloadedTicks > 0) {
-                Text = "Downloads - " + GetKilobytesString(Convert.ToInt64(
+                return "Downloads - " + GetKilobytesString(Convert.ToInt64(
                     totalDownloadedSize / (totalDownloadedTicks / 1000.0)), "KB/s");
             }
-            else {
-                Text = "Downloads";
-            }
+            return "Downloads";
         }
 
         public void UpdateDownloadProgress(DownloadProgressInfo info, long? bytesPerSec) {
@@ -105,18 +130,35 @@ namespace JDP {
                     item.SubItems.Add(String.Empty);
                 }
                 SetSubItemText(item, ColumnIndex.URL, info.URL);
-                SetSubItemText(item, ColumnIndex.Size, GetKilobytesString(info.TotalSize, "KB"));
                 SetSubItemText(item, ColumnIndex.Try, info.TryNumber.ToString());
                 lvDownloads.Items.Add(item);
                 _items[info.DownloadID] = item;
             }
-            if (info.TotalSize != null) {
-                SetSubItemText(item, ColumnIndex.Percent, (info.DownloadedSize * 100 / info.TotalSize.Value).ToString() + "%");
+            SetSubItemText(item, ColumnIndex.Size, GetSizeText(info));
+            SetSubItemText(item, ColumnIndex.Percent, GetProgressText(info));
+            SetSubItemText(item, ColumnIndex.Speed, GetSpeedText(info, bytesPerSec));
+        }
+
+        // The announced size, or the size so far without one; a successful download's final size
+        internal static string GetSizeText(DownloadProgressInfo info) {
+            return GetKilobytesString(info.TotalSize ?? info.DownloadedSize, "KB");
+        }
+
+        // A finished download shows no speed
+        internal static string GetSpeedText(DownloadProgressInfo info, long? bytesPerSec) {
+            return GetKilobytesString(info.EndTicks == null ? bytesPerSec : null, "KB/s");
+        }
+
+        // The Progress column: the result once the download has ended, otherwise the percent done
+        // when the size is known
+        internal static string GetProgressText(DownloadProgressInfo info) {
+            if (info.EndTicks != null) {
+                return info.IsSuccessful ? "Done" : "Failed";
             }
-            else {
-                SetSubItemText(item, ColumnIndex.Size, GetKilobytesString(info.DownloadedSize, "KB"));
+            if (info.TotalSize > 0) {
+                return (info.DownloadedSize * 100 / info.TotalSize.Value).ToString() + "%";
             }
-            SetSubItemText(item, ColumnIndex.Speed, GetKilobytesString(bytesPerSec, "KB/s"));
+            return String.Empty;
         }
 
         private void RemoveDownloadProgress(long downloadID) {
@@ -126,7 +168,7 @@ namespace JDP {
             _items.Remove(downloadID);
         }
 
-        private string GetKilobytesString(long? byteSize, string units) {
+        private static string GetKilobytesString(long? byteSize, string units) {
             if (byteSize == null) return String.Empty;
             return (byteSize.Value / 1024).ToString("#,##0") + " " + units;
         }

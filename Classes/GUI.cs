@@ -13,6 +13,8 @@ namespace JDP {
         public long? EndTicks { get; set; }
         public long? TotalSize { get; set; }
         public long DownloadedSize { get; set; }
+        // Set when the download ends (EndTicks has a value)
+        public bool IsSuccessful { get; set; }
     }
 
     public class DownloadedSizeSnapshot {
