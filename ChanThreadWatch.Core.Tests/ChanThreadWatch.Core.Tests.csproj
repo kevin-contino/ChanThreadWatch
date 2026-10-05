@@ -6,6 +6,8 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>JDP.Tests</RootNamespace>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- ChildProcess.Main is the entry point, for the tests that start this assembly as a second process -->
+    <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
   <ItemGroup>

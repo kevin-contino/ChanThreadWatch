@@ -215,6 +215,8 @@ namespace JDP {
 
             _session.SaveThreadList();
 
+            // In the reverse of the order they were taken
+            Program.ReplaceSettingsFolderLock(null);
             Program.ReleaseMutex();
         }
 
@@ -717,8 +719,9 @@ namespace JDP {
         }
 
         private void tmrSaveThreadList_Tick(object sender, EventArgs e) {
-            if (_session.SaveThreadListPending && !_isExiting) {
-                _session.SaveThreadList();
+            if (!_isExiting) Program.TryTakeMissingSettingsFolderLock(Settings.GetSettingsDirectory());
+            // A failed save stays pending, so the next tick (or the save on exit) tries again
+            if (_session.SaveThreadListPending && !_isExiting && _session.SaveThreadList()) {
                 _session.SaveThreadListPending = false;
             }
         }

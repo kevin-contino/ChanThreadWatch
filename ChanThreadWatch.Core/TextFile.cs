@@ -7,21 +7,21 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 #endif
 using System.Text;
+using System.Threading;
 
 namespace JDP {
     // Helpers for the line-based files kept in the settings folder.
     public static class TextFile {
         // Writes the lines to a temporary file in the same folder and then swaps it in,
         // so an interrupted write leaves either the old or the new content, never a mix.
-        // On Windows a temporary file left by a crash has the same name and is overwritten by
-        // the next write; on Unix see WriteAtomicOnUnix.
+        // Each write has its own temporary file ("~<name>.<unique part>.tmp"), so two writes
+        // of the file at the same time (also from two programs) each swap in complete
+        // content and the last swap wins. Temporary files left by a crash are deleted by a
+        // later write (DeleteStaleTempFiles). On Unix see WriteAtomicOnUnix.
         public static void WriteAllLinesAtomic(string path, IEnumerable<string> lines) {
             if (TryWriteAtomicOnUnix(path, fs => WriteLines(fs, lines))) return;
-            string tempPath = path + ".tmp";
-            using (FileStream fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None)) {
-                WriteLines(fs, lines);
-            }
-            ReplaceWithTempFile(tempPath, path);
+            WriteAtomicOnWindows(path, GetUniqueTempPath(path), fs => WriteLines(fs, lines), RenameOverFile);
+            DeleteStaleTempFiles(path);
         }
 
         // Returns false on Windows, where the caller writes the file itself
@@ -100,6 +100,7 @@ namespace JDP {
                 Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, UnixCreateMode = mode
             });
         }
+#endif
 
         private const int UniqueTempIdLength = 32;
 
@@ -116,12 +117,16 @@ namespace JDP {
         // (DOTNET_SYSTEM_IO_DISABLEFILELOCKING) or not supported by the file system.
         internal static readonly TimeSpan StaleTempFileAge = TimeSpan.FromMinutes(10);
 
-        // Deletes the temporary files that writes of the file which crashed left behind (Unix
-        // only). Failures are ignored: the next write tries again.
+        // Deletes the temporary files that writes of the file which crashed left behind, and
+        // the fixed-name one ("<name>.tmp") that versions before 1.40 used on Windows (an older
+        // version still running, e.g. on another computer sharing the folder, keeps it locked
+        // while it writes). Failures are ignored: the next write tries again.
         private static void DeleteStaleTempFiles(string path) {
             try {
                 DateTime staleBefore = DateTime.UtcNow - StaleTempFileAge;
-                foreach (string tempPath in FindUniqueTempFiles(path)) {
+                List<string> tempPaths = FindUniqueTempFiles(path);
+                if (File.Exists(path + ".tmp")) tempPaths.Add(path + ".tmp");
+                foreach (string tempPath in tempPaths) {
                     if (File.GetLastWriteTimeUtc(tempPath) < staleBefore) TryDeleteUnlocked(tempPath);
                 }
             }
@@ -144,17 +149,19 @@ namespace JDP {
             return found;
         }
 
+        // Windows can't delete a file that is open without delete sharing, so there it is
+        // deleted when the handle that locks it closes
         private static void TryDeleteUnlocked(string tempPath) {
+            FileOptions options = IsWindows() ? FileOptions.DeleteOnClose : FileOptions.None;
             try {
-                using (new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.None)) {
-                    File.Delete(tempPath);
+                using (new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.None, 1, options)) {
+                    if (!IsWindows()) File.Delete(tempPath);
                 }
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
                 // Locked by a write in progress, or already gone
             }
         }
-#endif
 
         // Like WriteAllLinesAtomic, for content that has to be kept byte for byte. The
         // temporary file's name starts differently from the file's, so a search for recovery
@@ -165,20 +172,77 @@ namespace JDP {
         public static void WriteAllBytesAtomic(string path, byte[] content) {
             if (TryWriteAtomicOnUnix(path, fs => fs.Write(content, 0, content.Length))) return;
             string tempPath = Path.Combine(Path.GetDirectoryName(path), "~" + Path.GetFileName(path) + ".tmp");
+            WriteAtomicOnWindows(path, tempPath, fs => fs.Write(content, 0, content.Length), ReplaceWithTempFile);
+        }
+
+        // Writes the temporary file and swaps it in, after closing it: Windows can't rename or
+        // replace with a file that is open without delete sharing (another write never opens a
+        // temporary file that is not its own, and one this new is not stale). A failed write's
+        // temporary file is deleted, except when the swap failed and the file is not there: it
+        // then holds the only copy of the content.
+        private static void WriteAtomicOnWindows(string path, string tempPath, Action<FileStream> write, Action<string, string> swap) {
             bool replacing = false;
             try {
                 using (FileStream fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None)) {
-                    fs.Write(content, 0, content.Length);
+                    write(fs);
                     fs.Flush(true);
                 }
                 replacing = true;
-                ReplaceWithTempFile(tempPath, path);
+                swap(tempPath, path);
             }
             catch {
                 if (!replacing || File.Exists(path)) TryDelete(tempPath);
                 throw;
             }
         }
+
+        // One rename that replaces the file (MoveFileEx with MOVEFILE_REPLACE_EXISTING), as on
+        // Unix: the file is never missing, and of two programs swapping in at the same time each
+        // either succeeds or fails and deletes its temporary file. File.Replace moves the file
+        // aside to a "<name>~RF<id>.TMP" name first, and when another swap runs at the same time
+        // it can fail with the file missing and leave that file behind. The file's own security
+        // settings and attributes (e.g. hidden) and its creation time are not kept: it gets the
+        // temporary file's, which a file created in the same folder inherits from the folder.
+        // The rename fails while any other program has the file open (also with delete
+        // sharing), so it is tried a few times, and then File.Replace, which works then, is used.
+        private static void RenameOverFile(string tempPath, string path) {
+#if NET
+            if (TryRenameOverFile(tempPath, path)) return;
+#endif
+            // .NET Framework (only tools/stored-auth-check builds this file for it) has no move
+            // that replaces
+            ReplaceWithTempFile(tempPath, path);
+        }
+
+#if NET
+        private const int RenameAttempts = 5;
+
+        // Returns false if the file stayed open in another program for every attempt. Throws
+        // for any other failure, e.g. when the file is missing.
+        private static bool TryRenameOverFile(string tempPath, string path) {
+            for (int attempt = 1; attempt <= RenameAttempts; attempt++) {
+                try {
+                    File.Move(tempPath, path, true);
+                    return true;
+                }
+                catch (Exception ex) when (ShouldRetryRename(ex, path)) {
+                    Thread.Sleep(attempt * 20);
+                }
+            }
+            return false;
+        }
+
+        // A read-only file is denied every time, so it fails at once (File.Replace can't
+        // replace it either)
+        private static bool ShouldRetryRename(Exception ex, string path) {
+            return IsFileInUse(ex) && File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReadOnly) == 0;
+        }
+
+        // Access denied (the rename over a file another program has open) or a sharing violation
+        private static bool IsFileInUse(Exception ex) {
+            return ex is UnauthorizedAccessException || (ex is IOException && (ex.HResult & 0xFFFF) == 32);
+        }
+#endif
 
         private static void TryDelete(string path) {
             try {
@@ -189,7 +253,8 @@ namespace JDP {
             }
         }
 
-        // Windows only; on Unix WriteAtomicOnUnix renames over the file in one step
+        // Windows only (WriteAllBytesAtomic, and RenameOverFile when the file is in use); on Unix
+        // WriteAtomicOnUnix renames over the file in one step
         private static void ReplaceWithTempFile(string tempPath, string path) {
             if (File.Exists(path)) {
                 File.Replace(tempPath, path, null, true);

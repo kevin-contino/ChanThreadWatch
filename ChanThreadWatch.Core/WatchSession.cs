@@ -303,16 +303,35 @@ namespace JDP {
             get { return Path.Combine(SettingsDirectory, Settings.ThreadsFileName); }
         }
 
-        internal void SaveThreadList() {
-            if (_isLoadingThreadsFromFile) return;
+        // Returns false if the list was not saved (still loading, or the save failed), so the
+        // caller can try again later
+        internal bool SaveThreadList() {
+            if (_isLoadingThreadsFromFile) return false;
             try {
                 // The thread list store refuses to save until the load has finished, and
                 // writes atomically so a failure can't leave a partially written file.
-                _threadListStore.Save(ThreadListPath, GetSavedThreadInfos());
+                bool saved = _threadListStore.Save(ThreadListPath, GetSavedThreadInfos());
+                if (saved) LogSaveSucceeded();
+                return saved;
             }
             catch (Exception ex) {
-                Logger.Log(ex.ToString());
+                LogSaveFailed(ex);
+                return false;
             }
+        }
+
+        // Failed saves since the last one that succeeded. A failed save is tried again on every
+        // timer tick, so only the first failure is logged in full.
+        private int _failedSaves;
+
+        private void LogSaveFailed(Exception ex) {
+            if (_failedSaves++ == 0) Logger.Log(ex.ToString());
+        }
+
+        private void LogSaveSucceeded() {
+            if (_failedSaves == 0) return;
+            Logger.Log("The thread list was saved after " + _failedSaves + " failed saves.");
+            _failedSaves = 0;
         }
 
         private List<ThreadInfo> GetSavedThreadInfos() {
