@@ -36,10 +36,12 @@ namespace JDP.Tests.Integration {
             Assert.HasCount(4, Directory.GetFiles(second.ThreadDownloadDirectory, "1700000000*.*"));
         }
 
-        // Consecutive requests to one host, retries included, start at least the interval apart
+        // Consecutive requests to one host, retries included, start at least the interval apart. The
+        // server sees arrivals, not starts, so the bound leaves 150 ms for a slower connect (a retry
+        // opens a new connection) on a loaded runner; unpaced requests arrive milliseconds apart.
         [TestMethod]
         public void ConsecutiveRequestStartsToOneHostAreSpacedOut() {
-            ConnectionManager.MinRequestStartIntervalMS = 300;
+            ConnectionManager.MinRequestStartIntervalMS = 400;
             var fixture = new FourChanThreadFixture();
             LoopbackHttpServer server = StartServer();
             RouteFiles(server, fixture, TimeSpan.Zero);

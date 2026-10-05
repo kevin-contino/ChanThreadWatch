@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.Versioning;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -484,10 +485,10 @@ namespace JDP.Tests {
         }
 
         // E.g. antivirus or a sync tool holding the copy: it is left as it was and the next
-        // session tries again, while the other copies are still written
+        // session tries again, while the other copies are still written. On Windows the reader's
+        // sharing mode stops the replace; on Unix its lock stops the rewrite (TextFile locks the
+        // copy first, since an open file doesn't stop a rename).
         [TestMethod]
-        // PendingUnix: an open reader does not stop File.Replace (a rename) on Unix, see MP-4d
-        [TestCategory("PendingUnix")]
         public void CopyThatCannotBeReplacedIsLeftUnchangedUntilTheNextSession() {
             string copy = CopyPath("20200101-000000-000");
             string otherCopy = CopyPath("20200102-000000-000");
@@ -619,7 +620,147 @@ namespace JDP.Tests {
 
             Assert.ThrowsExactly<IOException>(() => TextFile.WriteAllBytesAtomic(target, content));
 
-            CollectionAssert.AreEqual(content, File.ReadAllBytes(Path.Combine(_dir, "~target.txt.tmp")));
+            // On Unix the temporary file's name has a unique part
+            string[] temps = Directory.GetFiles(_dir, "~target.txt*.tmp");
+            Assert.HasCount(1, temps);
+            if (OperatingSystem.IsWindows()) Assert.AreEqual(Path.Combine(_dir, "~target.txt.tmp"), temps[0]);
+            CollectionAssert.AreEqual(content, File.ReadAllBytes(temps[0]));
+        }
+
+        private static IEnumerable<string> LinesWrittenAroundAnotherWrite(string path) {
+            yield return "outer 1";
+            TextFile.WriteAllLinesAtomic(path, new[] { "inner" });
+            yield return "outer 2";
+        }
+
+        // A second write of the file starts while the first still writes its temporary file. On
+        // Windows they share it, so the second fails on the first's sharing mode and the file
+        // keeps its old content. On Unix, where a rename ignores locks and a shared temporary
+        // file could be swapped in half written, each has its own, so both finish and the last
+        // rename wins with complete content.
+        [TestMethod]
+        public void TwoWritesOfTheSameFileDoNotShareATempFileOnUnix() {
+            File.WriteAllLines(_path, new[] { "old" });
+
+            if (OperatingSystem.IsWindows()) {
+                Assert.ThrowsExactly<IOException>(() => TextFile.WriteAllLinesAtomic(_path, LinesWrittenAroundAnotherWrite(_path)));
+                CollectionAssert.AreEqual(new[] { "old" }, File.ReadAllLines(_path));
+            }
+            else {
+                TextFile.WriteAllLinesAtomic(_path, LinesWrittenAroundAnotherWrite(_path));
+                CollectionAssert.AreEqual(new[] { "outer 1", "outer 2" }, File.ReadAllLines(_path));
+                CollectionAssert.AreEqual(new[] { _path }, Directory.GetFiles(_dir));
+            }
+        }
+
+        // The name a write's temporary file has: fixed on Windows, with a unique part on Unix
+        private string CrashedWriteTempPath(string fileName) {
+            if (OperatingSystem.IsWindows()) return Path.Combine(_dir, fileName + ".tmp");
+            return Path.Combine(_dir, "~" + fileName + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        }
+
+        // Written a minute before (stale) or after (recent) a temporary file counts as left by a crash
+        private static void WriteTempFile(string path, bool stale) {
+            File.WriteAllText(path, "half writ");
+            TimeSpan margin = TimeSpan.FromMinutes(stale ? 1 : -1);
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow - TextFile.StaleTempFileAge - margin);
+        }
+
+        // A crash between creating the temporary file and swapping it in leaves it behind: the
+        // next write overwrites it (Windows) or deletes it (Unix). The backup's own temporary
+        // file is not taken for the thread list's.
+        [TestMethod]
+        public void TempFileLeftByACrashIsGoneAfterTheNextWrite() {
+            string stale = CrashedWriteTempPath("threads.txt");
+            string backupStale = CrashedWriteTempPath("threads.txt.bak");
+            File.WriteAllLines(_path, new[] { "old" });
+            WriteTempFile(stale, true);
+            WriteTempFile(backupStale, true);
+
+            TextFile.WriteAllLinesAtomic(_path, new[] { "new" });
+
+            CollectionAssert.AreEqual(new[] { "new" }, File.ReadAllLines(_path));
+            CollectionAssert.AreEquivalent(new[] { _path, backupStale }, Directory.GetFiles(_dir));
+        }
+
+        // A temporary file that is locked or was written in the last 10 minutes may belong to a
+        // write in progress (Unix; on Windows these names are not a write's)
+        [TestMethod]
+        public void TempFileOfAWriteInProgressIsLeft() {
+            string locked = Path.Combine(_dir, "~threads.txt." + Guid.NewGuid().ToString("N") + ".tmp");
+            string recent = Path.Combine(_dir, "~threads.txt." + Guid.NewGuid().ToString("N") + ".tmp");
+            WriteTempFile(locked, true);
+            WriteTempFile(recent, false);
+
+            using (new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                TextFile.WriteAllLinesAtomic(_path, new[] { "new" });
+            }
+
+            CollectionAssert.AreEqual(new[] { "new" }, File.ReadAllLines(_path));
+            CollectionAssert.AreEquivalent(new[] { _path, locked, recent }, Directory.GetFiles(_dir));
+        }
+
+        private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+        // The temporary file renamed over the file takes its permissions, so e.g. a settings file
+        // readable by its owner only doesn't become readable by others
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux | OperatingSystems.OSX)]
+        [UnsupportedOSPlatform("windows")]
+        public void WriteKeepsTheFilePermissionsOnUnix() {
+            File.WriteAllLines(_path, new[] { "old" });
+            File.SetUnixFileMode(_path, OwnerOnly);
+
+            TextFile.WriteAllLinesAtomic(_path, new[] { "new" });
+
+            Assert.AreEqual(OwnerOnly, File.GetUnixFileMode(_path));
+            CollectionAssert.AreEqual(new[] { "new" }, File.ReadAllLines(_path));
+        }
+
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux | OperatingSystems.OSX)]
+        [UnsupportedOSPlatform("windows")]
+        public void NewFileIsReadableByItsOwnerOnlyOnUnix() {
+            TextFile.WriteAllBytesAtomic(_path, Encoding.ASCII.GetBytes("new"));
+
+            Assert.AreEqual(OwnerOnly, File.GetUnixFileMode(_path));
+        }
+
+        // The file the link points to gets the content, and the link stays a link
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux | OperatingSystems.OSX)]
+        [UnsupportedOSPlatform("windows")]
+        public void SymbolicLinkStaysALinkOnUnix() {
+            string realDir = Path.Combine(_dir, "real");
+            Directory.CreateDirectory(realDir);
+            string realPath = Path.Combine(realDir, "threads.txt");
+            File.WriteAllLines(realPath, new[] { "old" });
+            File.CreateSymbolicLink(_path, realPath);
+
+            TextFile.WriteAllLinesAtomic(_path, new[] { "new" });
+
+            Assert.AreEqual(realPath, new FileInfo(_path).LinkTarget);
+            CollectionAssert.AreEqual(new[] { "new" }, File.ReadAllLines(realPath));
+            CollectionAssert.AreEqual(new[] { realPath }, Directory.GetFiles(realDir));
+        }
+
+        // A copy made on Windows (CRLF line breaks, the name PreserveCopy gives) is found and
+        // blanked on every OS. One whose name differs in case is another file's on Unix
+        // ("Threads.txt" can sit next to "threads.txt") and is left; Windows ignores case.
+        [TestMethod]
+        public void CopiesAreFoundByTheirExactNameOnUnix() {
+            string copy = CopyPath("20200101-000000-000");
+            string otherCase = Path.Combine(_dir, "Threads.txt.corrupt-20200102-000000-000");
+            byte[] windowsCopy = Encoding.UTF8.GetBytes(String.Join("\r\n", OldCopyLines) + "\r\n");
+            File.WriteAllBytes(copy, windowsCopy);
+            File.WriteAllBytes(otherCase, windowsCopy);
+
+            TextFile.RewriteCopies(_path, ThreadListFile.BlankPlaintextAuth);
+
+            byte[] blanked = Encoding.UTF8.GetBytes(String.Join("\r\n", BlankedOldCopyLines) + "\r\n");
+            CollectionAssert.AreEqual(blanked, File.ReadAllBytes(copy));
+            CollectionAssert.AreEqual(OperatingSystem.IsWindows() ? blanked : windowsCopy, File.ReadAllBytes(otherCase));
+            CollectionAssert.AreEquivalent(new[] { copy, otherCase }, Directory.GetFiles(_dir));
         }
 
         [TestMethod]

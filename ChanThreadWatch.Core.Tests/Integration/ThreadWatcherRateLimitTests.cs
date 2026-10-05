@@ -62,12 +62,14 @@ namespace JDP.Tests.Integration {
             var fixture = new FourChanThreadFixture();
             LoopbackHttpServer server = StartServer();
             RouteThreadWithImagesOnMediaHost(fixture, server);
-            server.Route(FirstImage, TooManyRequests().WithHeader("Retry-After", DateTime.UtcNow.AddSeconds(6).ToString("r")));
+            server.Route(FirstImage, TooManyRequests().WithHeader("Retry-After", DateTime.UtcNow.AddSeconds(60).ToString("r")));
             ThreadWatcher watcher = CreateWatcher(server.URL(FourChanThreadFixture.ThreadPath));
 
             RunChecks(watcher, 1);
 
-            AssertPausedFor(watcher, server, TimeSpan.FromSeconds(2.5), TimeSpan.FromSeconds(7));
+            // The date is fixed when the route is made, so a slow runner spends some of it before the
+            // check; 60 s leaves room, and the pause is never waited out
+            AssertPausedFor(watcher, server, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(61));
             Assert.HasCount(1, server.RequestsTo(FirstImage));
         }
 

@@ -2,6 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
+#if NET
+using System.Runtime.Versioning;
+#endif
 using System.Text;
 
 namespace JDP {
@@ -9,25 +13,157 @@ namespace JDP {
     public static class TextFile {
         // Writes the lines to a temporary file in the same folder and then swaps it in,
         // so an interrupted write leaves either the old or the new content, never a mix.
+        // On Windows a temporary file left by a crash has the same name and is overwritten by
+        // the next write; on Unix see WriteAtomicOnUnix.
         public static void WriteAllLinesAtomic(string path, IEnumerable<string> lines) {
+            if (TryWriteAtomicOnUnix(path, fs => WriteLines(fs, lines))) return;
             string tempPath = path + ".tmp";
-            using (FileStream fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (StreamWriter sw = new StreamWriter(fs, new UTF8Encoding(false))) {
+            using (FileStream fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None)) {
+                WriteLines(fs, lines);
+            }
+            ReplaceWithTempFile(tempPath, path);
+        }
+
+        // Returns false on Windows, where the caller writes the file itself
+        private static bool TryWriteAtomicOnUnix(string path, Action<FileStream> write) {
+#if NET
+            if (!IsWindows()) {
+                WriteAtomicOnUnix(path, write);
+                return true;
+            }
+#endif
+            return false;
+        }
+
+        private static void WriteLines(FileStream fs, IEnumerable<string> lines) {
+            using (StreamWriter sw = new StreamWriter(fs, new UTF8Encoding(false), 1024, true)) {
                 foreach (string line in lines) {
                     sw.WriteLine(line);
                 }
                 sw.Flush();
                 fs.Flush(true);
             }
-            ReplaceWithTempFile(tempPath, path);
         }
+
+        // RuntimeInformation rather than OperatingSystem.IsWindows: tools/stored-auth-check also
+        // builds this file for .NET Framework.
+#if NET
+        [SupportedOSPlatformGuard("windows")]
+#endif
+        private static bool IsWindows() {
+            return RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        }
+
+#if NET
+        // On Unix a rename replaces a file even while another program has it open, so a shared
+        // temporary name would let one writer swap in another's half-written file. Each write
+        // there gets its own temporary file, named like WriteAllBytesAtomic's (so a search for
+        // recovery copies never finds it) plus a unique part, and keeps it locked until it is
+        // renamed. The rename replaces the file in one step and never moves it away first. The
+        // content is flushed to disk, but the folder is not, so whether the rename itself
+        // survives a power loss depends on the file system. A symbolic link is followed and the
+        // file it points to is replaced, so the link stays; the file keeps its permissions (a
+        // new one is readable and writable by its owner only). A failed write's temporary file
+        // is deleted, except when the swap failed and the file is not there (it then holds the
+        // only copy of the content, as on Windows). Only .NET 5+ runs this (.NET Framework is
+        // Windows only), so it can use the Unix file APIs.
+        [UnsupportedOSPlatform("windows")]
+        private static void WriteAtomicOnUnix(string path, Action<FileStream> write) {
+            path = ResolveLinkTarget(path);
+            string tempPath = GetUniqueTempPath(path);
+            bool replacing = false;
+            try {
+                using (FileStream fs = CreateUniqueTempFile(tempPath, path)) {
+                    write(fs);
+                    fs.Flush(true);
+                    replacing = true;
+                    File.Move(tempPath, path, true);
+                }
+            }
+            catch {
+                if (!replacing || File.Exists(path)) TryDelete(tempPath);
+                throw;
+            }
+            DeleteStaleTempFiles(path);
+        }
+
+        private static string ResolveLinkTarget(string path) {
+            if (!File.Exists(path)) return path;
+            FileSystemInfo target = File.ResolveLinkTarget(path, true);
+            return target != null ? target.FullName : path;
+        }
+
+        [UnsupportedOSPlatform("windows")]
+        private static FileStream CreateUniqueTempFile(string tempPath, string path) {
+            UnixFileMode mode = File.Exists(path) ? File.GetUnixFileMode(path) : UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            return new FileStream(tempPath, new FileStreamOptions {
+                Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, UnixCreateMode = mode
+            });
+        }
+
+        private const int UniqueTempIdLength = 32;
+
+        private static string GetUniqueTempPath(string path) {
+            return Path.Combine(Path.GetDirectoryName(path), GetUniqueTempPrefix(path) + Guid.NewGuid().ToString("N") + ".tmp");
+        }
+
+        private static string GetUniqueTempPrefix(string path) {
+            return "~" + Path.GetFileName(path) + ".";
+        }
+
+        // A write that is still running holds its temporary file locked, and one written in the
+        // last 10 minutes is left too, in case locks are turned off
+        // (DOTNET_SYSTEM_IO_DISABLEFILELOCKING) or not supported by the file system.
+        internal static readonly TimeSpan StaleTempFileAge = TimeSpan.FromMinutes(10);
+
+        // Deletes the temporary files that writes of the file which crashed left behind (Unix
+        // only). Failures are ignored: the next write tries again.
+        private static void DeleteStaleTempFiles(string path) {
+            try {
+                DateTime staleBefore = DateTime.UtcNow - StaleTempFileAge;
+                foreach (string tempPath in FindUniqueTempFiles(path)) {
+                    if (File.GetLastWriteTimeUtc(tempPath) < staleBefore) TryDeleteUnlocked(tempPath);
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                // Left for the next write
+            }
+        }
+
+        // Only names this program makes: the file's own name in the same case and a unique part
+        // of the right length, so the temporary files of e.g. "<file>.bak" are not taken
+        private static List<string> FindUniqueTempFiles(string path) {
+            string prefix = GetUniqueTempPrefix(path);
+            int nameLength = prefix.Length + UniqueTempIdLength + ".tmp".Length;
+            List<string> found = new List<string>();
+            // Full path: a bare file name has an empty folder name, which GetFiles rejects
+            foreach (string tempPath in Directory.GetFiles(Path.GetDirectoryName(Path.GetFullPath(path)), prefix + "*.tmp")) {
+                string name = Path.GetFileName(tempPath);
+                if (name.Length == nameLength && name.StartsWith(prefix, StringComparison.Ordinal)) found.Add(tempPath);
+            }
+            return found;
+        }
+
+        private static void TryDeleteUnlocked(string tempPath) {
+            try {
+                using (new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                    File.Delete(tempPath);
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                // Locked by a write in progress, or already gone
+            }
+        }
+#endif
 
         // Like WriteAllLinesAtomic, for content that has to be kept byte for byte. The
         // temporary file's name starts differently from the file's, so a search for recovery
         // copies (GetCopySearchPattern) never finds it. If the write fails it is deleted, but
         // not when the swap failed after the file was already moved away (File.Replace can
-        // fail that way): the temporary file then holds the only copy of the content.
+        // fail that way): the temporary file then holds the only copy of the content. On Unix
+        // the temporary file's name also has a unique part (see WriteAtomicOnUnix).
         public static void WriteAllBytesAtomic(string path, byte[] content) {
+            if (TryWriteAtomicOnUnix(path, fs => fs.Write(content, 0, content.Length))) return;
             string tempPath = Path.Combine(Path.GetDirectoryName(path), "~" + Path.GetFileName(path) + ".tmp");
             bool replacing = false;
             try {
@@ -53,6 +189,7 @@ namespace JDP {
             }
         }
 
+        // Windows only; on Unix WriteAtomicOnUnix renames over the file in one step
         private static void ReplaceWithTempFile(string tempPath, string path) {
             if (File.Exists(path)) {
                 File.Replace(tempPath, path, null, true);
@@ -107,13 +244,24 @@ namespace JDP {
         // fails is left unchanged and logged, and the others are still done.
         public static void RewriteCopies(string path, Func<byte[], byte[]> filter) {
             try {
-                foreach (string copyPath in Directory.GetFiles(Path.GetDirectoryName(path), GetCopySearchPattern(path))) {
+                foreach (string copyPath in FindCopies(path)) {
                     TryRewriteCopy(copyPath, filter);
                 }
             }
             catch (Exception ex) {
                 Logger.Log("The recovery copies of " + Path.GetFileName(path) + " could not be listed to remove plaintext logins; the next session tries again. " + ex.GetType().Name + ": " + ex.Message);
             }
+        }
+
+        // On Windows the search ignores case, as it always has. On Unix only the exact name is
+        // taken: a copy keeps the name PreserveCopy gave it (also one made on Windows and moved
+        // here), while a name in another case belongs to another file there ("Threads.txt" can
+        // sit next to "threads.txt", and macOS volumes can be case sensitive).
+        private static List<string> FindCopies(string path) {
+            string[] found = Directory.GetFiles(Path.GetDirectoryName(path), GetCopySearchPattern(path));
+            if (IsWindows()) return new List<string>(found);
+            string prefix = Path.GetFileName(path) + ".corrupt-";
+            return new List<string>(Array.FindAll(found, copyPath => Path.GetFileName(copyPath).StartsWith(prefix, StringComparison.Ordinal)));
         }
 
         private static void TryRewriteCopy(string copyPath, Func<byte[], byte[]> filter) {
@@ -130,7 +278,30 @@ namespace JDP {
                 Logger.Log(Path.GetFileName(copyPath) + " was not checked for plaintext logins because it is larger than " + (MaxRewrittenCopySize / (1024 * 1024)) + " MB.");
                 return;
             }
-            byte[] content = File.ReadAllBytes(copyPath);
+            if (IsWindows()) {
+                RewriteCopyContent(copyPath, File.ReadAllBytes(copyPath), filter);
+                return;
+            }
+            // On Unix an open file doesn't stop a rename, so the copy is locked while it is
+            // rewritten: a program that holds it with a lock (as any .NET FileStream does) makes
+            // the rewrite fail, as a sharing violation does on Windows, and the copy is left
+            // unchanged until the next session. The lock is advisory (flock): only programs that
+            // also lock, such as .NET ones, are seen, and where the file system doesn't support
+            // it the rewrite goes ahead. No content is lost either way: the rename is atomic and
+            // a reader keeps the old content it opened.
+            using (FileStream fs = new FileStream(copyPath, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                RewriteCopyContent(copyPath, ReadAllBytes(fs), filter);
+            }
+        }
+
+        private static byte[] ReadAllBytes(FileStream fs) {
+            using (MemoryStream ms = new MemoryStream()) {
+                fs.CopyTo(ms);
+                return ms.ToArray();
+            }
+        }
+
+        private static void RewriteCopyContent(string copyPath, byte[] content, Func<byte[], byte[]> filter) {
             byte[] filtered = filter(content);
             // Removing anything always shortens the content
             if (filtered.Length == content.Length) return;

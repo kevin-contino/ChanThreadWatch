@@ -159,9 +159,9 @@ namespace JDP.Tests {
             CollectionAssert.AreEqual(BlankedOldCopyLines, File.ReadAllLines(copy));
         }
 
+        // On Windows the reader's sharing mode stops the replace; on Unix its lock stops the
+        // rewrite (TextFile locks the copy first, since an open file doesn't stop a rename)
         [TestMethod]
-        // PendingUnix: an open reader does not stop File.Replace (a rename) on Unix, see MP-4d
-        [TestCategory("PendingUnix")]
         public void SettingsCopyThatCannotBeReplacedIsLeftUnchangedUntilTheNextLoad() {
             string copy = _path + ".corrupt-20200101-000000-000";
             File.WriteAllLines(copy, OldCopyLines);
