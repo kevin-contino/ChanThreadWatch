@@ -1425,7 +1425,6 @@ namespace JDP {
             Logger.Log("Error downloading file " + url + ": " + DescribeDownloadError(ex, url) + Environment.NewLine + ex);
         }
 
-        private const string UntrustedHostText = "certificate not trusted for {0}";
         private const string SecureConnectionFailedText = "secure connection failed for {0}";
         private const string TimedOutConnectingText = "timed out connecting to {0}";
         private const string HostNotFoundText = "host not found: {0}";
@@ -1458,7 +1457,7 @@ namespace JDP {
         }
 
         private static string GetTLSErrorTextFormat(HttpRequestException httpEx) {
-            return IsCertificateRejection(httpEx.InnerException) ? UntrustedHostText : SecureConnectionFailedText;
+            return IsCertificateRejection(httpEx.InnerException) ? "certificate not trusted for {0}" : SecureConnectionFailedText;
         }
 
         private static string GetErrorTextFormat(HttpRequestError error) {
