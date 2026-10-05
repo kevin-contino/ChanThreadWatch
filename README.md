@@ -55,3 +55,4 @@ A weekly live canary (`.github/workflows/canary.yml`) fetches one current thread
 ## License
 
 Chan Thread Watch was written by J.D. Purcell (JDP) and is licensed under the MIT License, as published in the original repository ([jdpurcell/ChanThreadWatch](https://github.com/jdpurcell/ChanThreadWatch)). See [LICENSE.txt](LICENSE.txt).
+
