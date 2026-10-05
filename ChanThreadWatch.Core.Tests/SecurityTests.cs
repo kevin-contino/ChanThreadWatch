@@ -110,9 +110,8 @@ namespace JDP.Tests {
             Assert.AreEqual(expected, General.CleanFileName(input));
         }
 
+        // The backslash is removed on every OS, since a SaveDir read on Linux or macOS treats it as a separator
         [TestMethod]
-        // PendingUnix: a backslash is not a path separator on Unix, so it stays in the name, see MP-4b
-        [TestCategory("PendingUnix")]
         public void CleanFileNameNeverReturnsDotSegmentsAcrossBackslashes() {
             Assert.AreEqual("....x", General.CleanFileName("../..\\x"));
         }
