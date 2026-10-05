@@ -72,6 +72,102 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
+        public void ApiSettingsDefaultToOffAndPort47710WhenMissing() {
+            Settings.Load(_path);
+
+            Assert.IsFalse(Settings.ApiEnabled);
+            Assert.AreEqual(47710, Settings.ApiPort);
+            Assert.IsFalse(Settings.ApiAllowUnknownHosts);
+        }
+
+        [TestMethod]
+        public void ApiSettingsRoundTripAndKeepUnknownKeys() {
+            File.WriteAllLines(_path, new[] { "SomeFutureSetting=x=y", "CheckEvery=5" });
+            Settings.Load(_path);
+            Settings.ApiEnabled = true;
+            Settings.ApiPort = 50000;
+            Settings.ApiAllowUnknownHosts = true;
+
+            Settings.Save(_path);
+            CollectionAssert.AreEquivalent(new[] { "SomeFutureSetting=x=y", "CheckEvery=5", "ApiEnabled=1", "ApiPort=50000", "ApiAllowUnknownHosts=1" }, File.ReadAllLines(_path));
+            Settings.Load(Path.Combine(_dir, "missing.txt"));
+            Settings.Load(_path);
+
+            Assert.IsTrue(Settings.ApiEnabled);
+            Assert.AreEqual(50000, Settings.ApiPort);
+            Assert.IsTrue(Settings.ApiAllowUnknownHosts);
+
+            Settings.ApiEnabled = false;
+            Settings.ApiAllowUnknownHosts = false;
+            Settings.ApiPort = null;
+            Settings.Save(_path);
+            Settings.Load(_path);
+
+            Assert.IsFalse(Settings.ApiEnabled);
+            Assert.IsFalse(Settings.ApiAllowUnknownHosts);
+            Assert.AreEqual(47710, Settings.ApiPort);
+            CollectionAssert.AreEquivalent(new[] { "SomeFutureSetting=x=y", "CheckEvery=5", "ApiEnabled=0", "ApiAllowUnknownHosts=0" }, File.ReadAllLines(_path));
+        }
+
+        [TestMethod]
+        [DataRow("1024", 1024)]
+        [DataRow("65535", 65535)]
+        [DataRow("47711", 47711)]
+        [DataRow("1023", 47710)]
+        [DataRow("0", 47710)]
+        [DataRow("-1", 47710)]
+        [DataRow("65536", 47710)]
+        [DataRow("99999999999", 47710, DisplayName = "not an int")]
+        [DataRow("abc", 47710)]
+        [DataRow("", 47710)]
+        [DataRow(" 8080", 8080, DisplayName = "leading space, as Int32.TryParse reads it")]
+        public void ApiPortOutsideTheValidRangeIsTheDefault(string saved, int expected) {
+            File.WriteAllLines(_path, new[] { "ApiPort=" + saved });
+            Settings.Load(_path);
+
+            Assert.AreEqual(expected, Settings.ApiPort);
+        }
+
+        [TestMethod]
+        public void ApiPortSetOutsideTheValidRangeReadsAsTheDefault() {
+            Settings.Load(_path);
+            Settings.ApiPort = 80;
+
+            Assert.AreEqual(47710, Settings.ApiPort);
+            Assert.IsFalse(Settings.IsValidApiPort(80));
+            Assert.IsFalse(Settings.IsValidApiPort(null));
+            Assert.IsTrue(Settings.IsValidApiPort(1024));
+        }
+
+        // Security opt-ins: only the exact value "1" is on, unlike the other on/off settings (anything but "0")
+        [TestMethod]
+        [DataRow("1", true)]
+        [DataRow("", false)]
+        [DataRow("yes", false)]
+        [DataRow("true", false)]
+        [DataRow("0", false)]
+        [DataRow("01", false)]
+        [DataRow(" 1", false)]
+        [DataRow("1 ", false)]
+        public void ApiOnOffSettingsAreOnOnlyForExactly1(string saved, bool expected) {
+            File.WriteAllLines(_path, new[] { "ApiEnabled=" + saved, "ApiAllowUnknownHosts=" + saved, "UseSlug=" + saved });
+            Settings.Load(_path);
+
+            Assert.AreEqual(expected, Settings.ApiEnabled);
+            Assert.AreEqual(expected, Settings.ApiAllowUnknownHosts);
+            Assert.AreEqual(saved != "0", Settings.UseSlug, "the other on/off settings keep their reading");
+        }
+
+        [TestMethod]
+        public void ApiOnOffSettingNamesIgnoreCase() {
+            File.WriteAllLines(_path, new[] { "apienabled=1", "APIALLOWUNKNOWNHOSTS=1" });
+            Settings.Load(_path);
+
+            Assert.IsTrue(Settings.ApiEnabled);
+            Assert.IsTrue(Settings.ApiAllowUnknownHosts);
+        }
+
+        [TestMethod]
         public void NewlineInAValueCannotInjectAnotherSetting() {
             Settings.Load(_path);
             Settings.WindowTitle = "title\r\nUseSlug=1\nCheckEvery=99";

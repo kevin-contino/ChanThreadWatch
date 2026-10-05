@@ -32,6 +32,9 @@
          reads the blacklist through the session; its tests check that no login store item is scheduled for deletion -->
     <InternalsVisibleTo Include="ctw" />
     <InternalsVisibleTo Include="ChanThreadWatch.Cli.Tests" />
+    <!-- The local API adds threads as ctw add does (NewThread) -->
+    <InternalsVisibleTo Include="ChanThreadWatch.Api" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Api.Tests" />
   </ItemGroup>
 
 </Project>
