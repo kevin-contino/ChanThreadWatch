@@ -14,12 +14,15 @@
     <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
   </PropertyGroup>
 
-  <!-- .NET Framework 4.8: Core is net10.0 only, so the tool compiles the same StoredAuth.cs (and TextFile.cs, which it
-       uses) itself, as the 4.8 app did -->
+  <!-- .NET Framework 4.8: Core is net10.0 only, so the tool compiles the same StoredAuth.cs and its backends (and
+       TextFile.cs, which it uses) itself, as the 4.8 app did -->
   <ItemGroup Condition=" '$(TargetFramework)' == 'net48' ">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
     <Reference Include="System.Security" />
     <Compile Include="..\..\ChanThreadWatch.Core\StoredAuth.cs" Link="Core\StoredAuth.cs" />
+    <Compile Include="..\..\ChanThreadWatch.Core\IStoredAuthProtector.cs" Link="Core\IStoredAuthProtector.cs" />
+    <Compile Include="..\..\ChanThreadWatch.Core\DpapiStoredAuthProtector.cs" Link="Core\DpapiStoredAuthProtector.cs" />
+    <Compile Include="..\..\ChanThreadWatch.Core\UnavailableStoredAuthProtector.cs" Link="Core\UnavailableStoredAuthProtector.cs" />
     <Compile Include="..\..\ChanThreadWatch.Core\TextFile.cs" Link="Core\TextFile.cs" />
   </ItemGroup>
 

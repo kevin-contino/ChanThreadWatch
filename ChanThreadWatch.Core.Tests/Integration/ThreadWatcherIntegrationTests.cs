@@ -314,17 +314,21 @@ namespace JDP.Tests.Integration {
 
         // S6: a saved login that can't be decrypted is loaded as empty, so no request carries
         // the stored ciphertext or any other credential
-        [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
+        // A DPAPI value for this user that fails to decrypt (wrong entropy)
         [SupportedOSPlatform("windows")]
+        private static string ProtectedWithOtherEntropy(string auth) {
+            byte[] blob = ProtectedData.Protect(Encoding.UTF8.GetBytes(auth), Encoding.UTF8.GetBytes("some other app"), DataProtectionScope.CurrentUser);
+            return StoredAuth.Prefix + Convert.ToBase64String(blob);
+        }
+
+        // Off Windows the value is a DPAPI value as copied from a Windows computer
+        [TestMethod]
         public void UndecryptableSavedLoginSendsNoCredentials() {
             var fixture = new FourChanThreadFixture();
             LoopbackHttpServer server = StartServer();
             fixture.RouteAll(server);
             string url = server.URL(FourChanThreadFixture.ThreadPath);
-            byte[] blob = ProtectedData.Protect(Encoding.UTF8.GetBytes(PageAuth), Encoding.UTF8.GetBytes("some other app"), DataProtectionScope.CurrentUser);
-            string stored = StoredAuth.Prefix + Convert.ToBase64String(blob);
+            string stored = OperatingSystem.IsWindows() ? ProtectedWithOtherEntropy(PageAuth) : UnavailableStoredAuthTests.CopiedFromWindows();
             ThreadInfo thread = ThreadListFile.Parse(new[] { "4", url, stored, stored, "600", "1", "", "", "", "0", "", "", "", "0" }).Threads[0];
             ThreadWatcher watcher = CreateWatcher(url);
             watcher.PageAuth = thread.PageAuth;

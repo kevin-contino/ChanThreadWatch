@@ -59,6 +59,16 @@ namespace JDP.Tests {
             return StoredAuth.Prefix + Convert.ToBase64String(data);
         }
 
+        // Values that can't be decrypted. On Windows they are DPAPI values that fail; elsewhere,
+        // where no backend reads DPAPI, they are DPAPI values as copied from a Windows computer.
+        private static string TamperedLogin(string auth) {
+            return OperatingSystem.IsWindows() ? Tampered(StoredAuth.Protect(auth)) : UnavailableStoredAuthTests.CopiedFromWindows();
+        }
+
+        private static string OtherEntropyLogin(string auth) {
+            return OperatingSystem.IsWindows() ? ProtectedWithOtherEntropy(auth) : UnavailableStoredAuthTests.CopiedFromWindows();
+        }
+
         private List<ThreadInfo> SaveThreads(List<ThreadInfo> threads) {
             ThreadListStore store = new ThreadListStore();
             store.EndLoad(ThreadsPath, true);
@@ -73,7 +83,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void ProtectedValueIsMarkedHidesThePlaintextAndRoundTrips() {
             string stored = StoredAuth.Protect(FakePageAuth);
@@ -82,6 +92,20 @@ namespace JDP.Tests {
             Assert.IsTrue(StoredAuth.IsProtected(stored));
             Assert.DoesNotContain("fakepage", stored);
             Assert.AreEqual(FakePageAuth, StoredAuth.Unprotect(stored));
+        }
+
+        // Pins the on-disk format apart from DpapiStoredAuthProtector: the values 1.39 and later
+        // wrote must keep decrypting with exactly this entropy and scope
+        [TestMethod]
+        // The DPAPI format exists only on Windows; other systems use their own backend
+        [OSCondition(OperatingSystems.Windows)]
+        public void ProtectedValueIsDpapiWithTheFixedEntropyAndCurrentUserScope() {
+            string stored = StoredAuth.Protect(FakePageAuth);
+
+            Assert.StartsWith("dpapi:", stored);
+            byte[] data = ProtectedData.Unprotect(Convert.FromBase64String(stored.Substring("dpapi:".Length)),
+                Encoding.UTF8.GetBytes("JDP.ChanThreadWatch.StoredAuth.v1"), DataProtectionScope.CurrentUser);
+            Assert.AreEqual(FakePageAuth, Encoding.UTF8.GetString(data));
         }
 
         [TestMethod]
@@ -99,15 +123,13 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void LineBreaksAreFlattenedBeforeEncrypting() {
             Assert.AreEqual("fake user:fake pass", StoredAuth.Unprotect(StoredAuth.Protect("fake\r\nuser:fake\npass")));
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         [DataRow("tampered")]
         [DataRow("other entropy")]
         [DataRow("bad base64")]
@@ -120,15 +142,15 @@ namespace JDP.Tests {
 
         private static string UndecryptableValue(string kind) {
             switch (kind) {
-                case "tampered": return Tampered(StoredAuth.Protect(FakePageAuth));
-                case "other entropy": return ProtectedWithOtherEntropy(FakePageAuth);
+                case "tampered": return TamperedLogin(FakePageAuth);
+                case "other entropy": return OtherEntropyLogin(FakePageAuth);
                 case "bad base64": return StoredAuth.Prefix + "not*base64!";
                 default: return StoredAuth.Prefix;
             }
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void ThreadListAuthIsEncryptedOnSaveAndRoundTrips() {
             List<ThreadInfo> threads = ThreadListFile.Parse(Version4Lines(FakePageAuth, FakeImageAuth)).Threads;
@@ -144,7 +166,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void LegacyPlaintextThreadListLoadsAndIsMigratedOnSave() {
             File.WriteAllLines(ThreadsPath, Version4Lines(FakePageAuth, FakeImageAuth));
@@ -161,11 +183,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void UndecryptableThreadListAuthBecomesEmptyAndKeepsTheThread() {
-            string tampered = Tampered(StoredAuth.Protect(FakePageAuth));
-            string otherEntropy = ProtectedWithOtherEntropy(FakeImageAuth);
+            string tampered = TamperedLogin(FakePageAuth);
+            string otherEntropy = OtherEntropyLogin(FakeImageAuth);
             File.WriteAllLines(ThreadsPath, Version4Lines(tampered, otherEntropy));
 
             ThreadListData data = new ThreadListStore().Read(ThreadsPath);
@@ -179,7 +199,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void BackupOfALegacyThreadListIsEncrypted() {
             string[] backup = ThreadListFile.GetBackupLines(Version4Lines(FakePageAuth, FakeImageAuth));
@@ -200,10 +220,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void FailedDecryptIsLoggedWithoutTheValue() {
-            string stored = Tampered(StoredAuth.Protect(FakePageAuth));
+            string stored = TamperedLogin(FakePageAuth);
             string logPath = Path.Combine(Settings.GetSettingsDirectory(), Settings.LogFileName);
             Logger.Log("StoredAuthTests marker");
             int start = ReadSharedFile(logPath).Length;
@@ -229,10 +247,8 @@ namespace JDP.Tests {
 
         // A temporary DPAPI failure must not erase the login: the stored value is written back as it was
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void UndecryptableThreadListAuthSurvivesSaveByteForByte() {
-            File.WriteAllLines(ThreadsPath, Version4Lines(Tampered(StoredAuth.Protect(FakePageAuth)), ProtectedWithOtherEntropy(FakeImageAuth)));
+            File.WriteAllLines(ThreadsPath, Version4Lines(TamperedLogin(FakePageAuth), OtherEntropyLogin(FakeImageAuth)));
             byte[] original = File.ReadAllBytes(ThreadsPath);
 
             List<ThreadInfo> reloaded = SaveThreads(new ThreadListStore().Read(ThreadsPath).Threads);
@@ -244,11 +260,11 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void NewThreadListLoginReplacesAnUndecryptableOne() {
-            string otherEntropy = ProtectedWithOtherEntropy(FakeImageAuth);
-            File.WriteAllLines(ThreadsPath, Version4Lines(Tampered(StoredAuth.Protect(FakePageAuth)), otherEntropy));
+            string otherEntropy = OtherEntropyLogin(FakeImageAuth);
+            File.WriteAllLines(ThreadsPath, Version4Lines(TamperedLogin(FakePageAuth), otherEntropy));
             ThreadInfo thread = new ThreadListStore().Read(ThreadsPath).Threads[0];
             thread.PageAuth = "fakenewuser:fakenewpass";
 
@@ -259,10 +275,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void ClearedUndecryptableThreadListLoginIsWrittenEmpty() {
-            File.WriteAllLines(ThreadsPath, Version4Lines(Tampered(StoredAuth.Protect(FakePageAuth)), ""));
+            File.WriteAllLines(ThreadsPath, Version4Lines(TamperedLogin(FakePageAuth), ""));
             ThreadInfo thread = new ThreadListStore().Read(ThreadsPath).Threads[0];
             // What the edit form does when the login is changed to empty
             thread.ExtraData.UndecryptablePageAuth = null;
@@ -273,10 +287,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void BackupKeepsAnUndecryptableLogin() {
-            string tampered = Tampered(StoredAuth.Protect(FakePageAuth));
+            string tampered = TamperedLogin(FakePageAuth);
 
             string[] backup = ThreadListFile.GetBackupLines(Version4Lines(tampered, ""));
 
@@ -296,7 +308,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void SettingsAuthIsEncryptedOnSaveAndRoundTrips() {
             Settings.Load(SettingsPath);
@@ -312,7 +324,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void LegacyPlaintextSettingsLoadAndAreMigratedOnSave() {
             File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + FakePageAuth, "imageauth=" + FakeImageAuth, "WindowTitle=fakepage title" });
@@ -334,7 +346,7 @@ namespace JDP.Tests {
         // A login that happens to start with the marker is still encrypted when set, so it
         // is not mistaken for an encrypted value when read back
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void AuthThatLooksEncryptedRoundTrips() {
             const string markerLike = StoredAuth.Prefix + "fakepagepass";
@@ -354,10 +366,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void UndecryptableSettingsAuthBecomesEmpty() {
-            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + Tampered(StoredAuth.Protect(FakePageAuth)), "UseSlug=1" });
+            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + TamperedLogin(FakePageAuth), "UseSlug=1" });
 
             Settings.Load(SettingsPath);
 
@@ -367,10 +377,8 @@ namespace JDP.Tests {
 
         // Mirrors the main form: the text box is filled from the setting and written back on exit
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void UndecryptableSettingsAuthSurvivesSaveByteForByte() {
-            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + Tampered(StoredAuth.Protect(FakePageAuth)), "ImageAuth=" + ProtectedWithOtherEntropy(FakeImageAuth) });
+            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + TamperedLogin(FakePageAuth), "ImageAuth=" + OtherEntropyLogin(FakeImageAuth) });
             byte[] original = File.ReadAllBytes(SettingsPath);
             Settings.Load(SettingsPath);
 
@@ -384,11 +392,11 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saved logins use DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void NewSettingsLoginReplacesAnUndecryptableOne() {
-            string otherEntropy = ProtectedWithOtherEntropy(FakeImageAuth);
-            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + Tampered(StoredAuth.Protect(FakePageAuth)), "ImageAuth=" + otherEntropy });
+            string otherEntropy = OtherEntropyLogin(FakeImageAuth);
+            File.WriteAllLines(SettingsPath, new[] { "PageAuth=" + TamperedLogin(FakePageAuth), "ImageAuth=" + otherEntropy });
             Settings.Load(SettingsPath);
 
             Settings.PageAuth = "fakenewuser:fakenewpass";

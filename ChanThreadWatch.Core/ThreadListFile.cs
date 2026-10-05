@@ -311,8 +311,9 @@ namespace JDP {
         // A backup (see General.BackupThreadList) written by an older version holds plaintext
         // logins, and the periodic backup may never replace it (it can be turned off, or skip a
         // smaller list). So after the first save of the session, which writes encrypted
-        // logins, the backup is rewritten with its own threads and encrypted logins. If that
-        // fails (e.g. the file is in use), the next save tries again.
+        // logins, the backup is rewritten with its own threads and encrypted logins (empty ones
+        // on a system that can't keep logins, see StoredAuth.CanProtect). If that fails (e.g.
+        // the file is in use), the next save tries again.
         private void ProtectBackupOnce(string backupPath) {
             if (_checkedBackup) return;
             try {
