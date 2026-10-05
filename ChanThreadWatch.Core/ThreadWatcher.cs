@@ -87,17 +87,8 @@ namespace JDP {
         private ConnectionManager _rateLimitedConnection;
 
         static ThreadWatcher() {
-            // HttpWebRequest uses ThreadPool for asynchronous calls
+            // Downloads, and the speed limit's sleeps, run on thread pool threads
             General.EnsureThreadPoolMaxThreads(500, 1000);
-
-            // SYSLIB0014: HttpWebRequest and ServicePointManager stay until the HttpClient transport (MP-5b)
-#pragma warning disable SYSLIB0014
-            // Shouldn't matter since the limit is supposed to be per connection group
-            ServicePointManager.DefaultConnectionLimit = Int32.MaxValue;
-
-            // Enable TLS 1.2 on supported environments
-            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
-#pragma warning restore SYSLIB0014
         }
 
         public ThreadWatcher(string pageURL) {
@@ -1434,43 +1425,62 @@ namespace JDP {
             Logger.Log("Error downloading file " + url + ": " + DescribeDownloadError(ex, url) + Environment.NewLine + ex);
         }
 
-        private static readonly Dictionary<WebExceptionStatus, string> _webExceptionStatusTexts = new Dictionary<WebExceptionStatus, string> {
-            { WebExceptionStatus.TrustFailure, "certificate not trusted for {0}" },
-            { WebExceptionStatus.SecureChannelFailure, "secure connection failed for {0}" },
-            { WebExceptionStatus.NameResolutionFailure, "host not found: {0}" },
-            { WebExceptionStatus.ConnectFailure, "cannot connect to {0}" },
-            { WebExceptionStatus.Timeout, "timed out connecting to {0}" }
+        private const string SecureConnectionFailedText = "secure connection failed for {0}";
+        private const string TimedOutConnectingText = "timed out connecting to {0}";
+        private const string HostNotFoundText = "host not found: {0}";
+        private const string ConnectionLostText = "connection lost";
+
+        private static readonly Dictionary<HttpRequestError, string> _httpRequestErrorTexts = new Dictionary<HttpRequestError, string> {
+            { HttpRequestError.NameResolutionError, HostNotFoundText },
+            { HttpRequestError.ConnectionError, "cannot connect to {0}" },
+            { HttpRequestError.ResponseEnded, ConnectionLostText }
         };
 
-        // A short, plain description of why a download failed, e.g. "HTTP 403 Forbidden"
+        // A short, plain description of why a download failed, e.g. "HTTP 403 Forbidden" (the
+        // message of an HTTPStatusException)
         internal static string DescribeDownloadError(Exception ex, string url) {
-            WebException webEx = ex as WebException;
-            if (webEx == null) return DescribeNonWebError(ex, url);
-            if (webEx.Status == WebExceptionStatus.ProtocolError) return DescribeHTTPError(webEx);
+            HttpRequestException httpEx = ex as HttpRequestException;
+            if (httpEx == null) return DescribeNonWebError(ex, url);
+            string format = GetErrorTextFormat(httpEx);
+            return format != null ? String.Format(format, new Uri(url).Host) : ex.Message.TrimEnd('.');
+        }
+
+        // A failed TLS handshake is an HttpRequestException (SecureConnectionError). Certificates are
+        // checked by the default validation, so a rejected certificate is an AuthenticationException
+        // about the certificate. A lookup that found no address can also come as another error with
+        // the lookup's SocketException inside, and a connection that broke before the response
+        // headers as one with an IOException inside.
+        private static string GetErrorTextFormat(HttpRequestException httpEx) {
+            if (httpEx.HttpRequestError == HttpRequestError.SecureConnectionError) return GetTLSErrorTextFormat(httpEx);
+            if (IsHostNotFound(httpEx)) return HostNotFoundText;
+            return GetErrorTextFormat(httpEx.HttpRequestError) ?? (httpEx.InnerException is IOException ? ConnectionLostText : null);
+        }
+
+        private static string GetTLSErrorTextFormat(HttpRequestException httpEx) {
+            return IsCertificateRejection(httpEx.InnerException) ? "certificate not trusted for {0}" : SecureConnectionFailedText;
+        }
+
+        private static string GetErrorTextFormat(HttpRequestError error) {
             string format;
-            if (_webExceptionStatusTexts.TryGetValue(GetStatus(webEx), out format)) return String.Format(format, new Uri(url).Host);
-            return webEx.Message;
+            return _httpRequestErrorTexts.TryGetValue(error, out format) ? format : null;
         }
 
-        // .NET 10's HttpWebRequest reports a failed TLS handshake as UnknownError around an HttpRequestException
-        // (SecureConnectionError), where .NET Framework gave TrustFailure or SecureChannelFailure. It always checks
-        // certificates through its own validation callback, so a rejected certificate is an AuthenticationException
-        // about the certificate.
-        private static WebExceptionStatus GetStatus(WebException webEx) {
-            HttpRequestException httpEx = webEx.InnerException as HttpRequestException;
-            if (httpEx == null || httpEx.HttpRequestError != HttpRequestError.SecureConnectionError) return webEx.Status;
-            return IsCertificateRejection(httpEx.InnerException) ? WebExceptionStatus.TrustFailure : WebExceptionStatus.SecureChannelFailure;
+        private static readonly SocketError[] _lookupFailures = { SocketError.HostNotFound, SocketError.NoData, SocketError.TryAgain };
+
+        private static bool IsHostNotFound(Exception ex) {
+            for (Exception inner = ex; inner != null; inner = inner.InnerException) {
+                SocketException socketEx = inner as SocketException;
+                if (socketEx != null && Array.IndexOf(_lookupFailures, socketEx.SocketErrorCode) != -1) return true;
+            }
+            return false;
         }
 
-        private static bool IsCertificateRejection(Exception ex) {
-            return ex is AuthenticationException && ex.Message.IndexOf("certificate", StringComparison.OrdinalIgnoreCase) != -1;
-        }
-
-        // .NET 10 ends a read that passed ReadWriteTimeout with an IOException around a timed out
-        // SocketException, where .NET Framework gave a WebException with status Timeout
+        // A network timeout from the socket (not one of the transport's own time limits) reads like the
+        // .NET Framework's WebException with status Timeout did
         private static string DescribeNonWebError(Exception ex, string url) {
-            if (IsSocketTimeout(ex)) return String.Format(_webExceptionStatusTexts[WebExceptionStatus.Timeout], new Uri(url).Host);
-            if (ex is IOException) return "connection lost";
+            if (IsSocketTimeout(ex)) return String.Format(TimedOutConnectingText, new Uri(url).Host);
+            if (IsHostNotFound(ex)) return String.Format(HostNotFoundText, new Uri(url).Host);
+            if (ex is IOException) return ConnectionLostText;
             return ex.Message.TrimEnd('.');
         }
 
@@ -1479,16 +1489,8 @@ namespace JDP {
             return socketEx != null && socketEx.SocketErrorCode == SocketError.TimedOut;
         }
 
-        private static string DescribeHTTPError(WebException webEx) {
-            HttpWebResponse response = webEx.Response as HttpWebResponse;
-            if (response == null) return webEx.Message;
-            try {
-                return General.FormatHTTPStatus(response);
-            }
-            catch (ObjectDisposedException) {
-                // .NET 10 cannot read the status of a response that is already closed
-                return webEx.Message;
-            }
+        private static bool IsCertificateRejection(Exception ex) {
+            return ex is AuthenticationException && ex.Message.IndexOf("certificate", StringComparison.OrdinalIgnoreCase) != -1;
         }
 
         private void EndCheck() {
@@ -1779,8 +1781,8 @@ namespace JDP {
         }
 
         // A download that gave up waiting for a connection has none to release
-        private static void ReleaseConnection(ConnectionManager connectionManager, string connectionGroupName) {
-            if (connectionGroupName != null) connectionManager.ReleaseConnectionGroupName(connectionGroupName);
+        private static void ReleaseConnection(ConnectionManager connectionManager, bool hasConnection) {
+            if (hasConnection) connectionManager.ReleaseConnection();
         }
 
         private static bool IsCompletedOrSkipped(DownloadResult result) {
@@ -1858,8 +1860,8 @@ namespace JDP {
             fileStream.SetLength(Math.Min(totalFileSize.Value, _maxPreallocateBytes));
         }
 
-        private static long? GetAnnouncedSize(HttpWebResponse response) {
-            return response.ContentLength != -1 ? response.ContentLength : (long?)null;
+        private static long? GetAnnouncedSize(HttpResponseMessage response) {
+            return response.Content.Headers.ContentLength;
         }
 
         private static void ThrowIfTooLarge(long? fileSize) {
@@ -1912,7 +1914,9 @@ namespace JDP {
             private readonly DownloadPageEndCallback _onDownloadEnd;
             private readonly ConnectionManager _connectionManager;
             private readonly string _backupPath;
-            private string _connectionGroupName;
+            private readonly bool _hasConnection;
+            // Set by a retry, which goes out on a new connection
+            private bool _freshConnection;
             private int _tryNumber;
             // Set once the download has ended, so that it never ends (and releases its connection) twice
             private int _ended;
@@ -1928,7 +1932,7 @@ namespace JDP {
                 _onDownloadEnd = onDownloadEnd;
                 _connectionManager = ConnectionManager.GetInstance(url);
                 // Gives up waiting for a connection (and takes none) if the watcher stops
-                _connectionGroupName = _connectionManager.ObtainConnectionGroupName(() => watcher.IsStopping);
+                _hasConnection = _connectionManager.ObtainConnection(() => watcher.IsStopping);
                 _backupPath = path + ".bak";
             }
 
@@ -1975,7 +1979,7 @@ namespace JDP {
 
             private void Retry(Exception ex) {
                 _lastError = ex;
-                _connectionGroupName = _connectionManager.SwapForFreshConnection(_connectionGroupName, _url);
+                _freshConnection = true;
                 TryDownload();
             }
 
@@ -2001,13 +2005,13 @@ namespace JDP {
 
                 public void EndTryDownload(DownloadResult result) {
                     if (Interlocked.Exchange(ref _download._ended, 1) != 0) return;
-                    ReleaseConnection(_download._connectionManager, _download._connectionGroupName);
+                    ReleaseConnection(_download._connectionManager, _download._hasConnection);
                     _download._onDownloadEnd(result, _content, _lastModifiedTime);
                 }
 
                 public void Start() {
                     _downloadID = NewDownloadID();
-                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, null, _download._connectionGroupName, _download._cacheLastModifiedTime,
+                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, null, _download._freshConnection, _download._cacheLastModifiedTime,
                         OnResponse, OnDownloadChunk, OnComplete, OnException);
 
                     lock (_watcher._downloadAborters) {
@@ -2038,11 +2042,12 @@ namespace JDP {
                     File.Move(_download._path, _download._backupPath);
                 }
 
-                private void OnResponse(HttpWebResponse response) {
+                private void OnResponse(HttpResponseMessage response) {
                     _totalFileSize = GetAnnouncedSize(response);
+                    ThrowIfPageTooLarge(_totalFileSize ?? 0);
                     RunFileOperation(CreateFile);
                     _memoryStream = new MemoryStream();
-                    _httpContentType = response.ContentType;
+                    _httpContentType = General.GetContentType(response);
                     _lastModifiedTime = General.GetResponseLastModifiedTime(response);
                     _watcher.OnDownloadStart(new DownloadStartEventArgs(_downloadID, _download._url, _download._tryNumber, _totalFileSize));
                 }
@@ -2054,7 +2059,15 @@ namespace JDP {
                     PreallocateFile(_fileStream, _totalFileSize);
                 }
 
+                // The page is held in memory, so the page size limit applies to every page, whatever
+                // its content type, and to the page a meta refresh leads to (only an HTML page is
+                // limited while General.DownloadAsync buffers it)
+                private static void ThrowIfPageTooLarge(long pageSize) {
+                    if (pageSize > General.MaxPageBytes) throw new PageTooLargeException(General.MaxPageBytes);
+                }
+
                 private void OnDownloadChunk(byte[] data, int dataLength) {
+                    ThrowIfPageTooLarge(_downloadedFileSize + dataLength);
                     RunFileOperation(() => _fileStream.Write(data, 0, dataLength));
                     _memoryStream.Write(data, 0, dataLength);
                     _downloadedFileSize += dataLength;
@@ -2129,7 +2142,9 @@ namespace JDP {
             private readonly byte[] _correctHash;
             private readonly DownloadFileEndCallback _onDownloadEnd;
             private readonly ConnectionManager _connectionManager;
-            private string _connectionGroupName;
+            private readonly bool _hasConnection;
+            // Set by a retry, which goes out on a new connection
+            private bool _freshConnection;
             private int _tryNumber;
             // Set once the download has ended, so that it never ends (and releases its connection) twice
             private int _ended;
@@ -2148,7 +2163,7 @@ namespace JDP {
                 _onDownloadEnd = onDownloadEnd;
                 _connectionManager = ConnectionManager.GetInstance(url);
                 // Gives up waiting for a connection (and takes none) if the watcher stops
-                _connectionGroupName = _connectionManager.ObtainConnectionGroupName(() => watcher.IsStopping);
+                _hasConnection = _connectionManager.ObtainConnection(() => watcher.IsStopping);
             }
 
             public void TryDownload() {
@@ -2194,7 +2209,7 @@ namespace JDP {
 
             private void Retry(Exception ex) {
                 _lastError = ex;
-                _connectionGroupName = _connectionManager.SwapForFreshConnection(_connectionGroupName, _url);
+                _freshConnection = true;
                 TryDownload();
             }
 
@@ -2217,13 +2232,13 @@ namespace JDP {
 
                 public void EndTryDownload(DownloadResult result) {
                     if (Interlocked.Exchange(ref _download._ended, 1) != 0) return;
-                    ReleaseConnection(_download._connectionManager, _download._connectionGroupName);
+                    ReleaseConnection(_download._connectionManager, _download._hasConnection);
                     _download._onDownloadEnd(result);
                 }
 
                 public void Start() {
                     _downloadID = NewDownloadID();
-                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, _download._referer, _download._connectionGroupName, null,
+                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, _download._referer, _download._freshConnection, null,
                         OnResponse, OnDownloadChunk, OnComplete, OnException);
 
                     lock (_watcher._downloadAborters) {
@@ -2245,7 +2260,7 @@ namespace JDP {
                     }
                 }
 
-                private void OnResponse(HttpWebResponse response) {
+                private void OnResponse(HttpResponseMessage response) {
                     // The host answers file requests normally again (a page answer does not count:
                     // a limit may apply to files only)
                     _download._connectionManager.ResetRateLimitBackoff();

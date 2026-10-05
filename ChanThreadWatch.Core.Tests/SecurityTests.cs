@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
+using System.Security.Authentication;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using JDP.Tests.Integration;
@@ -17,15 +19,18 @@ namespace JDP.Tests {
             Settings.Load();
         }
 
-        // S1
+        // S1: the transport keeps the default certificate validation and lets the OS pick the TLS version
         [TestMethod]
         public void ThreadWatcherDoesNotDisableCertificateValidation() {
             RuntimeHelpers.RunClassConstructor(typeof(ThreadWatcher).TypeHandle);
 
-            // SYSLIB0014: the HttpWebRequest transport reads this callback until MP-5b
-#pragma warning disable SYSLIB0014
-            Assert.IsNull(ServicePointManager.ServerCertificateValidationCallback);
-#pragma warning restore SYSLIB0014
+            using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero)) {
+                Assert.IsNull(handler.SslOptions.RemoteCertificateValidationCallback);
+                Assert.AreEqual(SslProtocols.None, handler.SslOptions.EnabledSslProtocols);
+                Assert.IsFalse(handler.UseCookies);
+                Assert.IsFalse(handler.AllowAutoRedirect);
+                Assert.AreEqual(DecompressionMethods.None, handler.AutomaticDecompression);
+            }
         }
 
         // S2
@@ -65,7 +70,7 @@ namespace JDP.Tests {
             }
         }
 
-        // Pins framework behavior S2 relies on: HttpWebRequest drops a manually added Authorization header on automatic redirects
+        // S2: an HTTP redirect drops the Authorization header (General.SendAsync drops it on every redirect)
         [TestMethod]
         public void HttpRedirectToOtherOriginDropsCredentials() {
             using (var target = new LoopbackHttpServer())
@@ -137,6 +142,40 @@ namespace JDP.Tests {
             }
         }
 
+        // A Referer or custom User-Agent with a line break is never sent as extra header lines
+        [TestMethod]
+        public void HeaderValuesCannotInjectHeaders() {
+            Settings.UseCustomUserAgent = true;
+            Settings.CustomUserAgent = "Agent/1.0\r\nX-Injected: user-agent";
+            try {
+                using (var server = new LoopbackHttpServer()) {
+                    server.Route("/image.jpg", OkResponse);
+
+                    Download(server.URL("/image.jpg"), null, "https://boards.example.org/a/thread/1\r\nX-Injected: referer");
+
+                    RecordedRequest request = server.Requests[0];
+                    Assert.IsNull(request.Header("X-Injected"), request.Raw);
+                    // Settings keep each value on one line, and the transport would drop one that is not
+                    Assert.AreEqual("Agent/1.0 X-Injected: user-agent", request.Header("User-Agent"), request.Raw);
+                    Assert.IsNull(request.Header("Referer"), request.Raw);
+                    Assert.HasCount(1, server.Requests);
+                }
+            }
+            finally {
+                Settings.UseCustomUserAgent = false;
+                Settings.CustomUserAgent = null;
+            }
+        }
+
+        // HTTP/3 would connect without the SSRF guard's ConnectCallback, so every request is HTTP/1.1 exactly
+        [TestMethod]
+        public void RequestsUseHTTP11Exactly() {
+            HttpRequestMessage request = General.BuildWebRequest(new Uri("https://boards.example.org/a/thread/1"), "user:pass", "https://boards.example.org/", DateTime.Now);
+
+            Assert.AreEqual(HttpVersion.Version11, request.Version);
+            Assert.AreEqual(HttpVersionPolicy.RequestVersionExact, request.VersionPolicy);
+        }
+
         private static readonly LoopbackResponse OkResponse = LoopbackResponse.Text("ok");
 
         private static LoopbackResponse MetaRefreshResponse(string url) {
@@ -146,7 +185,7 @@ namespace JDP.Tests {
         private static void Download(string url, string auth, string referer) {
             var done = new ManualResetEvent(false);
             Exception error = null;
-            General.DownloadAsync(url, auth, referer, null, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
+            General.DownloadAsync(url, auth, referer, false, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
             Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download timed out");
             Assert.IsNull(error, error?.ToString());
         }

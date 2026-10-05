@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -36,35 +37,93 @@ namespace JDP.Tests {
             Settings.MaximumBytesPerSecond = null;
         }
 
-        // B11
+        // B11: each status gets its exception, the status text is kept, and the response is released
         [TestMethod]
-        public void TranslateWebExceptionToleratesProtocolErrorWithoutResponse() {
-            var ex = new WebException("no response", null, WebExceptionStatus.ProtocolError, null);
-
-            Assert.AreSame(ex, General.TranslateWebException(ex));
+        public void TranslateErrorResponseMapsTheStatusAndDisposesTheResponse() {
+            Assert.IsInstanceOfType<HTTP404Exception>(General.TranslateErrorResponse(ErrorResponse(404, "Not Found", null)));
+            Assert.IsInstanceOfType<HTTP304Exception>(General.TranslateErrorResponse(ErrorResponse(304, "Not Modified", null)));
+            HTTPRateLimitedException limited = (HTTPRateLimitedException)General.TranslateErrorResponse(ErrorResponse(503, "Service Unavailable", "30"));
+            Assert.AreEqual("boards.example.org", limited.Host);
+            Assert.AreEqual(TimeSpan.FromSeconds(30), limited.RetryAfter);
+            HttpResponseMessage forbidden = ErrorResponse(403, "Forbidden", null);
+            var status = (HTTPStatusException)General.TranslateErrorResponse(forbidden);
+            Assert.AreEqual("HTTP 403 Forbidden", status.Message);
+            Assert.AreEqual(403, status.StatusCode);
+            Assert.AreEqual("HTTP 503 Service Unavailable", General.TranslateErrorResponse(ErrorResponse(503, "Service Unavailable", null)).Message);
+            Assert.ThrowsExactly<ObjectDisposedException>(() => forbidden.Content.ReadAsStream());
         }
 
-        // .NET 10 throws ObjectDisposedException when the status of a closed response is read
+        // A redirect from https to http is not followed (a downgrade); the redirect answer is the result
         [TestMethod]
-        public void ProtocolErrorWithAClosedResponseFallsBackToItsMessage() {
-            using (var server = new LoopbackHttpServer()) {
-                server.Route("/denied", LoopbackResponse.StatusOnly(403, "Forbidden"));
-#pragma warning disable SYSLIB0014
-                var request = (HttpWebRequest)WebRequest.Create(server.URL("/denied"));
-#pragma warning restore SYSLIB0014
-                WebException ex = null;
-                try {
-                    request.GetResponse().Close();
-                }
-                catch (WebException caught) {
-                    ex = caught;
-                }
-                Assert.IsNotNull(ex);
-                ex.Response.Close();
+        [DataRow("https://a.example.org/x", "http://a.example.org/y", null)]
+        [DataRow("http://a.example.org/x", "file:///C:/Windows/win.ini", null)]
+        [DataRow("http://a.example.org/x", "ftp://a.example.org/y", null)]
+        [DataRow("https://a.example.org/x", "https://b.example.org/y", "https://b.example.org/y")]
+        [DataRow("http://a.example.org/x", "https://a.example.org/y", "https://a.example.org/y")]
+        [DataRow("http://a.example.org/x/1", "../y?q=1", "http://a.example.org/y?q=1")]
+        public void RedirectTarget(string requestURL, string location, string expected) {
+            var response = new HttpResponseMessage(HttpStatusCode.Found) { RequestMessage = new HttpRequestMessage(HttpMethod.Get, requestURL) };
+            response.Headers.TryAddWithoutValidation("Location", location);
 
-                Assert.AreEqual(ex.Message, General.TranslateWebException(ex).Message);
-                Assert.AreEqual(ex.Message, ThreadWatcher.DescribeDownloadError(ex, server.URL("/denied")));
+            Assert.AreEqual(expected, General.GetRedirectTarget(response)?.AbsoluteUri);
+        }
+
+        // A meta refresh is checked like a redirect: only http(s), and no downgrade from https to http
+        [TestMethod]
+        [DataRow("https://a.example.org/x", "http://a.example.org/y", null)]
+        [DataRow("https://a.example.org/x", "https://b.example.org/y", "https://b.example.org/y")]
+        [DataRow("http://a.example.org/x", "https://a.example.org/y", "https://a.example.org/y")]
+        [DataRow("http://a.example.org/x", "http://b.example.org/y", "http://b.example.org/y")]
+        [DataRow("http://a.example.org/x", "ftp://a.example.org/y", null)]
+        public void MetaRefreshTarget(string pageURL, string redirectURL, string expected) {
+            if (expected == null) {
+                Assert.ThrowsExactly<NotSupportedException>(() => General.GetMetaRefreshTarget(new Uri(pageURL), redirectURL));
+                return;
             }
+            Assert.AreEqual(expected, General.GetMetaRefreshTarget(new Uri(pageURL), redirectURL).AbsoluteUri);
+        }
+
+        // A connection attempt is not canceled with its request, so it has a limit of its own: a
+        // server that accepts the connection but never answers the TLS handshake is let go within it
+        [TestMethod]
+        public void AStalledConnectionAttemptEndsWithinTheRequestTimeout() {
+            General.RequestTimeoutMS = ShortTimeoutMS;
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try {
+                using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero))
+                using (var client = new HttpClient(handler)) {
+                    Assert.AreEqual(TimeSpan.FromMilliseconds(ShortTimeoutMS), handler.ConnectTimeout);
+                    int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                    var request = General.BuildWebRequest(new Uri("https://127.0.0.1:" + port + "/x"), null, null, null);
+                    // The request itself gives up at once; only the handler's limit ends the attempt
+                    using (var canceled = new CancellationTokenSource(100)) {
+                        Assert.ThrowsAsync<OperationCanceledException>(() => client.SendAsync(request, canceled.Token)).GetAwaiter().GetResult();
+                    }
+                    using (System.Net.Sockets.TcpClient accepted = listener.AcceptTcpClient()) {
+                        accepted.ReceiveTimeout = (int)Promptly.TotalMilliseconds;
+                        var clock = System.Diagnostics.Stopwatch.StartNew();
+                        try {
+                            var buffer = new byte[4096];
+                            while (accepted.GetStream().Read(buffer, 0, buffer.Length) > 0) { }
+                        }
+                        catch (IOException) { }
+                        Assert.IsLessThan(ShortTimeoutMS * 4, clock.ElapsedMilliseconds, "The stalled connection attempt was not given up");
+                    }
+                }
+            }
+            finally {
+                listener.Stop();
+            }
+        }
+        private static HttpResponseMessage ErrorResponse(int status, string reason, string retryAfter) {
+            var response = new HttpResponseMessage((HttpStatusCode)status) {
+                ReasonPhrase = reason,
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://boards.example.org/a/thread/1"),
+                Content = new ByteArrayContent(new byte[10])
+            };
+            if (retryAfter != null) response.Headers.TryAddWithoutValidation("Retry-After", retryAfter);
+            return response;
         }
 
         [TestMethod]
@@ -83,27 +142,21 @@ namespace JDP.Tests {
             }
         }
 
-        // The error response is closed during translation; the next request in the same group
-        // (one connection allowed) must still get through.
+        // The error response is closed during translation; the next request to the host must still
+        // get through, although the error body was too large to be drained
         [TestMethod]
-        public void NotFoundIsTranslatedAndNextRequestInGroupProceeds() {
+        public void NotFoundIsTranslatedAndNextRequestProceeds() {
             using (var server = new LoopbackHttpServer { KeepAlive = true }) {
                 LoopbackResponse notFound = LoopbackResponse.StatusOnly(404, "Not Found");
-                // Large enough that the framework does not drain it by itself
+                // Larger than SocketsHttpHandler drains (1 MB), so its connection is closed
                 notFound.Body = new byte[4000000];
                 server.Route("/missing", notFound);
                 server.Route("/ok", LoopbackResponse.Text("ok"));
-                // SYSLIB0014: the test pins the HttpWebRequest transport, which stays until MP-5b
-#pragma warning disable SYSLIB0014
-                ServicePointManager.FindServicePoint(new Uri(server.BaseURL())).ConnectionLimit = 1;
-#pragma warning restore SYSLIB0014
-                string group = NewGroup();
-
-                DownloadProbe missing = DownloadProbe.Start(server.URL("/missing"), group);
+                DownloadProbe missing = DownloadProbe.Start(server.URL("/missing"));
                 missing.AssertEndsOnce(Promptly);
                 Assert.IsInstanceOfType<HTTP404Exception>(missing.Error);
 
-                DownloadProbe next = DownloadProbe.Start(server.URL("/ok"), group);
+                DownloadProbe next = DownloadProbe.Start(server.URL("/ok"));
                 next.AssertEndsOnce(Promptly);
                 Assert.AreEqual(1, next.Completes, next.Error?.ToString());
             }
@@ -120,7 +173,7 @@ namespace JDP.Tests {
                 try {
                     server.Route("/slow", StallBeforeResponse(release));
                     var called = new ManualResetEvent(false);
-                    Action abort = General.DownloadAsync(server.URL("/slow"), null, null, null, null, r => { }, (b, n) => { }, () => { },
+                    Action abort = General.DownloadAsync(server.URL("/slow"), null, null, false, null, r => { }, (b, n) => { }, () => { },
                         ex => { called.Set(); throw new InvalidOperationException("callback failure"); });
 
                     abort();
@@ -143,15 +196,12 @@ namespace JDP.Tests {
                 server.Route("/start", MetaRefreshResponse(server.URL("/next")));
                 server.Route("/next", LoopbackResponse.Text("ok"));
 
-                DownloadProbe probe = DownloadProbe.Start(server.URL("/start"), NewGroup());
+                DownloadProbe probe = DownloadProbe.Start(server.URL("/start"));
 
                 probe.AssertEndsOnce(Promptly);
                 Assert.AreEqual(1, probe.Completes, probe.Error?.ToString());
                 Assert.AreEqual("ok", probe.BodyText);
-                // MP-2c (W2): .NET 10's HttpWebRequest opens one connection per request until the HttpClient transport
-                // (MP-5b), so the redirect cannot reuse the replaced response's connection. On .NET Framework:
-                // Assert.AreEqual(1, server.ConnectionCount, "The redirect did not reuse the connection of the replaced response");
-                Assert.AreEqual(2, server.ConnectionCount);
+                Assert.AreEqual(1, server.ConnectionCount, "The redirect did not reuse the connection of the replaced response");
             }
         }
 
@@ -233,9 +283,9 @@ namespace JDP.Tests {
             }
         }
 
-        // On .NET 10 BeginRead completes synchronously when the data is already buffered, which the
-        // speed limit's sleeps make likely. Starting the next read from the read callback then nested
-        // one level per chunk until the stack overflowed.
+        // A read that completes synchronously (the data is already buffered, which the speed limit's
+        // sleeps make likely) must not nest the next read on the stack; with HttpWebRequest's
+        // BeginRead callbacks it nested one level per chunk until the stack overflowed.
         [TestMethod]
         public void ThrottledLargeDownloadDoesNotNestReads() {
             Settings.MaximumBytesPerSecond = 4 * 1024 * 1024;
@@ -249,7 +299,7 @@ namespace JDP.Tests {
                 int maxDepth = 0;
                 Exception error = null;
 
-                General.DownloadAsync(server.URL("/file"), null, null, null, null, r => { },
+                General.DownloadAsync(server.URL("/file"), null, null, false, null, r => { },
                     (b, n) => {
                         int depth = new System.Diagnostics.StackTrace().FrameCount;
                         minDepth = Math.Min(minDepth, depth);
@@ -277,7 +327,7 @@ namespace JDP.Tests {
                 int exceptions = 0;
                 Exception error = null;
 
-                General.DownloadAsync(server.URL("/file"), null, null, null, null, r => { }, (b, n) => { },
+                General.DownloadAsync(server.URL("/file"), null, null, false, null, r => { }, (b, n) => { },
                     () => { Interlocked.Increment(ref completes); throw failure; },
                     ex => { error = ex; Interlocked.Increment(ref exceptions); done.Set(); });
 
@@ -450,19 +500,23 @@ namespace JDP.Tests {
             }
         }
 
-        // BeginGetResponse blocks during the DNS lookup and proxy detection; a proxy that
-        // doesn't answer until released stands in for a slow lookup. The abort delegate must
-        // be handed back, and work, before the lookup ends.
+        // A DNS lookup that ignores cancellation and doesn't answer until released stands in for a
+        // slow lookup. The abort delegate must be handed back, and work, before the lookup ends.
         [TestMethod]
         public void AbortDuringSlowLookupEndsPromptly() {
-            IWebProxy defaultProxy = WebRequest.DefaultWebProxy;
-            using (var release = new ManualResetEvent(false)) {
+            using (var release = new ManualResetEvent(false))
+            using (var lookupStarted = new ManualResetEvent(false)) {
                 try {
-                    WebRequest.DefaultWebProxy = new BlockingProxy(release);
+                    SSRFGuard.ResolveHost = (host, cancellationToken) => System.Threading.Tasks.Task.Run(new Func<IPAddress[]>(() => {
+                        lookupStarted.Set();
+                        release.WaitOne(TimeSpan.FromSeconds(30));
+                        throw new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostNotFound);
+                    }));
                     DownloadProbe probe = null;
                     var starter = new Thread(() => probe = DownloadProbe.Start("http://slow-lookup.invalid/b/res/1.html"));
                     starter.Start();
                     Assert.IsTrue(starter.Join(Promptly), "DownloadAsync did not return until the lookup ended");
+                    Assert.IsTrue(lookupStarted.WaitOne(Promptly), "The lookup did not start");
 
                     probe.Abort();
 
@@ -471,8 +525,27 @@ namespace JDP.Tests {
                 }
                 finally {
                     release.Set();
-                    WebRequest.DefaultWebProxy = defaultProxy;
+                    SSRFGuard.ResolveHost = Dns.GetHostAddressesAsync;
                 }
+            }
+        }
+
+        // The read loop is iterative: a large body read in many small pieces through the speed limit
+        // (ThrottledStream) completes, where recursion per read could overflow the stack
+        [TestMethod]
+        public void LargeBodyWithASpeedLimitCompletes() {
+            const int fileBytes = 16 * 1024 * 1024;
+            Settings.MaximumBytesPerSecond = 1L << 40;
+            using (var server = new LoopbackHttpServer()) {
+                byte[] body = new byte[fileBytes];
+                new Random(5).NextBytes(body);
+                server.Route("/file", LoopbackResponse.Bytes(body));
+
+                DownloadProbe probe = DownloadProbe.Start(server.URL("/file"));
+
+                probe.AssertEndsOnce(TimeSpan.FromSeconds(60));
+                Assert.AreEqual(1, probe.Completes, probe.Error?.ToString());
+                CollectionAssert.AreEqual(body, probe.Body);
             }
         }
 
@@ -602,7 +675,7 @@ namespace JDP.Tests {
                 server.Route("/next", LoopbackResponse.Bytes(new byte[200000]));
 
                 for (int i = 0; i < 40; i++) {
-                    DownloadProbe probe = DownloadProbe.Start(server.URL("/start"), NewGroup());
+                    DownloadProbe probe = DownloadProbe.Start(server.URL("/start"));
                     Thread.Sleep(random.Next(0, 20));
                     probe.Abort();
                     Assert.IsTrue(probe.Done.WaitOne(Promptly), "Download " + i + " never ended");
@@ -614,10 +687,6 @@ namespace JDP.Tests {
                     Assert.AreEqual(1, probes[i].Callbacks, "Download " + i + " ended " + probes[i].Callbacks + " times");
                 }
             }
-        }
-
-        private static string NewGroup() {
-            return Guid.NewGuid().ToString("N");
         }
 
         private static string HtmlOfSize(int size) {
@@ -651,26 +720,6 @@ namespace JDP.Tests {
             return (int)field.GetValue(null);
         }
 
-        private sealed class BlockingProxy : IWebProxy {
-            private readonly WaitHandle _release;
-
-            public BlockingProxy(WaitHandle release) {
-                _release = release;
-            }
-
-            public ICredentials Credentials { get; set; }
-
-            public Uri GetProxy(Uri destination) {
-                _release.WaitOne(TimeSpan.FromSeconds(30));
-                return destination;
-            }
-
-            public bool IsBypassed(Uri host) {
-                _release.WaitOne(TimeSpan.FromSeconds(30));
-                return true;
-            }
-        }
-
         private sealed class DownloadProbe {
             private readonly MemoryStream _body = new MemoryStream();
             private int _completes;
@@ -690,15 +739,20 @@ namespace JDP.Tests {
                 get { lock (_body) return Encoding.UTF8.GetString(_body.ToArray()); }
             }
 
-            public static DownloadProbe Start(string url, string connectionGroupName = null) {
+            public byte[] Body {
+                get { lock (_body) return _body.ToArray(); }
+            }
+
+            public static DownloadProbe Start(string url) {
                 var probe = new DownloadProbe();
-                probe.Abort = General.DownloadAsync(url, null, null, connectionGroupName, null,
+                probe.Abort = General.DownloadAsync(url, null, null, false, null,
                     probe.OnResponse, probe.OnChunk, probe.OnComplete, probe.OnException);
                 return probe;
             }
 
-            private void OnResponse(HttpWebResponse response) {
-                ProbeHeader = response.Headers["X-Probe"] + "|" + response.ContentType + "|" + response.ContentLength;
+            private void OnResponse(HttpResponseMessage response) {
+                IEnumerable<string> probe;
+                ProbeHeader = (response.Headers.TryGetValues("X-Probe", out probe) ? String.Join(",", probe) : null) + "|" + response.Content.Headers.ContentType + "|" + response.Content.Headers.ContentLength;
                 Responded.Set();
             }
 

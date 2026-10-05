@@ -13,10 +13,15 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 ### Changed
 
 - The Downloads window keeps each finished download listed for about 5 seconds, marked "Done" or "Failed" in the Progress column. A successful download shows its final size. Before, small files often finished between two updates of the list, so the list looked empty while the title showed a download speed. Downloads that fail before the transfer starts (for example a 404 or a connection error) are still not listed.
+- Downloads use secure connections with TLS 1.3 when the server supports it. Before, the app asked for TLS 1.2.
+- Redirects with status 308 (Permanent Redirect) are now followed, like the other redirects. Before, the download failed with "HTTP 308".
+- The `HTTP_PROXY` and `HTTPS_PROXY` environment variables, when set, are now used before the Windows proxy settings.
+- A redirect from an https address to an http address is no longer followed, so a download never falls back to an unencrypted connection. The download fails with the redirect's status, for example "HTTP 302 Found".
 
 ### Security
 
 - A thread address that includes a login, such as `http://name:password@host/...`, no longer leaks that login. Before, image and thumbnail requests to other servers carried it in the Referer header, and links in saved thread pages included it, so sharing a saved thread shared the password. Pages saved before this version keep the old links until the thread is saved again.
+- The page size limit (32 MB) now applies to every thread page, whatever its type (for example a JSON page), and to the page a meta refresh leads to. Before, only HTML pages were limited, so a server could make the app hold an unlimited page in memory.
 
 ## v1.39.0 (2026-10-03)
 

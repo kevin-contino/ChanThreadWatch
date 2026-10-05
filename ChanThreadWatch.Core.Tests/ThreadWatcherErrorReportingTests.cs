@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -16,44 +15,36 @@ namespace JDP.Tests {
             Settings.UseExeDirectoryForSettings = true;
         }
 
+        // A failed TLS handshake is an HttpRequestException (SecureConnectionError) around the
+        // AuthenticationException; the shape was recorded from .NET 10.0.12 against a self-signed certificate
         [TestMethod]
         public void DescribesAnUntrustedCertificateWithTheHost() {
-            var ex = new WebException("trust", WebExceptionStatus.TrustFailure);
-            Assert.AreEqual("certificate not trusted for boards.example.org", ThreadWatcher.DescribeDownloadError(ex, "https://boards.example.org/b/res/1.html"));
+            var reject = new AuthenticationException("The remote certificate is invalid because of errors in the certificate chain: UntrustedRoot");
+            Assert.AreEqual("certificate not trusted for boards.example.org", ThreadWatcher.DescribeDownloadError(TLSFailure(reject), "https://boards.example.org/b/res/1.html"));
+        }
+
+        [TestMethod]
+        public void DescribesARejectedCertificateWithTheHost() {
+            var reject = new AuthenticationException("The remote certificate was rejected by the provided RemoteCertificateValidationCallback.");
+            Assert.AreEqual("certificate not trusted for example.com", ThreadWatcher.DescribeDownloadError(TLSFailure(reject), ThreadURL));
         }
 
         [TestMethod]
         public void DescribesAFailedSecureChannelWithTheHost() {
-            var ex = new WebException("tls", WebExceptionStatus.SecureChannelFailure);
-            Assert.AreEqual("secure connection failed for example.com", ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
-        }
-
-        // .NET 10 wraps a failed TLS handshake as UnknownError around an HttpRequestException; the exact shape
-        // was recorded from HttpWebRequest on .NET 10.0.12 against a self-signed certificate
-        [TestMethod]
-        public void DescribesARejectedCertificateOnNet10LikeNetFramework() {
-            var reject = new AuthenticationException("The remote certificate was rejected by the provided RemoteCertificateValidationCallback.");
-            Assert.AreEqual("certificate not trusted for example.com", ThreadWatcher.DescribeDownloadError(Net10TLSFailure(reject), ThreadURL));
-        }
-
-        [TestMethod]
-        public void DescribesAnotherTLSFailureOnNet10LikeNetFramework() {
             var alert = new AuthenticationException("Authentication failed because the remote party sent a TLS alert: 'ProtocolVersion'.");
-            Assert.AreEqual("secure connection failed for example.com", ThreadWatcher.DescribeDownloadError(Net10TLSFailure(alert), ThreadURL));
+            Assert.AreEqual("secure connection failed for example.com", ThreadWatcher.DescribeDownloadError(TLSFailure(alert), ThreadURL));
         }
 
-        private static WebException Net10TLSFailure(Exception inner) {
-            const string message = "The SSL connection could not be established, see inner exception.";
-            var httpEx = new HttpRequestException(HttpRequestError.SecureConnectionError, message, inner);
-            return new WebException(message, httpEx, WebExceptionStatus.UnknownError, null);
+        private static HttpRequestException TLSFailure(Exception inner) {
+            return new HttpRequestException(HttpRequestError.SecureConnectionError, "The SSL connection could not be established, see inner exception.", inner);
         }
 
-        // .NET 10 ends a read past ReadWriteTimeout this way, .NET Framework with a WebException (Timeout)
         [TestMethod]
-        public void DescribesASocketReadTimeoutLikeAWebExceptionTimeout() {
-            var ex = new IOException("Unable to read data from the transport connection.", new SocketException((int)SocketError.TimedOut));
-            Assert.AreEqual(ThreadWatcher.DescribeDownloadError(new WebException("timeout", WebExceptionStatus.Timeout), ThreadURL), ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
-            Assert.AreEqual("timed out connecting to example.com", ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
+        public void DescribesAHostThatIsNotFoundOrUnreachable() {
+            var notFound = new HttpRequestException(HttpRequestError.NameResolutionError, "No such host is known. (example.com:80)", new SocketException((int)SocketError.HostNotFound));
+            var refused = new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made because the target machine actively refused it. (example.com:80)", new SocketException((int)SocketError.ConnectionRefused));
+            Assert.AreEqual("host not found: example.com", ThreadWatcher.DescribeDownloadError(notFound, ThreadURL));
+            Assert.AreEqual("cannot connect to example.com", ThreadWatcher.DescribeDownloadError(refused, ThreadURL));
         }
 
         [TestMethod]
@@ -62,15 +53,47 @@ namespace JDP.Tests {
             Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(ex, ThreadURL));
         }
 
+        // The server closed the connection before the whole response head arrived
+        [TestMethod]
+        public void DescribesAResponseThatEndedEarlyAsALostConnection() {
+            var ended = new HttpRequestException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+            var reset = new HttpRequestException(HttpRequestError.Unknown, "An error occurred while sending the request.",
+                new IOException("Unable to read data from the transport connection.", new SocketException((int)SocketError.ConnectionReset)));
+            Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(ended, ThreadURL));
+            Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(reset, ThreadURL));
+        }
+
+        // A lookup that found no address, whatever error wraps it
+        [TestMethod]
+        [DataRow(SocketError.HostNotFound)]
+        [DataRow(SocketError.NoData)]
+        [DataRow(SocketError.TryAgain)]
+        public void DescribesAFailedLookupAsHostNotFound(SocketError error) {
+            var lookup = new SocketException((int)error);
+            var connect = new HttpRequestException(HttpRequestError.ConnectionError, "No data of the requested type was found. (example.com:80)", lookup);
+            var unknown = new HttpRequestException(HttpRequestError.Unknown, "An error occurred.", new IOException("lookup", lookup));
+            Assert.AreEqual("host not found: example.com", ThreadWatcher.DescribeDownloadError(connect, ThreadURL));
+            Assert.AreEqual("host not found: example.com", ThreadWatcher.DescribeDownloadError(unknown, ThreadURL));
+            Assert.AreEqual("host not found: example.com", ThreadWatcher.DescribeDownloadError(lookup, ThreadURL));
+        }
+
         [TestMethod]
         public void DescribesANetworkReadFailureAsALostConnection() {
             Assert.AreEqual("connection lost", ThreadWatcher.DescribeDownloadError(new IOException("reset"), ThreadURL));
         }
 
+        // A socket that times out is not a lost connection
+        [TestMethod]
+        public void DescribesASocketTimeoutAsATimeout() {
+            var timedOut = new IOException("Unable to read data from the transport connection.", new SocketException((int)SocketError.TimedOut));
+            Assert.AreEqual("timed out connecting to example.com", ThreadWatcher.DescribeDownloadError(timedOut, ThreadURL));
+        }
+
         [TestMethod]
         public void DescribesOtherErrorsByTheirMessage() {
-            Assert.AreEqual("Timed out while waiting for response", ThreadWatcher.DescribeDownloadError(new Exception("Timed out while waiting for response."), ThreadURL));
-            Assert.AreEqual("Some other failure", ThreadWatcher.DescribeDownloadError(new WebException("Some other failure", WebExceptionStatus.ReceiveFailure), ThreadURL));
+            Assert.AreEqual("Timed out while waiting for response", ThreadWatcher.DescribeDownloadError(new TimeoutException("Timed out while waiting for response."), ThreadURL));
+            Assert.AreEqual("HTTP 403 Forbidden", ThreadWatcher.DescribeDownloadError(new HTTPStatusException(403, "HTTP 403 Forbidden"), ThreadURL));
+            Assert.AreEqual("The server returned an invalid or unrecognized response", ThreadWatcher.DescribeDownloadError(new HttpRequestException(HttpRequestError.InvalidResponse, "The server returned an invalid or unrecognized response."), ThreadURL));
         }
 
         // B22: a link to a file that is not on disk is made absolute and attribute-encoded
