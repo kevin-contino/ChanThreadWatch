@@ -15,7 +15,7 @@ namespace JDP.Tests {
         private const string InfinitechanURL = "https://8ch.net/tech/res/100.html";
 
         [TestMethod]
-        // PendingUnix: on Unix, General.GetAbsoluteURL resolves a root-relative link such as "/b/src/1001.jpg" to file:///b/src/1001.jpg, because Uri.TryCreate reads a leading "/" as an absolute file path there, see MP-4a
+        // PendingUnix: Path.GetInvalidFileNameChars on Unix holds only '/' and NUL, so the file name of "1005.webm?x=1&y=2" keeps its '?', see MP-4b
         [TestCategory("PendingUnix")]
         public void GenericGetImages() {
             AssertGetImages("http://example.com/b/res/1.html", "generic-thread.html", "generic-images");
