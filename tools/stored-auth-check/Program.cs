@@ -21,9 +21,16 @@ namespace JDP {
             string settingsPath = Path.Combine(args[1], "settings.txt");
             string threadsPath = Path.Combine(args[1], "threads.txt");
             Console.WriteLine(RuntimeInformation.FrameworkDescription + ": " + args[0] + " " + args[1]);
-            if (args[0] == "write") return WriteAndCheck(settingsPath, threadsPath);
+            if (args[0] == "write") return WriteIfLoginsAreKept(settingsPath, threadsPath);
             if (args[0] == "read") return Check(Read(settingsPath, threadsPath)) ? 0 : 1;
             return Usage();
+        }
+
+        // Elsewhere logins are written empty, which read would then report as a mismatch
+        private static int WriteIfLoginsAreKept(string settingsPath, string threadsPath) {
+            if (StoredAuth.CanProtect) return WriteAndCheck(settingsPath, threadsPath);
+            Console.Error.WriteLine("This system can't keep saved logins (no DPAPI), so write has nothing to check; run it on Windows");
+            return 1;
         }
 
         // Never overwrites a settings folder in use, which would replace a user's settings and saved logins
@@ -104,7 +111,7 @@ namespace JDP {
     }
 
 #if NETFRAMEWORK
-    // StoredAuth and TextFile log through Logger, which is part of Core
+    // StoredAuth, its backends and TextFile log through Logger, which is part of Core
     internal static class Logger {
         public static void Log(string message) {
             Console.Error.WriteLine(message);

@@ -126,12 +126,11 @@ namespace JDP.Tests {
 
         // Once after each load: a copy written again later in the session is left alone
         [TestMethod]
-        // PendingUnix: StoredAuth.Protect uses DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void FirstSaveBlanksPlaintextLoginsInExistingSettingsCopiesOnce() {
             string copy = _path + ".corrupt-20200101-000000-000";
             string encryptedCopy = _path + ".corrupt-20200102-000000-000";
-            string[] encryptedLines = { "PageAuth=" + StoredAuth.Protect("u:p"), "UseSlug=1" };
+            // Only its form matters here (copies keep encrypted values), so it needs no backend
+            string[] encryptedLines = { "PageAuth=" + StoredAuth.Prefix + "ZmFrZSBlbmNyeXB0ZWQgbG9naW4=", "UseSlug=1" };
             string threadListCopy = Path.Combine(_dir, "threads.txt.corrupt-20200101-000000-000");
             File.WriteAllLines(copy, OldCopyLines);
             File.WriteAllLines(encryptedCopy, encryptedLines);

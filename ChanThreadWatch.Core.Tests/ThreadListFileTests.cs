@@ -92,7 +92,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void Version1FileLoadsAndRoundTrips() {
             List<ThreadInfo> threads = ThreadListFile.Parse(Version1Lines()).Threads;
@@ -108,7 +108,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void Version2FileLoadsAndRoundTrips() {
             List<ThreadInfo> threads = ThreadListFile.Parse(Version2Lines()).Threads;
@@ -132,7 +132,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void Version4FileLoadsAndRoundTrips() {
             List<ThreadInfo> threads = ThreadListFile.Parse(Version4Lines()).Threads;
@@ -148,7 +148,7 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void Version4FileIsWrittenLineForLine() {
             List<ThreadInfo> threads = ThreadListFile.Parse(Version4Lines()).Threads;
@@ -164,8 +164,6 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void LineBreaksInValuesDoNotShiftTheFile() {
             List<ThreadInfo> threads = ThreadListFile.Parse(Version4Lines()).Threads;
             threads[0].Description = "two\r\nlines\nhere";
@@ -314,7 +312,7 @@ namespace JDP.Tests {
         // A backup written before logins were encrypted is rewritten by the first save, with
         // its own threads (not the saved list) and encrypted logins
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void FirstSaveEncryptsPlaintextLoginsInTheBackup() {
             string backupPath = _path + ".bak";
@@ -336,7 +334,7 @@ namespace JDP.Tests {
 
         // E.g. antivirus or a sync tool holding the backup during the first save
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
+        // PendingUnix: a saved login reads back only with a backend that keeps it (DPAPI on Windows; Keychain or libsecret, not built yet), see MP-4c
         [TestCategory("PendingUnix")]
         public void BackupInUseDuringTheFirstSaveIsEncryptedByALaterSave() {
             string backupPath = _path + ".bak";
@@ -388,8 +386,6 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void BackupWithoutPlaintextLoginsIsLeftAsItIs() {
             string backupPath = _path + ".bak";
             string[] encrypted = ThreadListFile.GetBackupLines(Version1Lines());
@@ -420,14 +416,15 @@ namespace JDP.Tests {
             return bytes.ToArray();
         }
 
+        // Only its form matters here (copies keep encrypted values), so it needs no backend
+        private const string EncryptedLogin = StoredAuth.Prefix + "ZmFrZSBlbmNyeXB0ZWQgbG9naW4=";
+
         private static readonly string[] PlaintextLogins = { "user:pass", "img:pass", "late:pass" };
         private static readonly string[] NoLogins = { "", "", "" };
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void CopyOfAFileWithPlaintextLoginsHoldsNoneAndKeepsEveryOtherByte() {
-            string encrypted = StoredAuth.Protect("enc:pass");
+            string encrypted = EncryptedLogin;
             File.WriteAllBytes(_path, MixedThreadListBytes(PlaintextLogins, encrypted));
             ThreadListStore store = new ThreadListStore();
 
@@ -448,12 +445,10 @@ namespace JDP.Tests {
         private static readonly string[] BlankedOldCopyLines = { "4", "https://boards.4chan.org/a/thread/1", "", "", "abc" };
 
         [TestMethod]
-        // PendingUnix: saving a login encrypts it with DPAPI, which exists only on Windows, see MP-4c
-        [TestCategory("PendingUnix")]
         public void FirstSaveBlanksPlaintextLoginsInExistingCopiesOnce() {
             string plainCopy = CopyPath("20200101-000000-000");
             string encryptedCopy = CopyPath("20200102-000000-000");
-            string[] encryptedLines = { "4", "https://boards.4chan.org/a/thread/1", StoredAuth.Protect("u:p"), "", "abc" };
+            string[] encryptedLines = { "4", "https://boards.4chan.org/a/thread/1", EncryptedLogin, "", "abc" };
             string otherFile = Path.Combine(_dir, "settings.txt.corrupt-20200101-000000-000");
             File.WriteAllLines(_path, Version4Lines());
             File.WriteAllLines(plainCopy, OldCopyLines);

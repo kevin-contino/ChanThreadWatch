@@ -63,9 +63,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c.
-        // Off Windows the SaveDir Cat\a_1 is read as Cat/a_1 (MP-4b) and saved back in that form, so the
-        // file is no longer byte for byte the same there; MP-4c has to compare it with that line changed.
+        // PendingUnix: off Windows the SaveDir Cat_1 is read as Cat/a_1 (MP-4b) and saved back in that
+        // form, so the file is not byte for byte the same there; it needs a per-OS expected file, see MP-4b
         [TestCategory("PendingUnix")]
         public void ALoadedThreadListIsSavedBackUnchanged() {
             File.WriteAllLines(_threadListPath, SterileThreadListLines());
@@ -153,7 +152,8 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
-        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c
+        // PendingUnix: not yet run off Windows since the SaveDir (MP-4b) and DPAPI (MP-4c) blockers were
+        // fixed; untag once a Linux run confirms it, see MP-4b
         [TestCategory("PendingUnix")]
         public void ADuplicateEntryFailsTheLoadAndKeepsTheFirst() {
             List<string> lines = new List<string>(SterileThreadListLines());

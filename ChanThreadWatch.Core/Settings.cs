@@ -11,6 +11,9 @@ namespace JDP {
         private static bool _saveBlocked;
         private static bool _checkedCopies;
         private static readonly string[] _authSettingNames = { "PageAuth", "ImageAuth" };
+        // Logins set on a system that can't keep them (see StoredAuth.CanProtect): used for the
+        // session only, while the file keeps what it had
+        private static Dictionary<string, string> _sessionAuth = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public static string ApplicationName {
             get { return "Chan Thread Watch"; }
@@ -370,7 +373,11 @@ namespace JDP {
 
         // Logins are kept in their on-disk form (see StoredAuth) and decrypted when read.
         private static string GetAuth(string name) {
-            string value = Get(name);
+            string value;
+            lock (_sync) {
+                if (_sessionAuth.TryGetValue(name, out value)) return value;
+            }
+            value = Get(name);
             return value != null ? StoredAuth.Unprotect(value) : null;
         }
 
@@ -428,11 +435,34 @@ namespace JDP {
 
         // Setting the login that is already read back keeps the stored value, so a saved login
         // that can't be decrypted (read as empty) survives until a different login is set.
+        // A login this system can't keep is used for the session only.
         private static void SetAuth(string name, string value) {
             lock (_sync) {
                 if (value == GetAuth(name)) return;
-                Set(name, value != null ? StoredAuth.Protect(value) : null);
+                if (ClearsSessionLoginOnly(name, value)) {
+                    _sessionAuth.Remove(name);
+                    return;
+                }
+                string stored = value != null ? StoredAuth.Protect(value) : null;
+                _sessionAuth.Remove(name);
+                if (IsNotKept(value, stored)) {
+                    _sessionAuth[name] = TextFile.ToSingleLine(value);
+                }
+                else {
+                    Set(name, stored);
+                }
             }
+        }
+
+        // Clearing a session login keeps an encrypted value the file still holds (e.g. one
+        // from Windows), as the login read back is then empty anyway
+        private static bool ClearsSessionLoginOnly(string name, string value) {
+            return String.IsNullOrEmpty(value) && _sessionAuth.ContainsKey(name) && StoredAuth.IsProtected(Get(name));
+        }
+
+        // True for a login that Protect gave back nothing for
+        private static bool IsNotKept(string value, string stored) {
+            return stored != null && stored.Length == 0 && TextFile.ToSingleLine(value).Length != 0;
         }
 
         private static void SetBool(string name, bool? value) {
@@ -474,6 +504,7 @@ namespace JDP {
             }
             lock (_sync) {
                 _settings = settings;
+                _sessionAuth = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 _saveBlocked = saveBlocked;
                 _checkedCopies = false;
             }
@@ -581,7 +612,8 @@ namespace JDP {
         }
 
         // Plaintext logins loaded from a file written by an older version are encrypted
-        // when the settings are written back.
+        // when the settings are written back, or written empty on a system that can't keep
+        // them (see StoredAuth.CanProtect).
         private static string ToStoredValue(string name, string value) {
             return IsAuthSettingName(name) && !StoredAuth.IsProtected(value) ? StoredAuth.Protect(value) : value;
         }
