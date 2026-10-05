@@ -1,26 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
     <AssemblyName>ChanThreadWatch.Core</AssemblyName>
     <RootNamespace>JDP</RootNamespace>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <!-- The explicit .net48 reference package is used everywhere, so the lock file does not depend on whether the machine has the targeting pack -->
-    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <!-- dotnet publish -r passes the app's runtime identifier to Core too, so the locked restore needs Core's lock file
+         to list the release architectures (see ChanThreadWatch.csproj) -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <!-- The app ships as a single-file exe, so code that needs a file path for an assembly is reported -->
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Provides .NET 4.8 reference assemblies so the build does not need the Developer Pack installed -->
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- System.Drawing is used only for Settings.ClientSize -->
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.Security" />
-    <Reference Include="System.Web" />
+    <!-- DPAPI for saved logins (StoredAuth). It is part of the Windows Desktop runtime, but Core targets plain net10.0 -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>

@@ -405,7 +405,8 @@ def substitute(fixture_html):
 
 
 def helper_result(helper, url, html_path):
-    command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", RESULT_SCRIPT,
+    # PowerShell 7 (pwsh), not Windows PowerShell: ChanThreadWatch.Core targets .NET 10
+    command = ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", RESULT_SCRIPT,
                "-CoreDll", CORE_DLL_PATH, "-Helper", helper, "-Url", url, "-Html", html_path]
     output = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
     if output.returncode != 0:

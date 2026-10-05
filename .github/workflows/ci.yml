@@ -18,7 +18,7 @@ jobs:
   build-and-test:
     name: Build and test
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -28,11 +28,9 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
-
-      # Visual Studio MSBuild is required: the SDK's MSBuild cannot build the forms' non-string resx resources
+      # Visual Studio MSBuild cannot build the .NET 10 projects; the SDK builds the forms' resx itself
       - name: Build
-        run: msbuild ChanThreadWatch.sln -restore -p:RestoreLockedMode=true -p:Configuration=Release -v:minimal -nologo
+        run: dotnet build ChanThreadWatch.sln -c Release -p:RestoreLockedMode=true -v:minimal -nologo
 
       - name: Test
         run: dotnet test ChanThreadWatch.sln -c Release --no-build --filter "TestCategory!=UI" --logger trx --results-directory TestResults
@@ -40,6 +38,26 @@ jobs:
       # Launches the built app and drives its window; the hosted Windows runner has an interactive desktop
       - name: UI test
         run: dotnet test ChanThreadWatch.UITests/ChanThreadWatch.UITests.csproj -c Release --no-build --filter "TestCategory=UI" --logger trx --results-directory TestResults
+
+      # Saved logins (DPAPI) written by the .NET Framework 4.8 app decrypt in the .NET 10 app and the reverse,
+      # for settings.txt and threads.txt, under this job's one user
+      - name: Saved logins across .NET Framework 4.8 and .NET 10
+        shell: pwsh
+        run: ./.github/scripts/test-stored-auth-cross-runtime.ps1
+
+      # The release exes: self-contained single files for x64 and arm64
+      - name: Publish
+        shell: pwsh
+        run: ./.github/scripts/publish-app.ps1
+
+      # Starts the published x64 exe from a temp folder, with settings.txt next to it and then without it (the
+      # runner's own AppData; this runner is a throwaway VM). Each run must reach the main window, save its
+      # settings in the expected folder and exit with code 0. The arm64 exe cannot run on this x64 runner.
+      - name: Start the published exe
+        shell: pwsh
+        run: |
+          ./.github/scripts/test-published-app.ps1 -ExePath publish/ChanThreadWatch-win-x64.exe -Mode Portable
+          ./.github/scripts/test-published-app.ps1 -ExePath publish/ChanThreadWatch-win-x64.exe -Mode AppData
 
       # A failed UI test saves a PNG of the app window (or the whole desktop) under TestResults
       - name: Upload test results

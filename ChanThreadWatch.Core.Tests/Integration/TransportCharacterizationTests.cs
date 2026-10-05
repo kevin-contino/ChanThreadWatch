@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -218,7 +219,8 @@ namespace JDP.Tests.Integration {
         [DataRow(302, "Found", "ok")]
         [DataRow(303, "See Other", "ok")]
         [DataRow(307, "Temporary Redirect", "ok")]
-        [DataRow(308, "Permanent Redirect", "HTTP 308")]
+        // MP-2c (W2): .NET Framework's HttpWebRequest did not follow 308 ("HTTP 308"); .NET 10's does. MP-5b decides.
+        [DataRow(308, "Permanent Redirect", "ok")]
         public void RedirectStatusesThatAreFollowed(int status, string reason, string expected) {
             LoopbackHttpServer server = StartServer();
             server.Route("/start", Redirect(status, reason, "/end"));
@@ -340,7 +342,10 @@ namespace JDP.Tests.Integration {
             Assert.HasCount(2, pageRequests);
             Assert.AreNotEqual(pageRequests[0].ConnectionId, pageRequests[1].ConnectionId);
             Assert.HasCount(2 + 4 + 3, server.Requests);
-            Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
+            // MP-2c (W2): .NET 10's HttpWebRequest opens one connection per request (no keep-alive reuse) until the
+            // HttpClient transport (MP-5b). On .NET Framework there were fewer connections than requests:
+            // Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
+            Assert.AreEqual(server.Requests.Count, server.ConnectionCount);
         }
 
         // A retry of a file goes out on a new connection
@@ -725,8 +730,16 @@ namespace JDP.Tests.Integration {
             WebException webEx = ex as WebException;
             if (webEx != null && webEx.Status == WebExceptionStatus.Timeout) return "timeout";
             if (ex.Message.StartsWith("Timed out", StringComparison.Ordinal)) return "timeout";
+            // MP-2c: on .NET 10 the read timeout of HttpWebRequest ends a blocking read with an IOException around a
+            // timed out SocketException instead of a WebException with status Timeout (.NET Framework). The app
+            // reports both with the same text.
+            if (ThreadWatcher.DescribeDownloadError(ex, "http://example.com/").StartsWith("timed out connecting to ", StringComparison.Ordinal)) return "timeout";
             HttpWebResponse response = webEx?.Response as HttpWebResponse;
             if (response != null) return "HTTP " + (int)response.StatusCode;
+            // MP-2c: a protocol error now carries its status as the message ("HTTP 302 Found") instead of
+            // the closed response, which .NET 10 cannot read (General.WithoutResponse)
+            Match status = Regex.Match(ex.Message, @"^HTTP \d{3}\b");
+            if (webEx != null && webEx.Status == WebExceptionStatus.ProtocolError && status.Success) return status.Value;
             return "failed";
         }
 

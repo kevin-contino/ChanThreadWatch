@@ -22,7 +22,10 @@ namespace JDP.Tests {
         public void ThreadWatcherDoesNotDisableCertificateValidation() {
             RuntimeHelpers.RunClassConstructor(typeof(ThreadWatcher).TypeHandle);
 
+            // SYSLIB0014: the HttpWebRequest transport reads this callback until MP-5b
+#pragma warning disable SYSLIB0014
             Assert.IsNull(ServicePointManager.ServerCertificateValidationCallback);
+#pragma warning restore SYSLIB0014
         }
 
         // S2

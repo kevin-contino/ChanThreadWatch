@@ -11,6 +11,8 @@ updates:
       - /ChanThreadWatch.Core
       - /ChanThreadWatch.Core.Tests
       - /ChanThreadWatch.Tests
+      - /ChanThreadWatch.UITests
+      - /tools/stored-auth-check
     schedule:
       interval: weekly
     groups:

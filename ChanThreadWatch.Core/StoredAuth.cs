@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -30,6 +31,7 @@ namespace JDP {
         public static string Protect(string auth) {
             string line = TextFile.ToSingleLine(auth);
             if (line.Length == 0) return String.Empty;
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) throw NotSupported();
             byte[] data = ProtectedData.Protect(Encoding.UTF8.GetBytes(line), _entropy, DataProtectionScope.CurrentUser);
             return Prefix + Convert.ToBase64String(data);
         }
@@ -54,6 +56,7 @@ namespace JDP {
         }
 
         private static string TryDecrypt(string base64) {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) throw NotSupported();
             try {
                 byte[] data = ProtectedData.Unprotect(Convert.FromBase64String(base64), _entropy, DataProtectionScope.CurrentUser);
                 return Encoding.UTF8.GetString(data);
@@ -62,6 +65,12 @@ namespace JDP {
                 ReportOnce(base64, ex);
                 return String.Empty;
             }
+        }
+
+        // DPAPI exists only on Windows. Saved logins on other systems wait for MP-4c (gate G2).
+        // RuntimeInformation rather than OperatingSystem.IsWindows: tools/stored-auth-check also builds this file for .NET Framework.
+        private static PlatformNotSupportedException NotSupported() {
+            return new PlatformNotSupportedException("Saved logins can only be encrypted and decrypted on Windows.");
         }
 
         // Logs each undecryptable value once per session, so the periodic backup doesn't

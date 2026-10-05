@@ -34,10 +34,8 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
-
       - name: Build
-        run: msbuild ChanThreadWatch.sln -restore -p:Configuration=Release -v:minimal -nologo
+        run: dotnet build ChanThreadWatch.sln -c Release -v:minimal -nologo
 
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:

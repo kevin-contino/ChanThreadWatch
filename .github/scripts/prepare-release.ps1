@@ -44,6 +44,9 @@ $files = @($env:RELEASE_FILES -split ' ' | Where-Object { $_ })
 foreach ($file in $files) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Release file not found: $file" }
 }
+# Assets are uploaded by file name, so two files with one name (e.g. the exe of two architectures) would collide
+$duplicates = @($files | ForEach-Object { Split-Path $_ -Leaf } | Group-Object | Where-Object Count -gt 1)
+if ($duplicates) { throw "Release file names must be unique: $($duplicates.Name -join ', ')" }
 
 # LF line endings, so sha256sum -c also works on Linux
 $sums = Get-FileHash -LiteralPath $files -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }

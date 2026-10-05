@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -50,7 +51,10 @@ namespace JDP.Tests.Integration {
             foreach (KeyValuePair<string, byte[]> image in fixture.Images) {
                 CollectionAssert.AreEqual(image.Value, File.ReadAllBytes(Path.Combine(watcher.ThreadDownloadDirectory, FourChanThreadFixture.FileName(image.Key))), image.Key);
             }
-            Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
+            // MP-2c (W2): .NET 10's HttpWebRequest opens one connection per request (no keep-alive reuse) until the
+            // HttpClient transport (MP-5b). On .NET Framework there were fewer connections than requests:
+            // Assert.IsLessThan(server.Requests.Count, server.ConnectionCount);
+            Assert.AreEqual(server.Requests.Count, server.ConnectionCount);
         }
 
         [TestMethod]
@@ -314,6 +318,7 @@ namespace JDP.Tests.Integration {
         // S6: a saved login that can't be decrypted is loaded as empty, so no request carries
         // the stored ciphertext or any other credential
         [TestMethod]
+        [SupportedOSPlatform("windows")]
         public void UndecryptableSavedLoginSendsNoCredentials() {
             var fixture = new FourChanThreadFixture();
             LoopbackHttpServer server = StartServer();

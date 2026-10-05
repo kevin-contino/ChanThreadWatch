@@ -13,8 +13,8 @@ namespace JDP {
         private static void Main() {
             SetHostVersion();
             InstallExceptionHandlers();
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
+            // Visual styles, text rendering, DPI mode and default font, from the Application* properties in ChanThreadWatch.csproj
+            ApplicationConfiguration.Initialize();
             if (!ObtainMutex()) {
                 MessageBox.Show("Another instance of this program is running.", "Already Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
@@ -77,15 +77,19 @@ namespace JDP {
             SecurityIdentifier sid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
             MutexSecurity security = new MutexSecurity();
             bool useDefaultSecurity = !TryAddAccessRules(security, sid);
-            string name = @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
-                settingsFolder.ToUpperInvariant())).ToString("X16");
-            Mutex mutex = CreateMutex(name, useDefaultSecurity, security);
+            Mutex mutex = CreateMutex(GetMutexName(settingsFolder), useDefaultSecurity, security);
             if (!TryAcquireMutex(mutex)) {
                 return false;
             }
             ReleaseMutex();
             _mutex = mutex;
             return true;
+        }
+
+        // One instance per settings folder. Older versions use the same name, so they exclude each other too.
+        internal static string GetMutexName(string settingsFolder) {
+            return @"Global\ChanThreadWatch_" + General.Calculate64BitMD5(Encoding.UTF8.GetBytes(
+                settingsFolder.ToUpperInvariant())).ToString("X16");
         }
 
         // Returns false if the platform does not support the access rules (Mono).
@@ -106,11 +110,29 @@ namespace JDP {
         }
 
         private static Mutex CreateMutex(string name, bool useDefaultSecurity, MutexSecurity security) {
-            bool createdNew;
             if (useDefaultSecurity) {
                 return new Mutex(false, name);
             }
-            return new Mutex(false, name, out createdNew, security);
+            // If the owner exits between the failed create and the open, try again, so the mutex is
+            // never created without its ACL. .NET Framework retried the same way.
+            for (int attempt = 1; attempt < 10; attempt++) {
+                Mutex mutex = TryCreateOrOpenMutex(name, security);
+                if (mutex != null) return mutex;
+            }
+            return MutexAcl.Create(false, name, out _, security);
+        }
+
+        // Returns null if the mutex existed when the create was denied but was gone before the open.
+        private static Mutex TryCreateOrOpenMutex(string name, MutexSecurity security) {
+            try {
+                return MutexAcl.Create(false, name, out _, security);
+            }
+            catch (UnauthorizedAccessException) {
+                // The mutex already exists and its ACL denies the full access MutexAcl.Create asks for.
+                // Open it with only the rights a wait and a release need.
+                Mutex mutex;
+                return MutexAcl.TryOpenExisting(name, MutexRights.Synchronize | MutexRights.Modify, out mutex) ? mutex : null;
+            }
         }
 
         // Returns false if another process holds the mutex. An abandoned mutex counts as acquired.

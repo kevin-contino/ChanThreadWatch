@@ -219,7 +219,9 @@ namespace JDP.UITests {
         private AutomationElement[] ProcessMenus() {
             try {
                 AutomationElement[] processWindows = _automation.GetDesktop().FindAllChildren(cf => cf.ByProcessId(_process.Id));
-                return processWindows.Concat(processWindows.SelectMany(w => w.FindAllChildren())).Where(IsMenu).ToArray();
+                AutomationElement[] menus = processWindows.Concat(processWindows.SelectMany(w => w.FindAllChildren())).Where(IsMenu).ToArray();
+                // On .NET 10 an open submenu shows under the item it opened from (menu > item > submenu)
+                return menus.Concat(menus.SelectMany(m => m.FindAllDescendants(cf => cf.ByControlType(ControlType.Menu)))).ToArray();
             }
             catch (Exception e) when (IsFromClosingMenu(e)) {
                 return new AutomationElement[0];

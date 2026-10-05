@@ -1,7 +1,7 @@
 # Runs a site helper from the built ChanThreadWatch.Core.dll on a saved page and prints what it finds
 # as JSON: whether it is a thread page, the images, the thumbnails and the cross links.
 # Used by sanitize_site_fixture.py to check that a fixture gives the same results as its capture.
-# Requires Windows PowerShell 5.1 (the app targets .NET Framework 4.8).
+# Requires PowerShell 7 on .NET 10 or later (pwsh 7.6+): ChanThreadWatch.Core targets net10.0, which Windows PowerShell 5.1 cannot load.
 param(
     [Parameter(Mandatory = $true)][string]$CoreDll,
     [Parameter(Mandatory = $true)][string]$Helper,
@@ -9,6 +9,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Html
 )
 $ErrorActionPreference = 'Stop'
+if ([Environment]::Version.Major -lt 10) { throw "PowerShell runs on .NET $([Environment]::Version); ChanThreadWatch.Core needs .NET 10 (pwsh 7.6 or later)" }
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 $assembly = [Reflection.Assembly]::LoadFrom($CoreDll)

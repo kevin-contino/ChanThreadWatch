@@ -4,6 +4,12 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 
 ## v1.40.0 (unreleased)
 
+### Before you upgrade
+
+- The download is now one self-contained exe per processor type: `ChanThreadWatch-win-x64.exe` for most PCs and `ChanThreadWatch-win-arm64.exe` for Windows on ARM. It no longer needs .NET Framework or any other .NET install, so the file is much larger (about 50 MB). Use `SHA256SUMS.txt` to check the files.
+- Windows 10 (version 1607 or later) or Windows 11 is required. On Windows on ARM, `ChanThreadWatch-win-arm64.exe` needs Windows 11, or Windows 10 version 21H2 or later, as listed in the .NET 10 supported systems. 32-bit Windows, Windows 7 and Windows 8.1 are no longer supported.
+- To upgrade, put the new exe in the folder of the old one. Your settings, thread list and saved logins carry over, also when the new exe has a different name. You can then delete the old `ChanThreadWatch.exe`, `ChanThreadWatch.exe.config` and `ChanThreadWatch.Core.dll`.
+
 ### Security
 
 - A thread address that includes a login, such as `http://name:password@host/...`, no longer leaks that login. Before, image and thumbnail requests to other servers carried it in the Referer header, and links in saved thread pages included it, so sharing a saved thread shared the password. Pages saved before this version keep the old links until the thread is saved again.

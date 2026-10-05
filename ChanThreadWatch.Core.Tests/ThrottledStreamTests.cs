@@ -71,7 +71,7 @@ namespace JDP.Tests {
             // Let the clock move so the first read is over the limit and sleeps (about 1000 s)
             Thread.Sleep(50);
             var reader = new Thread(() => {
-                try { stream.Read(new byte[1000], 0, 1000); }
+                try { _ = stream.Read(new byte[1000], 0, 1000); }
                 catch (ObjectDisposedException) { }
             }) { IsBackground = true };
             reader.Start();
