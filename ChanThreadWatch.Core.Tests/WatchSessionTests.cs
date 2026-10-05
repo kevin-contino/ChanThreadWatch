@@ -63,6 +63,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
+        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c;
+        // its SaveDir Cat\a_1 uses a backslash separator, see MP-4b
+        [TestCategory("PendingUnix")]
         public void ALoadedThreadListIsSavedBackUnchanged() {
             File.WriteAllLines(_threadListPath, SterileThreadListLines());
             string originalHash = Sha256(_threadListPath);
@@ -101,6 +104,9 @@ namespace JDP.Tests {
         }
 
         [TestMethod]
+        // PendingUnix: the thread list holds a DPAPI login, and decrypting one throws off Windows, see MP-4c;
+        // its SaveDir Cat\a_1 uses a backslash separator, see MP-4b
+        [TestCategory("PendingUnix")]
         public void ADuplicateEntryFailsTheLoadAndKeepsTheFirst() {
             List<string> lines = new List<string>(SterileThreadListLines());
             // The third thread again, as a fourth entry with another description

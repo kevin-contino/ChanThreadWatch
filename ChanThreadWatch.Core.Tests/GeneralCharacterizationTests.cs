@@ -35,6 +35,8 @@ namespace JDP.Tests {
         // .NET Framework checked the limit against the normalized path, so a folder written with
         // "." or ".." segments or doubled separators gets the same names as its normal form
         [TestMethod]
+        // PendingUnix: the folder is written with backslash separators, see MP-4b
+        [TestCategory("PendingUnix")]
         [DataRow(@"sub\..")]
         [DataRow(@".\.")]
         [DataRow(@"\\\")]

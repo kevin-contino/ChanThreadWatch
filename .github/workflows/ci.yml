@@ -67,9 +67,58 @@ jobs:
           name: test-results
           path: TestResults
 
+  # ChanThreadWatch.Core on each OS. Linux and macOS skip the tests marked PendingUnix (each names
+  # the MP-4 row that fixes it); Windows runs them all. Only "Core tests" below is a required check.
+  core-tests:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            filter: TestCategory!=UI
+          - os: ubuntu-latest
+            filter: TestCategory!=PendingUnix&TestCategory!=UI
+          - os: macos-latest
+            filter: TestCategory!=PendingUnix&TestCategory!=UI
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+        run: dotnet test ChanThreadWatch.Core.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"
+        shell: bash
+
+  # One stable check name for all the legs: passes only if every leg succeeded, so a failed,
+  # cancelled or skipped matrix fails this required check
+  core-tests-result:
+    name: Core tests
+    needs: [core-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the legs
+        env:
+          RESULT: ${{ needs.core-tests.result }}
+        run: |
+          echo "Core tests legs: $RESULT"
+          if [ "$RESULT" != "success" ]; then
+            exit 1
+          fi
+
   offline-page-script:
     name: Offline page script
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
