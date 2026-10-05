@@ -18,6 +18,13 @@ User-visible changes to Chan Thread Watch. Each merged change that users can see
 - The `HTTP_PROXY` and `HTTPS_PROXY` environment variables, when set, are now used before the Windows proxy settings.
 - A redirect from an https address to an http address is no longer followed, so a download never falls back to an unencrypted connection. The download fails with the redirect's status, for example "HTTP 302 Found".
 
+### Fixed
+
+- Some folder names that contain `%` followed by two hex digits (for example `%41`, or `%2e%2e`, which was saved as the parent folder) were saved under the wrong name in the thread list, so after a restart the thread used a different folder.
+- A thread folder on a network share (for example `\\server\share\...`) is now saved correctly in the thread list when the download folder is on a local drive, and a thread folder on a local drive when the download folder is on a share. Before, the saved folder was wrong, so after a restart the thread saved to a different folder or could not save its files.
+- Moving a finished thread to the completed folder no longer deletes an empty thread folder that is on another drive or network share than the download folder.
+- Threads already saved in the thread list with a wrong folder keep that folder.
+
 ### Security
 
 - A thread address that includes a login, such as `http://name:password@host/...`, no longer leaks that login. Before, image and thumbnail requests to other servers carried it in the Referer header, and links in saved thread pages included it, so sharing a saved thread shared the password. Pages saved before this version keep the old links until the thread is saved again.

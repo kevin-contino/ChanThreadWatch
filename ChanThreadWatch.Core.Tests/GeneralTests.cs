@@ -161,6 +161,28 @@ namespace JDP.Tests {
             Assert.AreEqual("Windows-1252", General.DetectHTMLEncoding(bytes, "text/html; charset=not-a-real-charset").WebName, true);
         }
 
+        // MP-4a: the code pages come from CodePagesEncodingProvider (registered in General's static
+        // constructor), not from the OS, so a page in each decodes to the same text on every OS
+        [TestMethod]
+        [DataRow(null, new byte[] { 0x80, 0x20, 0x93, 0x71, 0x94, 0x20, 0x63, 0x61, 0x66, 0xE9, 0x20, 0x9F }, "€ “q” café Ÿ")]
+        [DataRow("text/html; charset=windows-1252", new byte[] { 0x80, 0x20, 0x93, 0x71, 0x94, 0x20, 0x63, 0x61, 0x66, 0xE9, 0x20, 0x9F }, "€ “q” café Ÿ")]
+        [DataRow("text/html; charset=shift_jis", new byte[] { 0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA, 0x20, 0xB1, 0x20, 0x82, 0xA0 }, "日本語 ｱ あ")]
+        [DataRow("text/html; charset=euc-jp", new byte[] { 0xC6, 0xFC, 0xCB, 0xDC, 0xB8, 0xEC, 0x20, 0xA4, 0xA2 }, "日本語 あ")]
+        public void DetectHTMLEncodingDecodesCodePageText(string contentType, byte[] body, string expected) {
+            Assert.AreEqual(expected, General.DetectHTMLEncoding(body, contentType).GetString(body));
+        }
+
+        [TestMethod]
+        public void DetectHTMLEncodingDecodesShiftJISDeclaredInAMetaTag() {
+            byte[] head = Encoding.ASCII.GetBytes("<meta charset=\"shift_jis\"><title>");
+            byte[] title = { 0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA };
+            byte[] page = new byte[head.Length + title.Length];
+            head.CopyTo(page, 0);
+            title.CopyTo(page, head.Length);
+
+            Assert.AreEqual("<meta charset=\"shift_jis\"><title>日本語", General.DetectHTMLEncoding(page, "text/html").GetString(page));
+        }
+
         [TestMethod]
         public void TryBase64DecodeReturnsBytesOrNull() {
             CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, General.TryBase64Decode("AQID"));
