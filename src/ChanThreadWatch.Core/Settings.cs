@@ -240,8 +240,12 @@ namespace JDP {
         }
 
         public static string AppDataDirectory {
-            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ApplicationName); }
+            get { return AppDataDirectoryForTesting ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ApplicationName); }
         }
+
+        // Test only: stands in for the app's folder in the application data, so a test never reads or creates the
+        // user's. Every test assembly sets it to a temporary folder. Never set by production code.
+        internal static string AppDataDirectoryForTesting { get; set; }
 
         public static string SettingsFileName {
             get { return "settings.txt"; }
@@ -272,7 +276,16 @@ namespace JDP {
             set { SetInt("OnThreadDoubleClick", value.HasValue ? (int?)value.Value : null); }
         }
 
+        // Set by a host that is not the app (ctw watch) to the settings folder it found, before anything is loaded or
+        // logged (the log's path is taken once); null finds the folder as the app does
+        public static string SettingsDirectoryOverride { get; set; }
+
+        // The folder that relative download and completed folders are based on, when it is not the program's own
+        // folder: ctw watch can sit in a folder below the app's portable settings folder, which is the app's folder
+        public static string RelativeFolderBaseOverride { get; set; }
+
         public static string GetSettingsDirectory() {
+            if (SettingsDirectoryOverride != null) return SettingsDirectoryOverride;
             if (UseExeDirectoryForSettings == null) {
                 #if DEBUG
                     UseExeDirectoryForSettings = File.Exists(Path.Combine(Path.Combine(ExeDirectory, DebugFolderName), SettingsFileName));
@@ -318,7 +331,7 @@ namespace JDP {
             if (folderForSession != null) return WithDebugFolder(folderForSession);
             string dir = WithDebugFolder(General.ToLocalDirectoryPath(Get(settingName), settingName));
             if (!String.IsNullOrEmpty(dir) && (isRelative == true)) {
-                dir = General.GetAbsoluteDirectoryPath(dir, ExeDirectory);
+                dir = General.GetAbsoluteDirectoryPath(dir, RelativeFolderBaseOverride ?? ExeDirectory);
             }
             return dir;
         }

@@ -139,9 +139,28 @@ namespace JDP.Tests {
             }
         }
 
+        // ctw watch holds the lock until it is stopped, so the window refuses at once (DefaultWait for a program
+        // that is closing, but not the command line's longer wait) and names ctw watch
+        [TestMethod]
+        public void WindowRefusesPromptlyWhileCtwWatchHoldsTheLock() {
+            SettingsFolderLock watchLock;
+            Assert.IsTrue(SettingsFolderLock.TryAcquire(_newFolder, SettingsFolderLockHolder.Watch, out watchLock));
+            using (watchLock) {
+                System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+                SettingsFolderLock windowLock;
+
+                Assert.IsFalse(Program.TryAcquireWaitingForCommandLine(_newFolder, true, out windowLock));
+                Assert.IsLessThan(SettingsFolderLock.DefaultWait + TimeSpan.FromSeconds(3), elapsed.Elapsed);
+                HeldLockAction action = SettingsFolderLockHolder.Decide(SettingsFolderLock.ReadHolder(_newFolder), SettingsFolderLockHolder.WinForms, SettingsFolderLockHolder.GetThisMachineName());
+                Assert.AreEqual(HeldLockAction.RefuseForWatch, action);
+                Assert.AreEqual(Program.WatchHoldsFolderMessage, Program.GetHeldLockMessage(action));
+            }
+        }
+
         [TestMethod]
         public void HeldLockMessageNamesTheCommandLine() {
             StringAssert.Contains(Program.GetHeldLockMessage(HeldLockAction.WaitForCommandLine), "command line tool (ctw)");
+            StringAssert.StartsWith(Program.GetHeldLockMessage(HeldLockAction.RefuseForWatch), "ctw watch is using this settings folder.");
             Assert.AreEqual(Program.SettingsFolderInUseMessage, Program.GetHeldLockMessage(HeldLockAction.Refuse));
         }
     }

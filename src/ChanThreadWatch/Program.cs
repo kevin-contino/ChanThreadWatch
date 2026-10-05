@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -69,9 +70,18 @@ namespace JDP {
             return SettingsFolderLockHolder.Decide(holder, SettingsFolderLockHolder.WinForms, SettingsFolderLockHolder.GetThisMachineName());
         }
 
+        // Shown at once when ctw watch holds the settings folder's lock, which it keeps until it is stopped
+        internal const string WatchHoldsFolderMessage = "ctw watch is using this settings folder. Stop it first (Ctrl+C where it runs), then try again.";
+
+        private static readonly Dictionary<HeldLockAction, string> _heldLockMessages = new Dictionary<HeldLockAction, string> {
+            { HeldLockAction.WaitForCommandLine, CommandLineHoldsFolderMessage },
+            { HeldLockAction.RefuseForWatch, WatchHoldsFolderMessage }
+        };
+
         // The message for a lock the window can't take and must not start without
         internal static string GetHeldLockMessage(HeldLockAction action) {
-            return action == HeldLockAction.WaitForCommandLine ? CommandLineHoldsFolderMessage : SettingsFolderInUseMessage;
+            string message;
+            return _heldLockMessages.TryGetValue(action, out message) ? message : SettingsFolderInUseMessage;
         }
 
         private static bool ConfirmStartWithoutLock(IWin32Window owner, string folder) {

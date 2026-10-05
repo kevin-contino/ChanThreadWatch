@@ -232,6 +232,8 @@ namespace JDP {
     public sealed class SettingsFolderLockHolder {
         public const string WinForms = "winforms";
         public const string Cli = "cli";
+        // ctw watch, which holds the lock for as long as it runs
+        public const string Watch = "watch";
         public const string Service = "service";
 
         public string Kind { get; set; }
@@ -304,11 +306,13 @@ namespace JDP {
 
         // What a program of the given kind does when this holder has the lock: the window waits
         // longer for the command line (which holds it only while it changes the thread list),
-        // and only offers to start anyway when another window holds it on another computer (on
-        // this computer the mutex already stopped it). Anything else, including a missing or
+        // refuses at once when ctw watch holds it (which keeps it until it is stopped), and only
+        // offers to start anyway when another window holds it on another computer (on this
+        // computer the mutex already stopped it). Anything else, including a missing or
         // unreadable record, is refused.
         public static HeldLockAction Decide(SettingsFolderLockHolder holder, string hostKind, string thisMachineName) {
             if (hostKind != WinForms || holder == null) return HeldLockAction.Refuse;
+            if (holder.Kind == Watch) return HeldLockAction.RefuseForWatch;
             return holder.Kind == Cli ? HeldLockAction.WaitForCommandLine : DecideForWindow(holder, thisMachineName);
         }
 
@@ -322,6 +326,8 @@ namespace JDP {
         Refuse,
         AskToStartAnyway,
         // Wait for the command line (SettingsFolderLock.CommandLineWait), and refuse if it still holds the lock
-        WaitForCommandLine
+        WaitForCommandLine,
+        // Refuse without the longer wait: ctw watch holds the lock until it is stopped
+        RefuseForWatch
     }
 }

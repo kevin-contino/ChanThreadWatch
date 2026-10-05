@@ -13,11 +13,22 @@ namespace JDP.Cli.Tests {
     public static class CliTestHost {
         [AssemblyInitialize]
         public static void Initialize(TestContext context) {
+            // The default folders (Documents) and the application data folder go to a temporary folder, so a fallback
+            // to a default never reaches the user's folders
+            JDP.Tests.TestDefaultFolders.Redirect();
             // Nothing here asks for the app's settings folder; if anything logged, the log would go next to the
             // test binaries rather than to AppData
             Settings.UseExeDirectoryForSettings = true;
+            // The log's path is taken once, by the first log; ctw watch points the settings folder at a test's temporary
+            // folder, so the log is opened here first and never holds a file open in a folder a test deletes
+            System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Logger).TypeHandle);
             // ThreadListFile.Parse in the tests never asks DPAPI or a login store either (ctw sets the same)
             StoredAuth.Protector = new KeptStoredAuthProtector();
+        }
+
+        [AssemblyCleanup]
+        public static void Cleanup() {
+            JDP.Tests.TestDefaultFolders.Delete();
         }
     }
 

@@ -26,6 +26,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Every test assembly sends the default folders and the application data folder to a temporary folder -->
+    <Compile Include="..\ChanThreadWatch.Core.Tests\TestDefaultFolders.cs" Link="TestDefaultFolders.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="Fixtures\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

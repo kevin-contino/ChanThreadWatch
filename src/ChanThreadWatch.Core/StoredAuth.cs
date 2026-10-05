@@ -26,10 +26,12 @@ namespace JDP {
         private static readonly HashSet<string> _scheduledDeletes = new HashSet<string>(StringComparer.Ordinal);
 
         // Tests swap in another backend, for example the unavailable one on Windows
-        internal static IStoredAuthProtector Protector { get; set; } = CreateProtector();
+        internal static IStoredAuthProtector Protector { get; set; } = CreateSystemProtector();
 
+        // The backend the app uses on this system. ctw watch puts a new one in place of the command line's own
+        // backend, so it reads and writes saved logins as the app does.
         // RuntimeInformation rather than OperatingSystem.IsWindows: tools/stored-auth-check also builds this file for .NET Framework.
-        private static IStoredAuthProtector CreateProtector() {
+        internal static IStoredAuthProtector CreateSystemProtector() {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return new DpapiStoredAuthProtector();
 #if NETFRAMEWORK
             return new UnavailableStoredAuthProtector();

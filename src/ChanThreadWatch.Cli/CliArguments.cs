@@ -11,7 +11,8 @@ namespace JDP.Cli {
         Version,
         List,
         Add,
-        Remove
+        Remove,
+        Watch
     }
 
     internal sealed class CliCommand {
@@ -57,7 +58,8 @@ namespace JDP.Cli {
             { "list", new CommandSpec { Kind = CliCommandKind.List, Usage = "ctw list", PositionalCount = 0, Options = new string[0] } },
             { "add", new CommandSpec { Kind = CliCommandKind.Add, Usage = "ctw add <url> [--description <text>] [--category <text>]", PositionalCount = 1,
                 Options = new[] { DescriptionOption, CategoryOption } } },
-            { "remove", new CommandSpec { Kind = CliCommandKind.Remove, Usage = "ctw remove <url>", PositionalCount = 1, Options = new string[0] } }
+            { "remove", new CommandSpec { Kind = CliCommandKind.Remove, Usage = "ctw remove <url>", PositionalCount = 1, Options = new string[0] } },
+            { "watch", new CommandSpec { Kind = CliCommandKind.Watch, Usage = "ctw watch", PositionalCount = 0, Options = new string[0] } }
         };
 
         // Returns false with a one-line error for a command line that is not valid
