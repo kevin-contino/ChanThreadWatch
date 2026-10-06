@@ -251,6 +251,19 @@ namespace JDP {
             return port >= MinimumApiPort && port <= MaximumApiPort;
         }
 
+        // Set, but neither "0" nor "1": the API stays off, and a host says why (most likely a typo, such as "true")
+        public static bool ApiEnabledIsNotValid {
+            get {
+                string value = Get("ApiEnabled");
+                return value != null && value != "0" && value != "1";
+            }
+        }
+
+        // Set, but not a port from 1024 to 65535: ApiPort gives the default, and a host says so
+        public static bool ApiPortIsNotValid {
+            get { return Get("ApiPort") != null && !IsValidApiPort(GetInt("ApiPort")); }
+        }
+
         // Adding a thread of a site without a site helper through the API is refused unless the user allows it
         public static bool? ApiAllowUnknownHosts {
             get { return GetStrictBool("ApiAllowUnknownHosts"); }

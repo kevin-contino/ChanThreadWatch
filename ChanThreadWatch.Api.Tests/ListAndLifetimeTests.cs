@@ -11,6 +11,9 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Api.Tests {
@@ -274,6 +277,17 @@ namespace JDP.Api.Tests {
             }
         }
 
+        // The host (the app, ctw watch) handles Ctrl+C and the other stop signals itself. The default lifetime
+        // (ConsoleLifetime) would register its own handlers for SIGINT, SIGQUIT and SIGTERM, which cancel every such
+        // signal while the server runs, so ctw watch's second Ctrl+C would no longer end the process.
+        [TestMethod]
+        public void Host_HandlesNoSignals() {
+            IHostLifetime lifetime = Server.ServicesForTesting.GetRequiredService<IHostLifetime>();
+
+            Assert.IsNotInstanceOfType<ConsoleLifetime>(lifetime, lifetime.GetType().FullName);
+            Assert.AreEqual("JDP.Api.ApiHostLifetime", lifetime.GetType().FullName);
+        }
+
         [TestMethod]
         public void Bind_IgnoresEnvironmentAndAppSettings() {
             int envPort = FreePort();
@@ -285,7 +299,10 @@ namespace JDP.Api.Tests {
                 ["DOTNET_URLS"] = "http://0.0.0.0:" + envPort,
                 ["ASPNETCORE_HTTP_PORTS"] = envPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["ASPNETCORE_ENVIRONMENT"] = "Development",
-                ["ASPNETCORE_HOSTINGSTARTUPASSEMBLIES"] = "Missing.Startup.Assembly"
+                ["ASPNETCORE_HOSTINGSTARTUPASSEMBLIES"] = "Missing.Startup.Assembly",
+                // These make the URLs above win over the code's Listen call in a default host
+                ["ASPNETCORE_PREFERHOSTINGURLS"] = "true",
+                ["DOTNET_PREFERHOSTINGURLS"] = "true"
             };
             Dictionary<string, string> saved = variables.Keys.ToDictionary(name => name, Environment.GetEnvironmentVariable);
             try {

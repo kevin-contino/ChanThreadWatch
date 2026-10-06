@@ -167,6 +167,37 @@ namespace JDP.Tests {
             Assert.IsTrue(Settings.ApiAllowUnknownHosts);
         }
 
+        // A host warns about a value it does not use: ApiEnabled neither "0" nor "1", or ApiPort not a valid port.
+        // Missing keys are not named.
+        [TestMethod]
+        [DataRow(null, false)]
+        [DataRow("1", false)]
+        [DataRow("0", false)]
+        [DataRow("", true)]
+        [DataRow("true", true)]
+        [DataRow("1 ", true)]
+        public void ApiEnabledIsNotValidUnless0Or1OrMissing(string saved, bool expected) {
+            File.WriteAllLines(_path, saved != null ? new[] { "ApiEnabled=" + saved } : new string[0]);
+            Settings.Load(_path);
+
+            Assert.AreEqual(expected, Settings.ApiEnabledIsNotValid);
+        }
+
+        [TestMethod]
+        [DataRow(null, false)]
+        [DataRow("1024", false)]
+        [DataRow("65535", false)]
+        [DataRow("80", true)]
+        [DataRow("65536", true)]
+        [DataRow("abc", true)]
+        [DataRow("", true)]
+        public void ApiPortIsNotValidOutsideTheRange(string saved, bool expected) {
+            File.WriteAllLines(_path, saved != null ? new[] { "ApiPort=" + saved } : new string[0]);
+            Settings.Load(_path);
+
+            Assert.AreEqual(expected, Settings.ApiPortIsNotValid);
+        }
+
         [TestMethod]
         public void NewlineInAValueCannotInjectAnotherSetting() {
             Settings.Load(_path);

@@ -312,6 +312,49 @@ namespace JDP.Api.Tests {
             Assert.IsTrue(Tokens.Verify(Token));
         }
 
+        // An access check that throws (an ACL that can't be read, a file system without ACLs) is an ApiTokenException
+        // too: the new file is closed and deleted, and the old token still works
+        [TestMethod]
+        [DataRow(typeof(UnauthorizedAccessException))]
+        [DataRow(typeof(NotSupportedException))]
+        public void TokenFile_AccessCheckThatThrowsIsAnErrorAndLeavesNoFile(Type exceptionType) {
+            string before = File.ReadAllText(Tokens.Path);
+            OwnerOnlyFile.NewFileCheckForTesting = stream => throw (Exception)Activator.CreateInstance(exceptionType);
+            try {
+                ApiTokenException error = Assert.ThrowsExactly<ApiTokenException>(() => Tokens.Generate());
+                Assert.IsInstanceOfType(error.InnerException, exceptionType);
+            }
+            finally {
+                OwnerOnlyFile.NewFileCheckForTesting = null;
+            }
+            Assert.AreEqual(before, File.ReadAllText(Tokens.Path));
+            Assert.AreEqual(0, Directory.GetFiles(Folder, "*.tmp").Length);
+            Assert.IsTrue(Tokens.Verify(Token));
+        }
+
+        // A link put in the file's place between the link check and the open is refused (the open follows it)
+        [TestMethod]
+        [OSCondition(OperatingSystems.Linux | OperatingSystems.OSX)]
+        [UnsupportedOSPlatform("windows")]
+        public void TokenFile_UnixSymlinkSwappedInBeforeTheOpenIsRefused() {
+            string otherFolder = Path.Combine(Folder, "other");
+            Directory.CreateDirectory(otherFolder);
+            ApiTokenStore other = new ApiTokenStore(otherFolder);
+            string otherToken = other.Generate();
+            ApiTokenStore.OpeningForTesting = () => {
+                ApiTokenStore.OpeningForTesting = null;
+                File.Delete(Tokens.Path);
+                File.CreateSymbolicLink(Tokens.Path, other.Path);
+            };
+            try {
+                Assert.IsFalse(Tokens.Verify(otherToken));
+            }
+            finally {
+                ApiTokenStore.OpeningForTesting = null;
+            }
+            Assert.IsTrue(other.Verify(otherToken));
+        }
+
         // Only a sharing or lock violation is read again; access denied and other errors fail the check at once
         [TestMethod]
         public void TokenFile_OnlySharingViolationsAreRetried() {

@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace JDP.Api {
@@ -204,6 +205,11 @@ namespace JDP.Api {
             Logger.Log("Local API: the server's " + step + " failed: " + ex.GetType().FullName);
         }
         // The routes the server serves, for the contract test
+        // Test only: the running host's services, or null when it does not listen
+        internal IServiceProvider ServicesForTesting {
+            get { return Volatile.Read(ref _app)?.Services; }
+        }
+
         internal IReadOnlyList<RouteEndpoint> GetRouteEndpoints() {
             WebApplication app = _app ?? throw new InvalidOperationException("The server is not started.");
             return ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().ToList();
@@ -218,6 +224,8 @@ namespace JDP.Api {
             });
             builder.WebHost.UseKestrelCore().ConfigureKestrel(options => ConfigureKestrel(options, port));
             builder.Services.AddRoutingCore();
+            // In place of ConsoleLifetime, whose handlers would cancel Ctrl+C, SIGQUIT and SIGTERM while the server runs
+            builder.Services.AddSingleton<IHostLifetime, ApiHostLifetime>();
             ConfigureLogging(builder.Logging);
             WebApplication app = builder.Build();
             ConfigurePipeline(app);
@@ -282,6 +290,18 @@ namespace JDP.Api {
             IServerAddressesFeature addresses = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
             string address = addresses?.Addresses.FirstOrDefault() ?? throw new InvalidOperationException("The server has no address.");
             return new Uri(address).Port;
+        }
+    }
+
+    // The server's host waits for no signal: the program that runs it (the app, ctw watch) handles Ctrl+C and the
+    // other stop signals, and stops the server itself
+    internal sealed class ApiHostLifetime : IHostLifetime {
+        public Task WaitForStartAsync(CancellationToken cancellationToken) {
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken) {
+            return Task.CompletedTask;
         }
     }
 }

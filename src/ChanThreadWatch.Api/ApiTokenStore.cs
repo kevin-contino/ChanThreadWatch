@@ -106,10 +106,16 @@ namespace JDP.Api {
             return IsFileFailure(ex) || ex is NotSupportedException;
         }
 
+        // Test only: runs between the link check and the open
+        internal static Action OpeningForTesting { get; set; }
+
+        // The path is checked for a link again once the file is open, so a link put in its place between the first check
+        // and the open (which follows it on Unix) is refused
         private string TryReadTrustedText() {
             if (OwnerOnlyFile.IsLink(_path)) return null;
+            OpeningForTesting?.Invoke();
             using (FileStream stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
-                if (!OwnerOnlyFile.IsOwnerOnly(stream)) return null;
+                if (OwnerOnlyFile.IsLink(_path) || !OwnerOnlyFile.IsOwnerOnly(stream)) return null;
                 byte[] buffer = new byte[MaxFileBytes];
                 int length = stream.ReadAtLeast(buffer, buffer.Length, false);
                 return Encoding.ASCII.GetString(buffer, 0, length);
@@ -150,10 +156,15 @@ namespace JDP.Api {
                 TryDelete(tempPath);
                 throw;
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException) {
+            catch (Exception ex) when (IsWriteFailure(ex)) {
                 TryDelete(tempPath);
                 throw new ApiTokenException("The API token file could not be written: " + _path, ex);
             }
+        }
+
+        // Also an access check that throws on a file system without ACLs (NotSupportedException)
+        private static bool IsWriteFailure(Exception ex) {
+            return IsFileFailure(ex) || ex is InvalidOperationException || ex is NotSupportedException;
         }
 
         // A reader that has the file open for a moment (Verify, here or in the running program) makes the replace fail

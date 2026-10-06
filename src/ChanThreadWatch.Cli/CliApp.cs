@@ -6,7 +6,8 @@ using System.Threading;
 
 namespace JDP.Cli {
     // ctw: lists, adds and removes the threads in the thread list (threads.txt) of the settings folder
-    // Chan Thread Watch uses, and watches them without a window (watch). list, add and remove never download
+    // Chan Thread Watch uses, watches them without a window (watch), and makes the local API's token (api-token,
+    // see ApiTokenCommand). list, add and remove never download
     // anything and never read or write a saved login (see KeptStoredAuthProtector); watch uses saved logins as the
     // app does (see WatchCommand). add, remove and watch use the thread list only while they hold the settings
     // folder's lock (SettingsFolderLock) and the app's mutex for the folder is not there, so they refuse while the
@@ -26,6 +27,8 @@ namespace JDP.Cli {
             "  remove <url>         Remove a thread from the list. Its downloaded files are kept.\n" +
             "  watch                Watch the threads in the list and download them as the app does, without a window,\n" +
             "                       until Ctrl+C, SIGTERM or SIGHUP. Saves the thread list every minute and when it stops.\n" +
+            "                       Runs the local API on 127.0.0.1 when settings.txt has ApiEnabled=1.\n" +
+            "  api-token            Make a new token for the local API and print it once. It replaces the previous token.\n" +
             "\n" +
             "Options:\n" +
             "  --help, -h           Show this help, or after a command, that command's usage.\n" +
@@ -35,7 +38,8 @@ namespace JDP.Cli {
             "ctw uses the settings folder of Chan Thread Watch: the folder of ctw or the folder above it, if it holds\n" +
             "settings.txt (portable mode), otherwise the app's folder in your application data. add, remove and watch\n" +
             "refuse while Chan Thread Watch uses that folder on this computer, and the app refuses while ctw watch runs.\n" +
-            "A window on another computer that was started with \"start anyway\" is not detected.\n" +
+            "A window on another computer that was started with \"start anyway\" is not detected. api-token also works\n" +
+            "while the app or ctw watch runs.\n" +
             "Exit codes: 0 success, 1 error, 2 invalid command line.\n";
 
         private static readonly Dictionary<CliCommandKind, Func<CliContext, int>> _handlers = new Dictionary<CliCommandKind, Func<CliContext, int>> {
@@ -46,7 +50,8 @@ namespace JDP.Cli {
             { CliCommandKind.List, ThreadListCommands.List },
             { CliCommandKind.Add, ThreadListCommands.Add },
             { CliCommandKind.Remove, ThreadListCommands.Remove },
-            { CliCommandKind.Watch, WatchCommand.Run }
+            { CliCommandKind.Watch, WatchCommand.Run },
+            { CliCommandKind.ApiToken, ApiTokenCommand.Run }
         };
 
         public static int Run(string[] args, TextWriter output, TextWriter error) {
