@@ -16,7 +16,7 @@ namespace JDP.Cli.Tests {
     // settings folder and an absolute temporary download folder. Every run is stopped by a token with a timeout, never
     // by the process's signals. Saved logins go through FakeLoginStore, never DPAPI or a login store.
     [TestClass]
-    public class WatchCommandTests : CliTestBase {
+    public partial class WatchCommandTests : CliTestBase {
         private const string PageHost = "127.0.0.1";
         private const string KeychainValue = "keychain:0123456789abcdef0123456789abcdef";
         private const string UnusedKeychainValue = "keychain:aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb";
@@ -56,11 +56,13 @@ namespace JDP.Cli.Tests {
             ConnectionManager.MinRequestStartIntervalMS = ConnectionManager.DefaultMinRequestStartIntervalMS;
             if (_defaultProtectorFactory != null) WatchCommand.CreateProtector = _defaultProtectorFactory;
             HeadlessWatch.SaveInterval = HeadlessWatch.DefaultSaveInterval;
+            HeadlessWatch.LoadingForTesting = null;
             HeadlessWatch.StartedForTesting = null;
             HeadlessWatch.StoppingForTesting = null;
             HeadlessWatch.WatchersListedForTesting = null;
             HeadlessWatch.WaitForWatcher = HeadlessWatch.DefaultWaitForWatcher;
             StoredAuth.TakeScheduledDeletes();
+            TearDownApi();
             ResetProcessState();
             // The settings of the last run stay loaded; the other tests start from none
             Settings.Load(Path.Combine(Folder, "missing-settings.txt"));

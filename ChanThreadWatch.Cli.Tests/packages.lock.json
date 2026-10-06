@@ -97,6 +97,12 @@
         "resolved": "10.0.12",
         "contentHash": "wO0W8VDMeRJZakRySOmemAnrBZMwEFRlbfBtATxUiLf2I3IhSRnCp1Vt157NWptdE4IJ7eftd5n8q9LtaKHFTQ=="
       },
+      "chanthreadwatch.api": {
+        "type": "Project",
+        "dependencies": {
+          "ChanThreadWatch.Core": "[1.0.0, )"
+        }
+      },
       "chanthreadwatch.core": {
         "type": "Project",
         "dependencies": {
@@ -106,6 +112,7 @@
       "ctw": {
         "type": "Project",
         "dependencies": {
+          "ChanThreadWatch.Api": "[1.0.0, )",
           "ChanThreadWatch.Core": "[1.0.0, )"
         }
       }

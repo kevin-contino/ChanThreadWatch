@@ -10,7 +10,7 @@ For documentation, changelog and any other information, please visit the wiki: [
 
 ## Command line (ctw)
 
-`ctw` lists, adds and removes watched threads without opening the app, and `ctw watch` watches them without a window. Download the file for your system from the same release as the app. Each one is a single self-contained file that needs no .NET install:
+`ctw` lists, adds and removes watched threads without opening the app, and `ctw watch` watches them without a window and can run a local API for scripts. Download the file for your system from the same release as the app. Each one is a single self-contained file that needs no .NET install:
 
 | System | File |
 | --- | --- |
@@ -32,6 +32,7 @@ ctw list
 ctw add <url> [--description <text>] [--category <text>]
 ctw remove <url>
 ctw watch
+ctw api-token
 ctw --help
 ```
 
@@ -39,14 +40,38 @@ ctw --help
 
 `watch` loads the thread list and watches every thread as the app does, with the app's settings: it downloads images and pages to the same folders, follows threads when auto-follow is on, uses saved logins (Windows encryption, the macOS Keychain or the Linux Secret Service, as the app does), saves the thread list every minute when it changed, and backs it up when the settings ask for it. The download folder must be set in the app and exist; unlike the app, `watch` does not fall back to the default folder, it refuses to start. It writes one line for each thread added, finished, not found (404) or stopped by an error, and for each check with an error or with files that failed after all their tries; details go to `log.txt` in the settings folder, as for the app. Where no login store can be used (for example Linux without a Secret Service), it warns at start that logins saved without encryption by an older version are used for this session only and cleared at the next save, as the app does. To stop it, press Ctrl+C, send SIGTERM or SIGHUP, or close its console window (on Windows): it stops the threads, saves the thread list and exits with code 0, or with code 1 if the thread list could not be saved. A second Ctrl+C quits at once; the thread list then is the one saved last. Windows ends a program about 5 seconds after its console window is closed, so a save that takes longer is cut off there.
 
-`ctw` uses the same settings folder as the app, and `add`, `remove`, `watch` and `--help` print it:
+`ctw` uses the same settings folder as the app, and `add`, `remove`, `watch`, `api-token` and `--help` print it:
 
 - Portable mode: put `ctw` next to `ChanThreadWatch.exe` and its `settings.txt`, or in a folder next to them. `ctw` uses the folder that holds `settings.txt`, its own or the one above it.
 - Otherwise `ctw` can be anywhere, and it uses the app's folder in your application data. `list` does not create that folder. In this mode `watch` refuses to start when the download or completed folder is set relative to the app's folder, which `ctw` cannot find; set full paths in the app's settings.
 
-`add`, `remove` and `watch` refuse while Chan Thread Watch uses that folder on this computer; close the app or make the change in the app. The app refuses to start while `ctw watch` uses the folder (stop `ctw watch` first), and `add` and `remove` refuse while `ctw watch` runs. A window on another computer that was started with "start anyway" is not detected. Use Chan Thread Watch 1.40 or later with `ctw watch`: earlier versions do not check the settings folder's lock, so they would start beside it and both would save the thread list. If you start the app while `ctw add` or `ctw remove` is changing the thread list, the app waits for it. `list`, `add` and `remove` keep saved logins in the thread list as they are.
+`add`, `remove` and `watch` refuse while Chan Thread Watch uses that folder on this computer (`api-token` does not); close the app or make the change in the app. The app refuses to start while `ctw watch` uses the folder (stop `ctw watch` first), and `add` and `remove` refuse while `ctw watch` runs. A window on another computer that was started with "start anyway" is not detected. Use Chan Thread Watch 1.40 or later with `ctw watch`: earlier versions do not check the settings folder's lock, so they would start beside it and both would save the thread list. If you start the app while `ctw add` or `ctw remove` is changing the thread list, the app waits for it. `list`, `add` and `remove` keep saved logins in the thread list as they are.
 
-A local API (coming in a later release; it is not available in the app or `ctw` yet) will add threads that never connect to a local or private address (loopback, your LAN, link-local addresses such as cloud metadata, and the like), on any redirect either, and that refuse to connect through a system proxy; threads they auto-follow get the same limit. The app and `ctw watch` keep the list of these threads in `api-threads.txt` next to `threads.txt`, and `ctw add` and `ctw remove` keep it up to date. Keep the two files together when you copy or restore the settings folder: a thread list backup (`threads.txt.bak`) comes with `api-threads.txt.bak`, so restore both. If `api-threads.txt` can't be used at start, the threads loaded from the thread list, and the threads they auto-follow, are limited this way until the app or `ctw watch` stops (the log says so, and `ctw watch` warns at start); a file that is not valid is kept aside. Once `api-threads.txt` has been written, `settings.txt` says so (`ApiThreadsFileWritten=1`), and a missing `api-threads.txt` is then treated the same way, so keep both files when you restore a backup or copy the settings folder. That setting lives in `settings.txt`, so replacing `settings.txt`, or a save by a copy of the app on another computer started with "start anyway", can drop it. Chan Thread Watch 1.39.0 and earlier ignore `api-threads.txt` and do not limit these threads, so while you run such a version they can connect anywhere; the limit applies again when you start 1.40.0 or later.
+### Local API
+
+`ctw watch` can run a local HTTP API, so scripts on this computer can list the watched threads and add threads (`GET` and `POST` on `/api/v1/threads`, described by `GET /api/v1/openapi.json`). It is off by default. The app's dialog for it comes in a later release; until then, turn it on in `settings.txt` while neither the app nor `ctw watch` runs:
+
+```
+ApiEnabled=1
+ApiPort=47710
+```
+
+Only `ApiEnabled=1` turns it on; any other value but `0` leaves it off, and `ctw watch` warns. `ApiPort` must be a port from 1024 to 65535; any other value gives a warning, and port 47710 is used.
+
+Then run `ctw api-token`. It prints a new token once, on stdout; only its hash is saved, in `api-token.txt` in the settings folder, which only your user can read. Keep the token where your scripts can read it, and send it as `Authorization: Bearer <token>`. A file you make with `ctw api-token > file` gets the default access of new files, so make it readable by you only (for example `umask 077` first, or a secret store), and never put it in a shared folder. With `ctw api-token | command`, the token is lost if the command has already exited, so redirect it to an owner-only file or read it directly. Running `ctw api-token` again replaces the token: the old one stops working at once, also in a `ctw watch` that runs, and the new one works without a restart. `api-token` works while the app or `ctw watch` runs. It refuses to run as root, as the API does.
+
+`ctw watch` starts the API once the thread list is loaded and prints `Local API listening on http://127.0.0.1:<port>/api/v1/`. It listens on 127.0.0.1 only, and stops the API first when it stops. Connect to `127.0.0.1`, not `localhost`: the API listens on IPv4 only, and another program could listen on `[::1]` with the same port. If the port is in use, or there is no token yet, it prints a warning on stderr and watches without the API (the exit code does not change); free the port or set another `ApiPort`, or run `ctw api-token`, then start `ctw watch` again. By default the API adds threads of the supported sites only; `ApiAllowUnknownHosts=1` also allows other sites (never IP addresses or local names).
+
+```
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:47710/api/v1/threads
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"url":"<thread url>"}' http://127.0.0.1:47710/api/v1/threads
+```
+
+Limits: a request body of at most 4 KiB, 120 requests and 30 adds a minute, and 1000 threads in the list. A thread that is already in the list gets 409. Once `ctw watch` starts to stop, new connections are usually refused; a request already in progress is finished, or gets 503 if its work had not started, and one still running after the stop's wait is cut off.
+
+Keep in mind: `settings.txt` decides whether the API is on and whether it allows other sites, so any program that can write that file can turn them on; only `api-token.txt` is protected. The port is fixed, so a program on this computer that starts first could listen on it and receive the token a script sends; a later release adds a check that the script talks to Chan Thread Watch.
+
+The API adds threads that never connect to a local or private address (loopback, your LAN, link-local addresses such as cloud metadata, and the like), on any redirect either, and that refuse to connect through a system proxy; threads they auto-follow get the same limit. The app and `ctw watch` keep the list of these threads in `api-threads.txt` next to `threads.txt`, and `ctw add` and `ctw remove` keep it up to date. Keep the two files together when you copy or restore the settings folder: a thread list backup (`threads.txt.bak`) comes with `api-threads.txt.bak`, so restore both. If `api-threads.txt` can't be used at start, the threads loaded from the thread list, and the threads they auto-follow, are limited this way until the app or `ctw watch` stops (the log says so, and `ctw watch` warns at start); a file that is not valid is kept aside. Once `api-threads.txt` has been written, `settings.txt` says so (`ApiThreadsFileWritten=1`), and a missing `api-threads.txt` is then treated the same way, so keep both files when you restore a backup or copy the settings folder. That setting lives in `settings.txt`, so replacing `settings.txt`, or a save by a copy of the app on another computer started with "start anyway", can drop it. Chan Thread Watch 1.39.0 and earlier ignore `api-threads.txt` and do not limit these threads, so while you run such a version they can connect anywhere; the limit applies again when you start 1.40.0 or later.
 
 ## Building and testing
 

@@ -50,6 +50,18 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
+  <!-- The Windows runtime packs of ASP.NET Core carry its IIS in-process module, a native file that the single file
+       would extract to disk (once for each version of the file). ctw never runs in IIS (the local API is Kestrel only),
+       so it is left out of the runtime pack's assets, which both ctw.deps.json and the publish are made from.
+       ResolveRuntimePackAssets also adds them to ReferenceCopyLocalPaths, so it goes from there too. -->
+  <Target Name="RemoveIisModule" AfterTargets="ResolveRuntimePackAssets">
+    <ItemGroup>
+      <_CtwIisModule Include="@(RuntimePackAsset)" Condition="'%(Filename)%(Extension)' == 'aspnetcorev2_inprocess.dll'" />
+      <RuntimePackAsset Remove="@(_CtwIisModule)" />
+      <ReferenceCopyLocalPaths Remove="@(_CtwIisModule)" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <!-- The same globalization mode as the app (see ChanThreadWatch.csproj); ignored off Windows -->
     <RuntimeHostConfigurationOption Include="System.Globalization.UseNls" Value="true" />
@@ -57,6 +69,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+    <!-- The local API that ctw watch hosts (MP-7a). It brings the ASP.NET Core shared framework, which the
+         self-contained single file then carries (no trimming) -->
+    <ProjectReference Include="..\ChanThreadWatch.Api\ChanThreadWatch.Api.csproj" />
   </ItemGroup>
 
   <ItemGroup>

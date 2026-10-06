@@ -22,16 +22,27 @@ namespace JDP.Api {
         internal static Func<FileStream, bool> NewFileCheckForTesting { get; set; }
 
         // A new file (CreateNew), open for writing. Throws ApiTokenException when the file system does not keep the
-        // access (the caller deletes the file).
+        // access (the caller deletes the file). The file is closed before anything is thrown, so the caller can delete it.
         public static FileStream Create(string path) {
             FileStream stream = OperatingSystem.IsWindows() ? CreateOnWindows(path) : CreateOnUnix(path);
-            if (!(NewFileCheckForTesting ?? IsOwnerOnly)(stream)) {
+            if (!IsNewFileOwnerOnly(stream)) {
                 stream.Dispose();
                 throw new ApiTokenException(OperatingSystem.IsWindows() ?
                     "The settings folder does not support owner-only files; move it to an NTFS folder." :
                     "The settings folder does not keep file permissions (mode 0600); move it to a local folder.");
             }
             return stream;
+        }
+
+        // An access check that throws (an ACL that can't be read) closes the file too
+        private static bool IsNewFileOwnerOnly(FileStream stream) {
+            try {
+                return (NewFileCheckForTesting ?? IsOwnerOnly)(stream);
+            }
+            catch {
+                stream.Dispose();
+                throw;
+            }
         }
 
         // True for a symbolic link or other reparse point, which is never followed (checked before the open, since on

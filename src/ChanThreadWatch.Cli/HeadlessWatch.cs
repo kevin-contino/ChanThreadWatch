@@ -5,14 +5,15 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace JDP.Cli {
     // The main window's watching without the window: loads the thread list and the blacklist through WatchSession,
     // saves the thread list when it changed on the app's save timer (every minute), backs it up as the settings ask,
     // and on stop saves the settings, stops every watcher and saves the thread list before and after waiting for
     // them, as the window does when it closes. The window's UI thread is one owner thread here, which runs the
-    // queued work in order: what the session posts (an auto-followed thread), the saves and the backups. Status
-    // lines go to output.
+    // queued work in order: what the session posts (an auto-followed thread), the saves, the backups and the local
+    // API's requests (WatchApi). Status lines go to output.
     internal sealed class HeadlessWatch {
         // The app's save timer (tmrSaveThreadList); the tests make it shorter. Declared first: static fields are
         // set in order.
@@ -28,8 +29,11 @@ namespace JDP.Cli {
         // put another in its place.
         internal static Func<ThreadWatcher, TimeSpan, bool> WaitForWatcher { get; set; } = DefaultWaitForWatcher;
 
-        // Test only: called on the calling thread once the thread list is loaded, once the watchers are told to stop,
-        // and after each list of watchers that the stop waits for is taken
+        // Test only: called on the owner thread before the thread list is loaded
+        internal static Action<HeadlessWatch> LoadingForTesting { get; set; }
+
+        // Test only: called on the calling thread once the thread list is loaded (and the local API started), once the
+        // watchers are told to stop, and after each list of watchers that the stop waits for is taken
         internal static Action<HeadlessWatch> StartedForTesting { get; set; }
         internal static Action<HeadlessWatch> StoppingForTesting { get; set; }
         internal static Action<HeadlessWatch> WatchersListedForTesting { get; set; }
@@ -45,10 +49,14 @@ namespace JDP.Cli {
         private readonly WatchStatusOutput _output;
         // Warnings
         private readonly WatchStatusOutput _error;
+        private readonly string _settingsFolder;
         private volatile bool _isExiting;
+        // Null while the local API is off or did not start
+        private WatchApi _api;
 
         public HeadlessWatch(WatchStatusOutput output, string settingsFolder, WatchStatusOutput error) {
             _output = output;
+            _settingsFolder = settingsFolder;
             _error = error ?? throw new ArgumentNullException(nameof(error));
             _session = new WatchSession(Invoke, Post, settingsFolder);
             _session.ThreadWatcherCreated += Subscribe;
@@ -60,22 +68,46 @@ namespace JDP.Cli {
             get { return _session; }
         }
 
+        // Null while the local API is off or did not start
+        internal WatchApi Api {
+            get { return _api; }
+        }
+
         // Watches until stopToken is canceled. Returns false if the thread list could not be saved at the end.
         public bool Run(CancellationToken stopToken) {
             bool saved = false;
             _ownerThread.Start();
             try {
                 Invoke(Load);
+                // Only now, so no request sees the thread list before it is loaded, and not when the stop came meanwhile
+                if (!stopToken.IsCancellationRequested) _api = WatchApi.Start(_session, Post, () => _isExiting, _settingsFolder, _output, _error);
                 StartedForTesting?.Invoke(this);
                 WaitForStop(stopToken);
             }
             finally {
-                saved = Exit();
+                saved = StopApiAndExit();
+            }
+            return saved;
+        }
+
+        // The API's stop comes first and closes its dispatcher at once, so no request adds a thread once the watchers
+        // stop: work that already runs on the owner thread finishes before the stop's work there, and work that has not
+        // started never runs (503). It is not waited for until after the final save, so the first save is not delayed;
+        // a failure to stop never skips the saves.
+        private bool StopApiAndExit() {
+            Task apiStopped = Task.CompletedTask;
+            bool saved;
+            try {
+                if (_api != null) apiStopped = _api.StopAsync();
+            }
+            finally {
+                saved = Exit(apiStopped);
             }
             return saved;
         }
 
         private void Load() {
+            LoadingForTesting?.Invoke(this);
             _session.LoadThreadList();
             _session.LoadBlacklist();
             WarnIfApiThreadsUnreadable();
@@ -108,7 +140,9 @@ namespace JDP.Cli {
         }
 
         // Queues the work for the owner thread and returns without waiting, as the window's BeginInvoke. Nothing is
-        // queued after the end (all watchers are stopped by then).
+        // queued after the end (all watchers are stopped by then). Work is dropped silently then, so the local API's
+        // dispatcher must be closed before CompleteAdding (StopApiAndExit closes it first): a request then never waits
+        // for work that was dropped here.
         internal void Post(Action work) {
             try {
                 _queue.Add(work);
@@ -160,7 +194,7 @@ namespace JDP.Cli {
             if (Settings.BackupThreadList == true) General.BackupThreadList(Settings.BackupCheckSize ?? false);
         }
 
-        private bool Exit() {
+        private bool Exit(Task apiStopped) {
             Invoke(() => {
                 Settings.Save();
                 _isExiting = true;
@@ -171,6 +205,8 @@ namespace JDP.Cli {
             StoppingForTesting?.Invoke(this);
             WaitUntilSettled();
             bool saved = Invoke(() => _session.SaveThreadList());
+            // Before the owner thread ends, so the port is free when ctw watch exits (StopAsync never throws)
+            apiStopped.GetAwaiter().GetResult();
             _queue.CompleteAdding();
             _ownerThread.Join();
             _output.WriteStopped(saved);
