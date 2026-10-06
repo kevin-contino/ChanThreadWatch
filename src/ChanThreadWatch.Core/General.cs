@@ -81,15 +81,21 @@ namespace JDP {
         // A retry goes out on a new connection, never on one the failed try may have left in the
         // pool: this client keeps no connection after its response.
         private static readonly HttpClient _freshConnectionHttpClient = CreateHttpClient(TimeSpan.Zero);
+        // The same pair for guarded downloads (threads added through the local API): every connection
+        // goes through the SSRF guard's check, and the pools are their own, so a guarded request never
+        // reuses a connection that was not checked
+        private static readonly HttpClient _guardedHttpClient = CreateHttpClient(PooledConnectionLifetime, true);
+        private static readonly HttpClient _guardedFreshConnectionHttpClient = CreateHttpClient(TimeSpan.Zero, true);
         // The limit of the transport before HttpClient, which the characterization tests pin
         internal const int MaxRedirects = 50;
 
-        private static HttpClient CreateHttpClient(TimeSpan pooledConnectionLifetime) {
+        private static HttpClient CreateHttpClient(TimeSpan pooledConnectionLifetime, bool guarded = false) {
             // Each phase has its own timeout (RequestTimeoutMS, ReadTimeoutMS), so the client has none
-            return new HttpClient(CreateHttpHandler(pooledConnectionLifetime), true) { Timeout = Timeout.InfiniteTimeSpan };
+            return new HttpClient(CreateHttpHandler(pooledConnectionLifetime, guarded), true) { Timeout = Timeout.InfiniteTimeSpan };
         }
 
-        internal static SocketsHttpHandler CreateHttpHandler(TimeSpan pooledConnectionLifetime) {
+        // guarded: every connection is checked by the SSRF guard (SSRFGuard.ConnectGuardedAsync)
+        internal static SocketsHttpHandler CreateHttpHandler(TimeSpan pooledConnectionLifetime, bool guarded) {
             return new SocketsHttpHandler {
                 UseCookies = false,
                 // Redirects are followed in SendAsync, so that every hop is checked
@@ -97,7 +103,7 @@ namespace JDP {
                 // No Accept-Encoding is sent, and files are saved as the server sends them
                 AutomaticDecompression = DecompressionMethods.None,
                 // The system proxy (HttpClient.DefaultProxy), as before; the SSRF guard refuses a
-                // proxied connection in service mode
+                // proxied connection in service mode and on the guarded clients
                 UseProxy = true,
                 PooledConnectionLifetime = pooledConnectionLifetime,
                 // A connection attempt (TCP and TLS) is not canceled with the request that started it,
@@ -108,12 +114,14 @@ namespace JDP {
                 MaxConnectionsPerServer = Int32.MaxValue,
                 // Every connection, so every redirect and meta refresh hop, goes through the SSRF guard.
                 // TLS is left to the OS (1.2 and 1.3), with the default certificate validation.
-                ConnectCallback = SSRFGuard.ConnectAsync
+                ConnectCallback = guarded ? SSRFGuard.ConnectGuardedAsync : SSRFGuard.ConnectAsync
             };
         }
 
-        public static Action DownloadAsync(string url, string auth, string referer, bool freshConnection, DateTime? cacheLastModifiedTime, Action<HttpResponseMessage> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
-            AsyncDownload download = new AsyncDownload(auth, freshConnection, cacheLastModifiedTime, onResponse, onDownloadChunk, onComplete, onException);
+        // guarded: every request of the download, each redirect hop and the meta refresh included,
+        // goes out on the guarded clients
+        public static Action DownloadAsync(string url, string auth, string referer, bool freshConnection, bool guarded, DateTime? cacheLastModifiedTime, Action<HttpResponseMessage> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
+            AsyncDownload download = new AsyncDownload(auth, freshConnection, guarded, cacheLastModifiedTime, onResponse, onDownloadChunk, onComplete, onException);
             download.Start(url, referer);
             return download.Abort;
         }
@@ -284,10 +292,15 @@ namespace JDP {
         // pauses the host if it answers with one (throws HTTPRateLimitedException). Not paced by
         // MinRequestStartIntervalMS: callers (e.g. a new watcher's constructor) run on the UI thread.
         public static string DownloadPageToString(string url) {
+            return DownloadPageToString(url, false);
+        }
+
+        // guarded: every request, each redirect hop included, goes out on the guarded clients
+        public static string DownloadPageToString(string url, bool guarded) {
             ConnectionManager.GetInstance(url).ThrowIfPaused();
             try {
                 // On the thread pool, where no synchronization context (the UI thread's) can deadlock the wait
-                return Task.Run(() => DownloadPageToStringAsync(url)).GetAwaiter().GetResult();
+                return Task.Run(() => DownloadPageToStringAsync(url, guarded)).GetAwaiter().GetResult();
             }
             catch (HTTPRateLimitedException ex) {
                 // The host that answered, which a redirect may have made another one
@@ -296,8 +309,8 @@ namespace JDP {
             }
         }
 
-        private static async Task<string> DownloadPageToStringAsync(string url) {
-            using (HttpResponseMessage response = await GetResponseAsync(url, null, null, null, false, CancellationToken.None).ConfigureAwait(false)) {
+        private static async Task<string> DownloadPageToStringAsync(string url, bool guarded) {
+            using (HttpResponseMessage response = await GetResponseAsync(url, null, null, null, false, guarded, CancellationToken.None).ConfigureAwait(false)) {
                 string contentType = GetContentType(response);
                 Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
                 byte[] pageBytes = await ReadPageBytesAsync(stream, CancellationToken.None).ConfigureAwait(false);
@@ -309,12 +322,12 @@ namespace JDP {
         // Sends a GET (following redirects) and returns the response once its headers have arrived;
         // the caller disposes it. Throws TimeoutException if that takes longer than RequestTimeoutMS,
         // and the translated error (TranslateErrorResponse) for a response that is not a success.
-        private static async Task<HttpResponseMessage> GetResponseAsync(string url, string auth, string referer, DateTime? cacheLastModifiedTime, bool freshConnection, CancellationToken cancellationToken) {
+        private static async Task<HttpResponseMessage> GetResponseAsync(string url, string auth, string referer, DateTime? cacheLastModifiedTime, bool freshConnection, bool guarded, CancellationToken cancellationToken) {
             using (CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)) {
                 timeout.CancelAfter(RequestTimeoutMS);
                 HttpResponseMessage response;
                 try {
-                    response = await SendAsync(url, auth, referer, cacheLastModifiedTime, freshConnection, timeout.Token).ConfigureAwait(false);
+                    response = await SendAsync(url, auth, referer, cacheLastModifiedTime, freshConnection, guarded, timeout.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) {
                     throw new TimeoutException("Timed out while waiting for response.");
@@ -339,12 +352,14 @@ namespace JDP {
         // every hop is checked: only http(s), no credentials (dropped on every redirect, as
         // the transport before HttpClient did, so none can reach another origin), nothing to a host paused by a rate
         // limit, and the SSRF guard when the hop connects. Returns the last response, which may be an
-        // error or a redirect that was not followed.
-        private static async Task<HttpResponseMessage> SendAsync(string url, string auth, string referer, DateTime? cacheLastModifiedTime, bool freshConnection, CancellationToken cancellationToken) {
-            HttpClient client = freshConnection ? _freshConnectionHttpClient : _httpClient;
+        // error or a redirect that was not followed. Every hop of a guarded download goes out on the
+        // guarded clients.
+        private static async Task<HttpResponseMessage> SendAsync(string url, string auth, string referer, DateTime? cacheLastModifiedTime, bool freshConnection, bool guarded, CancellationToken cancellationToken) {
+            HttpClient client = GetHttpClient(freshConnection, guarded);
             Uri uri = ToHTTPUri(url);
             for (int redirects = 0; ; redirects++) {
-                HttpRequestMessage request = BuildWebRequest(uri, auth, referer, cacheLastModifiedTime);
+                HttpRequestMessage request = BuildWebRequest(uri, auth, referer, cacheLastModifiedTime, guarded);
+                ThrowIfGuardedRequestOnUnguardedClient(request, client);
                 HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
                 Uri target = GetRedirectTargetOrDispose(response);
                 if (target == null || redirects == MaxRedirects) return response;
@@ -352,6 +367,23 @@ namespace JDP {
                 uri = ToHTTPUri(target.AbsoluteUri);
                 auth = null;
                 ConnectionManager.GetInstanceForHost(uri.Host).ThrowIfPaused();
+            }
+        }
+
+        // Test only: sends guarded requests on the unguarded clients, a mix-up that the check before sending
+        // (ThrowIfGuardedRequestOnUnguardedClient) must stop. Never set by production code.
+        internal static bool UseUnguardedClientsForTesting { get; set; }
+
+        internal static HttpClient GetHttpClient(bool freshConnection, bool guarded) {
+            if (guarded && !UseUnguardedClientsForTesting) return freshConnection ? _guardedFreshConnectionHttpClient : _guardedHttpClient;
+            return freshConnection ? _freshConnectionHttpClient : _httpClient;
+        }
+
+        // A guarded request must never go out on an unguarded client: its pooled connections were never checked, and
+        // SSRFGuard's connect-time tripwire only sees the request that makes a new connection
+        internal static void ThrowIfGuardedRequestOnUnguardedClient(HttpRequestMessage request, HttpClient client) {
+            if (SSRFGuard.IsGuardedRequest(request) && client != _guardedHttpClient && client != _guardedFreshConnectionHttpClient) {
+                throw new BlockedAddressException(request.RequestUri.IdnHost, "a guarded request was about to go out on a client that is not checked");
             }
         }
 
@@ -412,13 +444,15 @@ namespace JDP {
             return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
         }
 
-        internal static HttpRequestMessage BuildWebRequest(Uri uri, string auth, string referer, DateTime? cacheLastModifiedTime) {
+        // A guarded request carries SSRFGuard.GuardedRequest, so a connection that is not checked refuses it
+        internal static HttpRequestMessage BuildWebRequest(Uri uri, string auth, string referer, DateTime? cacheLastModifiedTime, bool guarded) {
             HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri) {
                 // HTTP/3 (QUIC) would not connect through ConnectCallback, so the SSRF guard
                 // could not check it; HTTP/2 is not needed
                 Version = HttpVersion.Version11,
                 VersionPolicy = HttpVersionPolicy.RequestVersionExact
             };
+            request.Options.Set(SSRFGuard.GuardedRequest, guarded);
             // 4chan blocks (HTTP 403) non-browser user agents, so default to a browser-like one. A custom
             // one that could not be sent as one header line falls back to the default.
             string userAgent = GetUserAgent();
@@ -1491,7 +1525,56 @@ namespace JDP {
             string[] backupLines = ThreadListFile.GetBackupLines(lines);
             // Never replace the backup with a thread list that wouldn't load
             if (backupLines == null) return;
+            // The marks of the threads added through the local API go with it, first: if the thread list backup
+            // then fails, the marks backup only has marks to spare, which fails closed. When the marks can't be
+            // backed up, neither backup is refreshed, so the two made earlier stay together.
+            if (!WriteApiThreadsBackup(Path.Combine(Path.GetDirectoryName(path), Settings.ApiThreadsFileName))) return;
             TextFile.WriteAllLinesAtomic(path + ".bak", backupLines);
+        }
+
+        // api-threads.txt.bak: api-threads.txt as it is, byte for byte. Returns false to leave both backups as they
+        // are: api-threads.txt is there but can't be used (not valid, can't be read, a folder), or it is missing
+        // although it was written before (logged).
+        private static bool WriteApiThreadsBackup(string path) {
+            if (!File.Exists(path) && !Directory.Exists(path)) return WriteApiThreadsBackupWithoutMarks(path + ".bak");
+            byte[] content = ReadValidApiThreads(path);
+            if (content == null) return false;
+            TextFile.WriteAllBytesAtomic(path + ".bak", content);
+            return true;
+        }
+
+        // api-threads.txt is missing. If it was written before (it is then guarded as lost, see WatchSession), neither
+        // backup is refreshed, so the pair made earlier stays together. Otherwise no thread was added through the API,
+        // and a marks backup made earlier is replaced by one without marks.
+        private static bool WriteApiThreadsBackupWithoutMarks(string backupPath) {
+            if (Settings.ApiThreadsFileWritten == true) {
+                Logger.Log(Settings.ApiThreadsFileName + " is missing although it was written before, so the thread list was not backed up; the backups made earlier stay as they are.");
+                return false;
+            }
+            if (File.Exists(backupPath)) TextFile.WriteAllLinesAtomic(backupPath, ApiThreadsFile.Serialize(new string[0]));
+            return true;
+        }
+
+        // Null (logged) if the file can't be read or is not valid
+        private static byte[] ReadValidApiThreads(string path) {
+            try {
+                byte[] content = File.ReadAllBytes(path);
+                ApiThreadsFile.Parse(ReadLines(content));
+                return content;
+            }
+            catch (Exception ex) when (ex is FormatException || ex is IOException || ex is UnauthorizedAccessException) {
+                Logger.Log(Settings.ApiThreadsFileName + " can't be used (" + ex.Message + "), so the thread list was not backed up; the backups made earlier stay as they are.");
+                return null;
+            }
+        }
+
+        private static string[] ReadLines(byte[] content) {
+            List<string> lines = new List<string>();
+            using (StreamReader reader = new StreamReader(new MemoryStream(content), Encoding.UTF8, true)) {
+                string line;
+                while ((line = reader.ReadLine()) != null) lines.Add(line);
+            }
+            return lines.ToArray();
         }
 
         // When checking size, avoid overwriting a larger backup with a smaller thread list
@@ -1517,6 +1600,8 @@ namespace JDP {
             private readonly CancellationTokenSource _cancel = new CancellationTokenSource();
             private readonly string _auth;
             private readonly bool _freshConnection;
+            // Every request, the meta refresh one included, goes out on the guarded clients
+            private readonly bool _guarded;
             private readonly DateTime? _cacheLastModifiedTime;
             private readonly Action<HttpResponseMessage> _onResponse;
             private readonly Action<byte[], int> _onDownloadChunk;
@@ -1530,9 +1615,10 @@ namespace JDP {
             private long _readStartTicks;
             private long _totalBytesRead;
 
-            public AsyncDownload(string auth, bool freshConnection, DateTime? cacheLastModifiedTime, Action<HttpResponseMessage> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
+            public AsyncDownload(string auth, bool freshConnection, bool guarded, DateTime? cacheLastModifiedTime, Action<HttpResponseMessage> onResponse, Action<byte[], int> onDownloadChunk, Action onComplete, Action<Exception> onException) {
                 _auth = auth;
                 _freshConnection = freshConnection;
+                _guarded = guarded;
                 _cacheLastModifiedTime = cacheLastModifiedTime;
                 _onResponse = onResponse;
                 _onDownloadChunk = onDownloadChunk;
@@ -1549,7 +1635,7 @@ namespace JDP {
 
             private async Task RunAsync(string url, string referer) {
                 try {
-                    HttpResponseMessage response = await GetResponseAsync(url, _auth, referer, _cacheLastModifiedTime, _freshConnection, _cancel.Token).ConfigureAwait(false);
+                    HttpResponseMessage response = await GetResponseAsync(url, _auth, referer, _cacheLastModifiedTime, _freshConnection, _guarded, _cancel.Token).ConfigureAwait(false);
                     SetResponse(response);
                     Stream responseStream = await OpenResponseStreamAsync(response).ConfigureAwait(false);
                     if (!StartReading(responseStream)) return;
@@ -1648,7 +1734,7 @@ namespace JDP {
                 // Sends nothing to a host that is paused by a rate limit
                 ConnectionManager.GetInstanceForHost(GetMetaRefreshTarget(new Uri(pageUrl), redirectUrl).Host).ThrowIfPaused();
                 ReleaseReplacedResponse();
-                HttpResponseMessage redirectionResponse = await GetResponseAsync(redirectUrl, GetAuthForURL(_auth, _url, redirectUrl), null, _cacheLastModifiedTime, _freshConnection, _cancel.Token).ConfigureAwait(false);
+                HttpResponseMessage redirectionResponse = await GetResponseAsync(redirectUrl, GetAuthForURL(_auth, _url, redirectUrl), null, _cacheLastModifiedTime, _freshConnection, _guarded, _cancel.Token).ConfigureAwait(false);
                 SetResponse(redirectionResponse);
                 Stream stream = await redirectionResponse.Content.ReadAsStreamAsync(_cancel.Token).ConfigureAwait(false);
                 return CreateThrottledStream(stream);

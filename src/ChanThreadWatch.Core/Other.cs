@@ -81,6 +81,10 @@ namespace JDP {
         public WatcherExtraData ExtraData { get; set; }
         public string Category { get; set; }
         public bool AutoFollow { get; set; }
+        // Added through the local API (see ThreadWatcher.Guarded). Never written to the thread list
+        // file, whose format stays as the previous release reads it; the mark is kept in the
+        // api-threads.txt file beside it (ApiThreadsFile).
+        public bool Guarded { get; set; }
     }
 
     public class MonitoringInfo {

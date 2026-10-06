@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using System.Threading;
+using System.Text.RegularExpressions;
 
 namespace JDP.Cli {
     // list, add and remove. The thread list is read and written only through ThreadListFile, so every thread ctw
@@ -38,7 +38,11 @@ namespace JDP.Cli {
                 string path = GetThreadListPath(folder.Path);
                 ThreadListData data = ReadThreadListForWrite(path);
                 EnsureCanAdd(folder.Path, data, pageID);
+                HashSet<string> entries = GetApiThreadEntriesWithout(folder.Path, data.Threads, null, pageID);
                 data.Threads.Add(NewThread.Create(url, command.Description, command.Category));
+                // First: if it fails, nothing is written. If the thread list write then fails, only the entry of a
+                // thread that is not in the list is gone (the threads followed from it have entries of their own).
+                WriteApiThreadEntriesForAdd(context, folder.Path, entries);
                 TextFile.WriteAllLinesAtomic(path, ThreadListFile.Serialize(data.Threads));
             }
             context.Output.WriteLine("Added " + ConsoleText.CleanUrl(url) + " (settings folder: " + ConsoleText.Clean(folder.Path) + ")");
@@ -94,12 +98,164 @@ namespace JDP.Cli {
                 string path = GetThreadListPath(folder);
                 ThreadListData data = ReadThreadListForWrite(path);
                 removed = FindSingleThread(data, pageID, url);
+                // Worked out while the list still has the thread, which may link others to a marked thread
+                HashSet<string> entries = GetApiThreadEntriesWithout(folder, data.Threads, removed, pageID);
                 data.Threads.Remove(removed);
                 TextFile.WriteAllLinesAtomic(path, ThreadListFile.Serialize(data.Threads));
+                // After the thread list, so a failure never leaves a guarded thread without its entry; an entry
+                // left without a thread is kept, as the app keeps one
+                WriteApiThreadEntriesForRemove(context, folder, entries);
             }
             context.Output.WriteLine("Removed " + ConsoleText.CleanUrl(removed.URL) + " (settings folder: " + ConsoleText.Clean(folder) + ")");
             if (StoredLogins.HasLoginStoreItem(removed)) context.Error.WriteLine("ctw: note: " + StoredLogins.KeptItemNote);
             return CliApp.ExitSuccess;
+        }
+
+        // api-threads.txt (ApiThreadsFile) marks the threads added through the local API, which the app and ctw watch
+        // guarded. A thread ctw adds is not one of them, so an entry left for its page ID goes, as when the app adds it.
+        private static void WriteApiThreadEntriesForAdd(CliContext context, string folder, HashSet<string> entries) {
+            try {
+                WriteApiThreadEntries(context, folder, entries);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                throw new CliException(Settings.ApiThreadsFileName + " could not be written, so ctw does not add the thread: " + ex.Message);
+            }
+        }
+
+        // A removed thread's entry goes, as when the app removes it
+        private static void WriteApiThreadEntriesForRemove(CliContext context, string folder, HashSet<string> entries) {
+            try {
+                WriteApiThreadEntries(context, folder, entries);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                context.Error.WriteLine("ctw: warning: " + Settings.ApiThreadsFileName + " could not be written: " + ex.Message);
+            }
+        }
+
+        // Null leaves the file as it is
+        private static void WriteApiThreadEntries(CliContext context, string folder, HashSet<string> entries) {
+            if (entries == null) return;
+            TextFile.WriteAllLinesAtomic(Path.Combine(folder, Settings.ApiThreadsFileName), ApiThreadsFile.Serialize(entries));
+            MarkApiThreadsFileWritten(context, folder);
+        }
+
+        // The entries of api-threads.txt once the thread (its page ID) leaves the list or stops being one the API added,
+        // or null to leave the file as it is: it is missing, can't be read or has a version ctw does not know (the app
+        // then guards every thread for its session, the safe side), or nothing changes. A load also marks the threads
+        // whose AddedFrom chain reaches an entry (WatchSession.MarkGuardedThreads), also through threads that have no
+        // entry; every such thread that stays gets an entry of its own, so no thread loses its mark with this one.
+        private static HashSet<string> GetApiThreadEntriesWithout(string folder, List<ThreadInfo> threads, ThreadInfo leaving, string pageID) {
+            HashSet<string> entries = TryReadApiThreads(Path.Combine(folder, Settings.ApiThreadsFileName));
+            if (entries == null) return null;
+            WatchSession.MarkGuardedThreads(threads, entries, false);
+            if (!entries.Contains(pageID) && !IsGuarded(leaving)) return null;
+            AddEntriesOfMarkedThreads(entries, threads, leaving);
+            entries.Remove(pageID);
+            return entries;
+        }
+
+        private static bool IsGuarded(ThreadInfo thread) {
+            return thread != null && thread.Guarded;
+        }
+
+        private static void AddEntriesOfMarkedThreads(HashSet<string> entries, List<ThreadInfo> threads, ThreadInfo leaving) {
+            foreach (ThreadInfo thread in threads) {
+                if (thread == leaving || !thread.Guarded) continue;
+                string pageID = ThreadUrl.TryGetPageID(thread.URL);
+                if (pageID != null) entries.Add(pageID);
+            }
+        }
+
+        private const string ApiThreadsFileWrittenName = "ApiThreadsFileWritten";
+
+        // As the app after it writes api-threads.txt (WatchSession.MarkApiThreadsFileWritten), but the line is set in
+        // the file itself, so every other byte of it stays (Settings.Save would rewrite all of it, and refuses a
+        // plaintext login, which ctw can't encrypt). A missing settings file is not created, and a file ctw can't
+        // change byte for byte is left as it is; either gives a warning. Under the folder's lock.
+        private static void MarkApiThreadsFileWritten(CliContext context, string folder) {
+            string path = Path.Combine(folder, Settings.SettingsFileName);
+            try {
+                SetApiThreadsFileWrittenInFile(path);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is FormatException) {
+                context.Error.WriteLine("ctw: warning: " + ApiThreadsFileWrittenName + "=1 could not be saved in " + Settings.SettingsFileName + " (" + ex.Message +
+                    "); until it is, a missing " + Settings.ApiThreadsFileName + " is read as no thread added through the local API.");
+            }
+        }
+
+        private static void SetApiThreadsFileWrittenInFile(string path) {
+            if (!File.Exists(path)) throw new FileNotFoundException("the file does not exist");
+            byte[] updated = WithApiThreadsFileWritten(File.ReadAllBytes(path));
+            if (updated != null) TextFile.WriteAllBytesAtomic(path, updated);
+        }
+
+        private static readonly UTF8Encoding _strictUtf8 = new UTF8Encoding(false, true);
+
+        // The content with ApiThreadsFileWritten=1, or null if it is already on. The first line with the name in any
+        // case (the one Settings.Load reads) gets the value; without one, the line is added at the end. A UTF-8 byte
+        // order mark stays. Throws FormatException for a file that can't be changed byte for byte: UTF-16, not valid
+        // UTF-8, or with a line break the app does not write (a lone CR).
+        internal static byte[] WithApiThreadsFileWritten(byte[] content) {
+            int bomLength = GetUtf8ByteOrderMarkLength(content);
+            string updated = SetApiThreadsFileWritten(DecodeExactly(content, bomLength));
+            if (updated == null) return null;
+            byte[] body = _strictUtf8.GetBytes(updated);
+            byte[] result = new byte[bomLength + body.Length];
+            Buffer.BlockCopy(content, 0, result, 0, bomLength);
+            Buffer.BlockCopy(body, 0, result, bomLength, body.Length);
+            return result;
+        }
+
+        private static int GetUtf8ByteOrderMarkLength(byte[] content) {
+            if (StartsWith(content, 0xFF, 0xFE) || StartsWith(content, 0xFE, 0xFF)) throw new FormatException("it is UTF-16, which ctw does not change");
+            return StartsWith(content, 0xEF, 0xBB, 0xBF) ? 3 : 0;
+        }
+
+        private static bool StartsWith(byte[] content, params byte[] prefix) {
+            if (content.Length < prefix.Length) return false;
+            for (int i = 0; i < prefix.Length; i++) {
+                if (content[i] != prefix[i]) return false;
+            }
+            return true;
+        }
+
+        private static string DecodeExactly(byte[] content, int start) {
+            string text;
+            try {
+                text = _strictUtf8.GetString(content, start, content.Length - start);
+            }
+            catch (DecoderFallbackException) {
+                throw new FormatException("it is not valid UTF-8");
+            }
+            if (!_strictUtf8.GetBytes(text).AsSpan().SequenceEqual(content.AsSpan(start))) throw new FormatException("it does not read back byte for byte");
+            if (Regex.IsMatch(text, "\r(?!\n)")) throw new FormatException("it has a line break the app does not write (a lone CR)");
+            return text;
+        }
+
+        // Null if the setting is already on
+        private static string SetApiThreadsFileWritten(string text) {
+            Match line = Regex.Match(text, "^" + ApiThreadsFileWrittenName + "=([^\r\n]*)", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!line.Success) return AppendLine(text, ApiThreadsFileWrittenName + "=1");
+            Group value = line.Groups[1];
+            return value.Value == "1" ? null : text.Substring(0, value.Index) + "1" + text.Substring(value.Index + value.Length);
+        }
+
+        // With the file's own line break
+        private static string AppendLine(string text, string line) {
+            string newLine = text.Contains("\r\n") ? "\r\n" : text.Contains("\n") ? "\n" : Environment.NewLine;
+            bool endsWithLineBreak = text.Length == 0 || text.EndsWith("\n", StringComparison.Ordinal);
+            return text + (endsWithLineBreak ? "" : newLine) + line + newLine;
+        }
+
+        // A missing file costs no retries; one that goes away before the read is missing too
+        private static HashSet<string> TryReadApiThreads(string path) {
+            try {
+                string[] lines = SharedFile.ReadAllLinesIfPresent(path);
+                return lines != null ? ApiThreadsFile.Parse(lines) : null;
+            }
+            catch (Exception ex) when (ex is FormatException || ex is IOException || ex is UnauthorizedAccessException) {
+                return null;
+            }
         }
 
         private static ThreadInfo FindSingleThread(ThreadListData data, string pageID, string url) {
@@ -144,52 +300,6 @@ namespace JDP.Cli {
                 throw new CliException(Settings.ThreadsFileName + " holds logins saved without encryption by an older version. Start Chan Thread Watch once to encrypt them, then try again.");
             }
             return data;
-        }
-    }
-
-    // Reads a file of the settings folder while another program may swap in a new version of it
-    internal static class SharedFile {
-        private const int ReadAttempts = 5;
-        private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
-
-        // Returns null if the file (or its folder) does not exist. Shares writing and deleting, so the app can swap
-        // in a new file while this reads; the swap is atomic (TextFile.WriteAllLinesAtomic), so this reads either
-        // the old or the new file. A file that is missing for a moment or locked by another program is read again
-        // a few times (about 200 ms in all).
-        public static string[] ReadAllLines(string path) {
-            for (int attempt = 1; ; attempt++) {
-                try {
-                    return ReadOnce(path);
-                }
-                catch (IOException ex) when (attempt < ReadAttempts && IsTransient(ex)) {
-                    Thread.Sleep(RetryDelay);
-                }
-                catch (IOException ex) when (IsMissing(ex)) {
-                    return null;
-                }
-            }
-        }
-
-        // Missing, or open in another program without sharing (a sharing or lock violation on Windows, flock's
-        // EWOULDBLOCK on Unix, as for the settings folder's lock)
-        private static bool IsTransient(IOException ex) {
-            return IsMissing(ex) || SettingsFolderLock.IsHeldByAnother(ex);
-        }
-
-        private static bool IsMissing(IOException ex) {
-            return ex is FileNotFoundException || ex is DirectoryNotFoundException;
-        }
-
-        private static string[] ReadOnce(string path) {
-            List<string> lines = new List<string>();
-            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (StreamReader reader = new StreamReader(fs, Encoding.UTF8, true)) {
-                string line;
-                while ((line = reader.ReadLine()) != null) {
-                    lines.Add(line);
-                }
-            }
-            return lines.ToArray();
         }
     }
 

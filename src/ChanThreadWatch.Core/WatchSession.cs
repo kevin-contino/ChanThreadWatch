@@ -20,6 +20,16 @@ namespace JDP {
         private readonly Dictionary<string, ThreadWatcher> _watchers = new Dictionary<string, ThreadWatcher>();
         // Not locked: the load fills it on a worker thread while auto-follow can read it (known race, unchanged by the move)
         private readonly HashSet<string> _blacklist = new HashSet<string>();
+        // The page IDs read from api-threads.txt (ApiThreadsFile). An entry stays, also when no loaded thread
+        // has it (fail closed), until its thread is removed or added again unguarded. Locked on itself.
+        private readonly HashSet<string> _apiThreadEntries = new HashSet<string>(StringComparer.Ordinal);
+        // False when api-threads.txt could not be read and could not be copied aside: it is then left as it is
+        private volatile bool _canSaveApiThreads = true;
+        // The page IDs of the watchers guarded for this session only (UpdateMarks): their mark is not saved. Locked on itself.
+        private readonly HashSet<string> _guardedForSessionOnly = new HashSet<string>(StringComparer.Ordinal);
+        // The marks of removed threads, still written to api-threads.txt until threads.txt without them is saved.
+        // Locked on itself.
+        private readonly HashSet<string> _pendingRemovedMarks = new HashSet<string>(StringComparer.Ordinal);
         private bool _isLoadingThreadsFromFile;
 
         internal WatchSession(Action<Action> runOnOwnerThread, Action<Action> postToOwnerThread, string settingsDirectory = null) {
@@ -49,6 +59,10 @@ namespace JDP {
         internal bool IsLoadingThreadsFromFile {
             get { return _isLoadingThreadsFromFile; }
         }
+
+        // Set by the load when api-threads.txt could not be read: every loaded thread is then guarded for this
+        // session only (the host may say so; the log says it too)
+        internal bool ApiThreadsUnreadable { get; private set; }
 
         // Set when the thread list has changed and should be saved
         internal bool SaveThreadListPending { get; set; }
@@ -164,12 +178,10 @@ namespace JDP {
             string pageID = siteHelper.GetPageID();
             if (IsBlacklisted(pageID)) return false;
 
-            if (TryGetThreadWatcher(pageID, out watcher)) {
-                if (watcher.IsRunning) return false;
-            }
+            if (TryGetThreadWatcher(pageID, out watcher) && !CanReuseWatcher(watcher, thread)) return false;
 
             if (watcher == null) {
-                watcher = CreateThreadWatcher(thread, out parentThread);
+                watcher = CreateThreadWatcher(thread, isFromFile, out parentThread);
                 watcher.AddThread += ThreadWatcher_AddThread;
                 OnThreadWatcherCreated(watcher);
             }
@@ -183,6 +195,12 @@ namespace JDP {
             return true;
         }
 
+        // A stopped watcher takes the new settings and starts again. Its Guarded mark never changes: a
+        // guarded thread stays guarded, and a guarded request never takes over an unguarded watcher.
+        private static bool CanReuseWatcher(ThreadWatcher watcher, ThreadInfo thread) {
+            return !watcher.IsRunning && (watcher.Guarded || !thread.Guarded);
+        }
+
         private void OnThreadWatcherCreated(ThreadWatcher watcher) {
             ThreadWatcherCreated?.Invoke(watcher);
         }
@@ -191,19 +209,78 @@ namespace JDP {
             ThreadWatcherAdded?.Invoke(watcher);
         }
 
-        private ThreadWatcher CreateThreadWatcher(ThreadInfo thread, out ThreadWatcher parentThread) {
-            parentThread = null;
-            ThreadWatcher watcher = new ThreadWatcher(thread.URL);
+        // A thread followed from a guarded thread is guarded, and so is one the thread list marks (MarkGuardedThreads)
+        private ThreadWatcher CreateThreadWatcher(ThreadInfo thread, bool isFromFile, out ThreadWatcher parentThread) {
+            parentThread = FindAddedFromThread(thread);
+            ThreadWatcher watcher = new ThreadWatcher(thread.URL, thread.Guarded || IsGuarded(parentThread));
+            UpdateMarks(watcher, parentThread, isFromFile);
             watcher.ThreadDownloadDirectory = thread.SaveDir;
             watcher.Description = thread.Description;
             if (_isLoadingThreadsFromFile) watcher.DoNotRename = true;
             watcher.Category = thread.Category;
             watcher.DoNotRename = false;
+            watcher.ParentThread = parentThread;
+            return watcher;
+        }
+
+        // Runs for a new watcher only (a stopped watcher that is added again is reused, and keeps its mark). A new
+        // watcher without the mark drops an entry left for its page ID: the thread is no longer one the API added. A
+        // thread from the file loaded while api-threads.txt could not be read, or one followed from such a thread, is
+        // guarded for the session only: its mark is not saved. Any other guarded watcher (an API add, also one made
+        // during that load) has a real mark.
+        private void UpdateMarks(ThreadWatcher watcher, ThreadWatcher parentThread, bool isFromFile) {
+            if (!watcher.Guarded) RemoveApiThreadEntry(watcher.PageID);
+            bool sessionOnly = IsGuardedForSessionOnly(watcher, parentThread, isFromFile);
+            lock (_guardedForSessionOnly) {
+                if (sessionOnly) _guardedForSessionOnly.Add(watcher.PageID);
+                else _guardedForSessionOnly.Remove(watcher.PageID);
+            }
+        }
+
+        private bool IsGuardedForSessionOnly(ThreadWatcher watcher, ThreadWatcher parentThread, bool isFromFile) {
+            if (!watcher.Guarded) return false;
+            return (isFromFile && ApiThreadsUnreadable) || IsGuardedForSessionOnly(parentThread);
+        }
+
+        private bool IsGuardedForSessionOnly(ThreadWatcher watcher) {
+            if (watcher == null) return false;
+            lock (_guardedForSessionOnly) {
+                return _guardedForSessionOnly.Contains(watcher.PageID);
+            }
+        }
+
+        private ThreadWatcher FindAddedFromThread(ThreadInfo thread) {
+            ThreadWatcher parentThread = null;
             if (thread.ExtraData != null && !String.IsNullOrEmpty(thread.ExtraData.AddedFrom)) {
                 TryGetThreadWatcher(thread.ExtraData.AddedFrom, out parentThread);
-                watcher.ParentThread = parentThread;
             }
-            return watcher;
+            return parentThread;
+        }
+
+        private static bool IsGuarded(ThreadWatcher watcher) {
+            return watcher != null && watcher.Guarded;
+        }
+
+        private void RemoveApiThreadEntry(string pageID) {
+            lock (_apiThreadEntries) {
+                _apiThreadEntries.Remove(pageID);
+            }
+        }
+
+        // The removed watcher's mark stays in api-threads.txt until the thread list without the thread is saved
+        // (SaveThreadList), so a failed save of threads.txt never leaves the thread there without its mark
+        private void RemoveMarks(ThreadWatcher watcher) {
+            if (watcher.Guarded && !IsGuardedForSessionOnly(watcher)) AddPendingRemovedMark(watcher.PageID);
+            RemoveApiThreadEntry(watcher.PageID);
+            lock (_guardedForSessionOnly) {
+                _guardedForSessionOnly.Remove(watcher.PageID);
+            }
+        }
+
+        private void AddPendingRemovedMark(string pageID) {
+            lock (_pendingRemovedMarks) {
+                _pendingRemovedMarks.Add(pageID);
+            }
         }
 
         private static void ApplyThreadInfo(ThreadWatcher watcher, ThreadInfo thread) {
@@ -276,6 +353,7 @@ namespace JDP {
                     RunPreRemoveAction(preRemoveAction, watcher);
                     ThreadWatcherRemoved?.Invoke(watcher);
                     UnregisterThreadWatcher(watcher);
+                    RemoveMarks(watcher);
                     DeleteSavedLogins(watcher);
                 }
             }
@@ -371,20 +449,94 @@ namespace JDP {
             get { return Path.Combine(SettingsDirectory, Settings.ThreadsFileName); }
         }
 
+        private string ApiThreadsPath {
+            get { return Path.Combine(SettingsDirectory, Settings.ApiThreadsFileName); }
+        }
+
         // Returns false if the list was not saved (still loading, or the save failed), so the
         // caller can try again later
         internal bool SaveThreadList() {
             if (_isLoadingThreadsFromFile) return false;
             try {
+                List<string> pendingRemoved = GetPendingRemovedMarks();
+                // The marks of the threads added through the API go first, those of removed threads
+                // included: a thread list saved without a thread's mark, or one that failed to save
+                // after the mark of a thread still in it was dropped, would let the thread run
+                // unguarded after the next start
+                if (_threadListStore.CanSave) SaveApiThreads(pendingRemoved);
                 // The thread list store refuses to save until the load has finished, and
                 // writes atomically so a failure can't leave a partially written file.
                 bool saved = _threadListStore.Save(ThreadListPath, GetSavedThreadInfos());
-                if (saved) OnSaveSucceeded();
+                if (saved) OnSaveSucceeded(pendingRemoved);
                 return saved;
             }
             catch (Exception ex) {
                 LogSaveFailed(ex);
                 return false;
+            }
+        }
+
+        // Writes api-threads.txt atomically. No file is made until a thread is added through the API.
+        private void SaveApiThreads(List<string> pendingRemoved) {
+            if (!_canSaveApiThreads) return;
+            List<string> pageIDs = GetApiThreadPageIDs();
+            pageIDs.AddRange(pendingRemoved.FindAll(pageID => !pageIDs.Contains(pageID)));
+            string path = ApiThreadsPath;
+            if (pageIDs.Count == 0 && !File.Exists(path)) return;
+            TextFile.WriteAllLinesAtomic(path, ApiThreadsFile.Serialize(pageIDs));
+            MarkApiThreadsFileWritten(SettingsDirectory);
+        }
+
+        // After a write of api-threads.txt, so a later load treats a missing one as lost (IsMissingAfterWrite). The file
+        // is written first: if the settings then fail to save, a missing file only fails open as it did before the
+        // setting, so that is logged and the save goes on. Also used by ctw.
+        internal static void MarkApiThreadsFileWritten(string settingsDirectory) {
+            if (Settings.ApiThreadsFileWritten == true) return;
+            Settings.ApiThreadsFileWritten = true;
+            if (!Settings.Save(Path.Combine(settingsDirectory, Settings.SettingsFileName))) {
+                Logger.Log(ApiThreadsFileWrittenSetting + "=1 could not be saved in " + Settings.SettingsFileName + " after " + Settings.ApiThreadsFileName +
+                    " was written; until it is, a missing " + Settings.ApiThreadsFileName + " is read as no thread added through the local API.");
+            }
+        }
+
+        private List<string> GetPendingRemovedMarks() {
+            lock (_pendingRemovedMarks) {
+                return new List<string>(_pendingRemovedMarks);
+            }
+        }
+
+        // threads.txt no longer has the removed threads, so their marks go too. If writing api-threads.txt
+        // fails, they stay there as entries without a thread (kept, as any such entry) until the next save.
+        private void DropPendingRemovedMarks(List<string> pendingRemoved) {
+            if (pendingRemoved.Count == 0) return;
+            lock (_pendingRemovedMarks) {
+                _pendingRemovedMarks.ExceptWith(pendingRemoved);
+            }
+            try {
+                SaveApiThreads(new List<string>());
+            }
+            catch (Exception ex) {
+                Logger.Log("The marks of removed threads could not be dropped from " + Settings.ApiThreadsFileName + "; the next save tries again." + Environment.NewLine + ex);
+            }
+        }
+
+        // The guarded watchers but those guarded for this session only, and the entries read from the file
+        // whose thread is not watched (for example one whose entry in the thread list did not load)
+        private List<string> GetApiThreadPageIDs() {
+            HashSet<string> pageIDs = new HashSet<string>(StringComparer.Ordinal);
+            foreach (ThreadWatcher watcher in ThreadWatchers) {
+                if (watcher.Guarded && !IsGuardedForSessionOnly(watcher)) pageIDs.Add(watcher.PageID);
+            }
+            foreach (string pageID in GetApiThreadEntries()) {
+                ThreadWatcher watcher;
+                if (!TryGetThreadWatcher(pageID, out watcher)) pageIDs.Add(pageID);
+            }
+            return new List<string>(pageIDs);
+        }
+
+        private List<string> GetApiThreadEntries() {
+            lock (_apiThreadEntries) {
+                return new List<string>(_apiThreadEntries);
             }
         }
 
@@ -398,8 +550,9 @@ namespace JDP {
 
         // Items of removed threads and cleared logins go once the list without them is saved,
         // unless a thread still uses them
-        private void OnSaveSucceeded() {
+        private void OnSaveSucceeded(List<string> pendingRemoved) {
             LogSaveSucceeded();
+            DropPendingRemovedMarks(pendingRemoved);
             StoredAuthDeletes.Flush(SettingsDirectory, GetLiveStoredAuth());
         }
 
@@ -438,7 +591,8 @@ namespace JDP {
                 Description = watcher.Description,
                 ExtraData = (WatcherExtraData)watcher.Tag,
                 Category = watcher.Category,
-                AutoFollow = watcher.AutoFollow
+                AutoFollow = watcher.AutoFollow,
+                Guarded = watcher.Guarded
             };
         }
 
@@ -466,12 +620,132 @@ namespace JDP {
 
         // Returns false if any part of the file could not be loaded.
         private bool LoadThreadListFile() {
+            // Before the thread list, so the marks are kept even if the thread list does not load
+            bool allGuarded = !ReadApiThreads();
+            ApiThreadsUnreadable = allGuarded;
             ThreadListData data = _threadListStore.Read(ThreadListPath);
             if (data == null) return true;
             // Plaintext logins are protected by the next save, before the periodic backup can copy them
             if (data.HasPlaintextAuth) SaveThreadListPending = true;
+            MarkGuardedThreads(data.Threads, GetApiThreadEntries(), allGuarded);
             bool allThreadsAdded = data.Threads.Count == 0 || AddLoadedThreads(data.Threads);
             return allThreadsAdded && data.TrailingLineCount == 0;
+        }
+
+        // A missing file marks no thread. Returns false if the file could not be used: every loaded thread is then
+        // guarded for this session only. A file that can't be read (after the retries of SharedFile.ReadAllLines,
+        // e.g. one another program holds) is left as it is and not saved this session. A file that is not valid or has
+        // a version this one does not know is copied aside, and the next save writes only the marks this session makes
+        // (if the copy aside fails, the file is left as it is too).
+        private bool ReadApiThreads() {
+            string path = ApiThreadsPath;
+            string[] lines;
+            try {
+                // A missing file costs no retries; one that goes away before the read is missing too (null)
+                lines = SharedFile.ReadAllLinesIfPresent(path);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+                _canSaveApiThreads = false;
+                Logger.Log(Settings.ApiThreadsFileName + " could not be read, so every loaded thread is treated as added through the local API for this session (it never connects to a local or private address). " +
+                    "The file is left as it is and is not saved this session, so no thread can be added through the API." + Environment.NewLine + ex);
+                return false;
+            }
+            return lines != null ? TryAddApiThreadEntries(path, lines) : !IsMissingAfterWrite();
+        }
+
+        // A file that is missing although it was written before (Settings.ApiThreadsFileWritten) may have been deleted
+        // or lost, so it is treated like one that can't be read. It can still be written: the next save writes the
+        // marks this session makes. Without the setting, a missing file just means no thread was added through the API.
+        private static bool IsMissingAfterWrite() {
+            if (Settings.ApiThreadsFileWritten != true) return false;
+            Logger.Log(Settings.ApiThreadsFileName + " is missing although it was written before (" + ApiThreadsFileWrittenSetting + " in " + Settings.SettingsFileName + "), " +
+                "so every loaded thread is treated as added through the local API for this session (it never connects to a local or private address); that is not saved.");
+            return true;
+        }
+
+        private const string ApiThreadsFileWrittenSetting = "ApiThreadsFileWritten";
+
+        private bool TryAddApiThreadEntries(string path, string[] lines) {
+            try {
+                HashSet<string> pageIDs = ApiThreadsFile.Parse(lines);
+                lock (_apiThreadEntries) {
+                    _apiThreadEntries.UnionWith(pageIDs);
+                }
+                return true;
+            }
+            catch (FormatException ex) {
+                PreserveApiThreadsFile(path, ex);
+                return false;
+            }
+        }
+
+        // False while api-threads.txt can't be written this session (see ReadApiThreads): a thread added through the
+        // API would lose its mark, so the API refuses to add one
+        internal bool CanSaveApiThreadMarks {
+            get { return _canSaveApiThreads; }
+        }
+
+        // A file that can't be copied aside is not written this session, so it is read again at the next start
+        private void PreserveApiThreadsFile(string path, Exception ex) {
+            string problem = Settings.ApiThreadsFileName + " is not valid or has a version this one does not know, so every loaded thread is treated as added through the local API for this session (it never connects to a local or private address); that is not saved.";
+            try {
+                Logger.Log(problem + " The original file was kept as " + TextFile.PreserveCopy(path) + Environment.NewLine + ex);
+            }
+            catch (Exception copyEx) {
+                _canSaveApiThreads = false;
+                Logger.Log(problem + " It could not be copied aside either, so it is not saved this session." + Environment.NewLine + ex + Environment.NewLine + copyEx);
+            }
+        }
+
+        // Before the watchers are made, so a guarded thread's first request (the 4chan slug lookup in the
+        // watcher's constructor) is guarded. A thread is guarded if its page ID or that of a thread it was
+        // followed from (the AddedFrom chain) is an entry, so a thread that a previous release followed from a
+        // guarded thread, without marking it, is marked again.
+        internal static void MarkGuardedThreads(List<ThreadInfo> threads, ICollection<string> entries, bool allGuarded) {
+            List<string> pageIDs = threads.ConvertAll(thread => TryGetPageID(thread.URL));
+            Dictionary<string, ThreadInfo> byPageID = IndexByPageID(threads, pageIDs);
+            for (int i = 0; i < threads.Count; i++) {
+                threads[i].Guarded = allGuarded || IsMarkedOrFollowedFromMarked(threads[i], pageIDs[i], byPageID, entries, threads.Count + 1);
+            }
+        }
+
+        // The first thread of each page ID (a second one fails the load)
+        private static Dictionary<string, ThreadInfo> IndexByPageID(List<ThreadInfo> threads, List<string> pageIDs) {
+            Dictionary<string, ThreadInfo> byPageID = new Dictionary<string, ThreadInfo>(StringComparer.Ordinal);
+            for (int i = 0; i < threads.Count; i++) {
+                if (pageIDs[i] != null) byPageID.TryAdd(pageIDs[i], threads[i]);
+            }
+            return byPageID;
+        }
+
+        // The step limit stops the walk even if the AddedFrom links form a cycle (as IsSelfOrAncestor). A
+        // thread the chain leads to that is not in the list is still checked against the entries.
+        private static bool IsMarkedOrFollowedFromMarked(ThreadInfo thread, string pageID, Dictionary<string, ThreadInfo> byPageID, ICollection<string> entries, int stepsLeft) {
+            while (pageID != null && stepsLeft-- > 0) {
+                if (entries.Contains(pageID)) return true;
+                pageID = GetAddedFrom(thread);
+                byPageID.TryGetValue(pageID ?? String.Empty, out thread);
+            }
+            return false;
+        }
+
+        // Null when the thread is not in the list or was not followed from another one
+        private static string GetAddedFrom(ThreadInfo thread) {
+            string addedFrom = thread != null && thread.ExtraData != null ? thread.ExtraData.AddedFrom : null;
+            return String.IsNullOrEmpty(addedFrom) ? null : addedFrom;
+        }
+
+        // Null for an entry whose page ID can't be found (e.g. its URL is not a valid address); adding the
+        // thread then fails that entry alone, and logs why
+        private static string TryGetPageID(string url) {
+            try {
+                SiteHelper siteHelper = SiteHelpers.GetInstance(new Uri(url).Host);
+                siteHelper.SetURL(url);
+                return siteHelper.GetPageID();
+            }
+            catch (Exception) {
+                return null;
+            }
         }
 
         private bool AddLoadedThreads(List<ThreadInfo> threads) {

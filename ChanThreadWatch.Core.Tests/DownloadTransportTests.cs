@@ -91,11 +91,11 @@ namespace JDP.Tests {
             var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             try {
-                using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero))
+                using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero, false))
                 using (var client = new HttpClient(handler)) {
                     Assert.AreEqual(TimeSpan.FromMilliseconds(ShortTimeoutMS), handler.ConnectTimeout);
                     int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-                    var request = General.BuildWebRequest(new Uri("https://127.0.0.1:" + port + "/x"), null, null, null);
+                    var request = General.BuildWebRequest(new Uri("https://127.0.0.1:" + port + "/x"), null, null, null, false);
                     // The request itself gives up at once; only the handler's limit ends the attempt
                     using (var canceled = new CancellationTokenSource(100)) {
                         Assert.ThrowsAsync<OperationCanceledException>(() => client.SendAsync(request, canceled.Token)).GetAwaiter().GetResult();
@@ -173,7 +173,7 @@ namespace JDP.Tests {
                 try {
                     server.Route("/slow", StallBeforeResponse(release));
                     var called = new ManualResetEvent(false);
-                    Action abort = General.DownloadAsync(server.URL("/slow"), null, null, false, null, r => { }, (b, n) => { }, () => { },
+                    Action abort = General.DownloadAsync(server.URL("/slow"), null, null, false, false, null, r => { }, (b, n) => { }, () => { },
                         ex => { called.Set(); throw new InvalidOperationException("callback failure"); });
 
                     abort();
@@ -299,7 +299,7 @@ namespace JDP.Tests {
                 int maxDepth = 0;
                 Exception error = null;
 
-                General.DownloadAsync(server.URL("/file"), null, null, false, null, r => { },
+                General.DownloadAsync(server.URL("/file"), null, null, false, false, null, r => { },
                     (b, n) => {
                         int depth = new System.Diagnostics.StackTrace().FrameCount;
                         minDepth = Math.Min(minDepth, depth);
@@ -327,7 +327,7 @@ namespace JDP.Tests {
                 int exceptions = 0;
                 Exception error = null;
 
-                General.DownloadAsync(server.URL("/file"), null, null, false, null, r => { }, (b, n) => { },
+                General.DownloadAsync(server.URL("/file"), null, null, false, false, null, r => { }, (b, n) => { },
                     () => { Interlocked.Increment(ref completes); throw failure; },
                     ex => { error = ex; Interlocked.Increment(ref exceptions); done.Set(); });
 
@@ -745,7 +745,7 @@ namespace JDP.Tests {
 
             public static DownloadProbe Start(string url) {
                 var probe = new DownloadProbe();
-                probe.Abort = General.DownloadAsync(url, null, null, false, null,
+                probe.Abort = General.DownloadAsync(url, null, null, false, false, null,
                     probe.OnResponse, probe.OnChunk, probe.OnComplete, probe.OnException);
                 return probe;
             }

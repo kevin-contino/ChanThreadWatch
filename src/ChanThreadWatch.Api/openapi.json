@@ -204,7 +204,7 @@
               "invalid_host", "query_not_allowed", "forbidden_origin", "unauthorized", "not_found", "method_not_allowed",
               "unsupported_media_type", "body_too_large", "request_timeout", "invalid_body", "invalid_url", "unknown_host", "blocked_host",
               "unresolvable_host", "rate_limited", "add_rate_limited", "already_watched", "blacklisted", "thread_limit",
-              "insufficient_storage", "unavailable", "internal_error"
+              "insufficient_storage", "unavailable", "marks_unavailable", "internal_error"
             ]
           }
         }
@@ -276,7 +276,7 @@
         }
       },
       "Unavailable": {
-        "description": "The program is busy or exiting",
+        "description": "The program is busy or exiting, or (POST, marks_unavailable) the list of threads added through the API can't be saved this session",
         "content": {
           "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
         }

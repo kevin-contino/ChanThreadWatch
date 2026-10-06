@@ -55,6 +55,7 @@ namespace JDP {
         private ManualResetEvent _reparseFinishedEvent = new ManualResetEvent(true);
         private bool _isWaiting;
         private string _pageURL;
+        private readonly bool _guarded;
         private string _pageAuth;
         private string _imageAuth;
         private bool _oneTimeDownload;
@@ -91,9 +92,16 @@ namespace JDP {
             General.EnsureThreadPoolMaxThreads(500, 1000);
         }
 
-        public ThreadWatcher(string pageURL) {
+        public ThreadWatcher(string pageURL) : this(pageURL, false) {
+        }
+
+        // guarded: every download of the thread (the page lookup in this constructor included) goes
+        // out on the guarded clients, which never connect to a local or private address (see SSRFGuard)
+        public ThreadWatcher(string pageURL, bool guarded) {
             _pageURL = pageURL;
+            _guarded = guarded;
             _siteHelper = SiteHelpers.GetInstance(PageHost);
+            _siteHelper.Guarded = guarded;
             _siteHelper.SetURL(PageURL);
             _pageID = _siteHelper.GetPageID();
             _threadName = _siteHelper.GetThreadName();
@@ -101,6 +109,11 @@ namespace JDP {
 
         public string PageURL {
             get { return _pageURL; }
+        }
+
+        // Added through the local API (or auto-followed from such a thread): set once, never changed
+        public bool Guarded {
+            get { return _guarded; }
         }
 
         public string PageHost {
@@ -308,7 +321,9 @@ namespace JDP {
                     AddedFrom = PageID
                 },
                 Category = Category,
-                AutoFollow = autoFollow
+                AutoFollow = autoFollow,
+                // A thread followed from a guarded thread is guarded too
+                Guarded = Guarded
             };
         }
 
@@ -795,6 +810,7 @@ namespace JDP {
             try {
                 _saveThumbnails = Settings.SaveThumbnails != false;
                 SiteHelper siteHelper = SiteHelpers.GetInstance(PageHost);
+                siteHelper.Guarded = Guarded;
 
                 BeginCheck(siteHelper);
 
@@ -1493,7 +1509,14 @@ namespace JDP {
             if (IsSocketTimeout(ex)) return String.Format(TimedOutConnectingText, new Uri(url).Host);
             if (IsHostNotFound(ex)) return String.Format(HostNotFoundText, new Uri(url).Host);
             if (ex is IOException) return ConnectionLostText;
-            return ex.Message.TrimEnd('.');
+            return ex.Message.TrimEnd('.') + GetProxyAdvice(ex);
+        }
+
+        // A guarded thread (added through the local API) never connects through a proxy; the advice is for its own
+        // requests only, not for a refusal in service mode
+        private static string GetProxyAdvice(Exception ex) {
+            BlockedAddressException blocked = ex as BlockedAddressException;
+            return blocked != null && blocked.IsProxied && blocked.IsGuardedRequest ? " (a thread added through the local API refuses a proxy: remove the proxy, then add the thread again)" : String.Empty;
         }
 
         private static bool IsSocketTimeout(Exception ex) {
@@ -1844,10 +1867,11 @@ namespace JDP {
             return hashType != HashType.None && !General.ArraysAreEqual(hash, correctHash);
         }
 
-        // General.DownloadAsync throws PageTooLargeException for an HTML page over its size limit.
-        // Matched by name so that this compiles whether or not that type exists yet.
-        private static bool IsPageTooLarge(Exception ex) {
-            return ex is PageTooLargeException;
+        // A page failure that another try now would repeat: General.DownloadAsync throws
+        // PageTooLargeException for an HTML page over its size limit, and BlockedAddressException when
+        // the SSRF guard refuses a guarded thread's connection
+        private static bool IsUnretryablePageFailure(Exception ex) {
+            return ex is PageTooLargeException || ex is BlockedAddressException;
         }
 
         // Moves the copy of the page saved before the download back in place
@@ -2027,7 +2051,7 @@ namespace JDP {
 
                 public void Start() {
                     _downloadID = NewDownloadID();
-                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, null, _download._freshConnection, _download._cacheLastModifiedTime,
+                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, null, _download._freshConnection, _watcher.Guarded, _download._cacheLastModifiedTime,
                         OnResponse, OnDownloadChunk, OnComplete, OnException);
 
                     lock (_watcher._downloadAborters) {
@@ -2144,8 +2168,9 @@ namespace JDP {
                         Logger.Log("Error saving page " + _download._path + ":" + Environment.NewLine + ex.InnerException);
                         _watcher.Stop(StopReason.IOError);
                     }
-                    else if (IsPageTooLarge(ex)) {
-                        // Another try would get the same page, so report it now
+                    else if (IsUnretryablePageFailure(ex)) {
+                        // Another try would get the same page, or be refused again (the SSRF guard
+                        // of a guarded thread), so report it now; the next check tries again
                         _watcher.ReportPageFailure(_download._url, ex);
                     }
                     else {
@@ -2264,7 +2289,7 @@ namespace JDP {
 
                 public void Start() {
                     _downloadID = NewDownloadID();
-                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, _download._referer, _download._freshConnection, null,
+                    Action abortDownload = General.DownloadAsync(_download._url, _download._auth, _download._referer, _download._freshConnection, _watcher.Guarded, null,
                         OnResponse, OnDownloadChunk, OnComplete, OnException);
 
                     lock (_watcher._downloadAborters) {
@@ -2360,14 +2385,23 @@ namespace JDP {
                         _watcher.HandleRateLimit((RateLimitException)ex);
                         EndTryDownload(DownloadResult.RateLimited);
                     }
-                    else if (ex is FileTooLargeException) {
-                        _watcher.ReportFileFailure(_download._url, ex);
-                        EndTryDownload(DownloadResult.Skipped);
-                    }
-                    else {
+                    else if (!TryEndWithReportedFailure(ex)) {
                         // Other error (HTTP status, TLS, network, corrupt data), retry
                         _download.Retry(ex);
                     }
+                }
+
+                // Ends the download, reported as failed, if another try would fail the same way;
+                // returns false for any other error
+                private bool TryEndWithReportedFailure(Exception ex) {
+                    // Too large, or refused by the SSRF guard (a guarded thread): skipped, so it is
+                    // reported (and logged) once and not tried again in later checks
+                    if (ex is FileTooLargeException || ex is BlockedAddressException) {
+                        _watcher.ReportFileFailure(_download._url, ex);
+                        EndTryDownload(DownloadResult.Skipped);
+                        return true;
+                    }
+                    return false;
                 }
 
                 private void HandleLocalFileError(Exception ex) {

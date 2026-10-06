@@ -38,7 +38,7 @@ namespace JDP.Cli {
                 // As the status lines, an error output that can't be written is dropped
                 WatchStatusOutput error = new WatchStatusOutput(context.Error);
                 WarnAboutPlaintextLogins(error, folder.Path);
-                return new HeadlessWatch(output, folder.Path).Run(stopToken) ? CliApp.ExitSuccess : ReportSaveFailed(error);
+                return new HeadlessWatch(output, folder.Path, error).Run(stopToken) ? CliApp.ExitSuccess : ReportSaveFailed(error);
             }
         }
 

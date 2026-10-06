@@ -24,7 +24,7 @@ namespace JDP.Tests {
         public void ThreadWatcherDoesNotDisableCertificateValidation() {
             RuntimeHelpers.RunClassConstructor(typeof(ThreadWatcher).TypeHandle);
 
-            using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero)) {
+            using (SocketsHttpHandler handler = General.CreateHttpHandler(TimeSpan.Zero, false)) {
                 Assert.IsNull(handler.SslOptions.RemoteCertificateValidationCallback);
                 Assert.AreEqual(SslProtocols.None, handler.SslOptions.EnabledSslProtocols);
                 Assert.IsFalse(handler.UseCookies);
@@ -175,7 +175,7 @@ namespace JDP.Tests {
         // HTTP/3 would connect without the SSRF guard's ConnectCallback, so every request is HTTP/1.1 exactly
         [TestMethod]
         public void RequestsUseHTTP11Exactly() {
-            HttpRequestMessage request = General.BuildWebRequest(new Uri("https://boards.example.org/a/thread/1"), "user:pass", "https://boards.example.org/", DateTime.Now);
+            HttpRequestMessage request = General.BuildWebRequest(new Uri("https://boards.example.org/a/thread/1"), "user:pass", "https://boards.example.org/", DateTime.Now, false);
 
             Assert.AreEqual(HttpVersion.Version11, request.Version);
             Assert.AreEqual(HttpVersionPolicy.RequestVersionExact, request.VersionPolicy);
@@ -190,7 +190,7 @@ namespace JDP.Tests {
         private static void Download(string url, string auth, string referer) {
             var done = new ManualResetEvent(false);
             Exception error = null;
-            General.DownloadAsync(url, auth, referer, false, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
+            General.DownloadAsync(url, auth, referer, false, false, null, r => { }, (b, n) => { }, () => done.Set(), ex => { error = ex; done.Set(); });
             Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download timed out");
             Assert.IsNull(error, error?.ToString());
         }
