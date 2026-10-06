@@ -241,6 +241,15 @@ jobs:
         run: dotnet test ChanThreadWatch.Cli.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"
         shell: bash
 
+      # The local API library against a real Kestrel on 127.0.0.1 with a free port, a temporary settings folder and a
+      # test owner thread. DNS is answered by the tests and the watchers of added threads never connect, so these tests
+      # need no network. The token file's access is checked per OS (owner-only DACL on Windows, mode 0600 elsewhere).
+      - name: API tests
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+        run: dotnet test ChanThreadWatch.Api.Tests -c Release -p:RestoreLockedMode=true --filter "$TEST_FILTER"
+        shell: bash
+
       # The release file of this system (self-contained single file, ad-hoc signed on macOS) runs --version and --help.
       # Windows publishes and runs its own in "Windows build and test".
       - name: Publish the command line and run it

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>ChanThreadWatch.Api</AssemblyName>
+    <RootNamespace>JDP.Api</RootNamespace>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- The release architectures of the app and ctw, which will reference this library (see ChanThreadWatch.Core.csproj) -->
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <!-- The hosts ship as single-file exes, so code that needs a file path for an assembly is reported -->
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Kestrel and routing from the ASP.NET Core shared framework; no NuGet package -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The hand-written OpenAPI document, served byte for byte at GET /api/v1/openapi.json -->
+    <EmbeddedResource Include="openapi.json" LogicalName="openapi.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The hosts (the app and ctw) and their tests -->
+    <InternalsVisibleTo Include="ChanThreadWatch" />
+    <InternalsVisibleTo Include="ctw" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Api.Tests" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Cli.Tests" />
+  </ItemGroup>
+
+</Project>

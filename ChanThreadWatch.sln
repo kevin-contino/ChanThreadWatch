@@ -15,6 +15,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Cli", "src\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Cli.Tests", "ChanThreadWatch.Cli.Tests\ChanThreadWatch.Cli.Tests.csproj", "{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Api", "src\ChanThreadWatch.Api\ChanThreadWatch.Api.csproj", "{D5D97F8A-F851-4031-9035-FDEF038767EC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChanThreadWatch.Api.Tests", "ChanThreadWatch.Api.Tests\ChanThreadWatch.Api.Tests.csproj", "{3C8E1F27-6B5D-4A92-8E14-B7A2D09C5F31}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -49,6 +53,14 @@ Global
 		{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8FA4D61B-FA00-4F3E-9882-C1097434ECB4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D5D97F8A-F851-4031-9035-FDEF038767EC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D5D97F8A-F851-4031-9035-FDEF038767EC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D5D97F8A-F851-4031-9035-FDEF038767EC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D5D97F8A-F851-4031-9035-FDEF038767EC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C8E1F27-6B5D-4A92-8E14-B7A2D09C5F31}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C8E1F27-6B5D-4A92-8E14-B7A2D09C5F31}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C8E1F27-6B5D-4A92-8E14-B7A2D09C5F31}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C8E1F27-6B5D-4A92-8E14-B7A2D09C5F31}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

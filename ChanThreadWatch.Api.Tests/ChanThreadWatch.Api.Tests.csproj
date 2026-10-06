@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>JDP.Api.Tests</RootNamespace>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The same globalization mode as the app and ctw (see ChanThreadWatch.csproj) -->
+    <RuntimeHostConfigurationOption Include="System.Globalization.UseNls" Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="MSTest.TestAdapter" Version="4.4.1" />
+    <PackageReference Include="MSTest.TestFramework" Version="4.4.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\src\ChanThreadWatch.Api\ChanThreadWatch.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The served document is compared with the file in the repository, byte for byte -->
+    <None Include="..\src\ChanThreadWatch.Api\openapi.json" Link="openapi.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Every test assembly sends the default folders and the application data folder to a temporary folder -->
+    <Compile Include="..\ChanThreadWatch.Core.Tests\TestDefaultFolders.cs" Link="TestDefaultFolders.cs" />
+  </ItemGroup>
+
+</Project>

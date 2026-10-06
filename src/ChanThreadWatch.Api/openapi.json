@@ -1,0 +1,286 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ChanThreadWatch local API",
+    "version": "1",
+    "description": "Off by default. Listens on 127.0.0.1 only. Every request needs the Host header 127.0.0.1:<port> or localhost:<port>, no query string, no foreign Origin, and Authorization: Bearer <token>; a request refused by these security checks (400, 401, 403, 429) also gets Connection: close. Any other path gets 404 (NotFound) and any other method 405 (MethodNotAllowed, with Allow), after the checks. Every response has Cache-Control: no-store and X-Content-Type-Options: nosniff. Limits: 120 authenticated requests per minute, 30 adds per minute, 4 KiB bodies, 2048-character URLs, 1000 threads."
+  },
+  "servers": [
+    { "url": "http://127.0.0.1:47710", "description": "The default port; the port is a setting (ApiPort)." }
+  ],
+  "security": [
+    { "bearer": [] }
+  ],
+  "paths": {
+    "/api/v1/threads": {
+      "get": {
+        "operationId": "listThreads",
+        "summary": "List the watched threads",
+        "responses": {
+          "200": {
+            "description": "The watched threads",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ThreadList" },
+                "examples": {
+                  "oneThread": {
+                    "value": {
+                      "threads": [
+                        {
+                          "id": "4chan/wg/100",
+                          "url": "https://boards.4chan.org/wg/thread/100",
+                          "description": "4chan_wg_100",
+                          "category": "",
+                          "state": "waiting",
+                          "stopReason": null,
+                          "addedOn": "2026-10-05T12:30:00+02:00",
+                          "addedFrom": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      },
+      "post": {
+        "operationId": "addThread",
+        "summary": "Add a thread to watch",
+        "description": "Adds the thread with the program's defaults for a new thread. The body holds the URL only; a folder, login or any other member is refused. Unknown sites are refused unless the ApiAllowUnknownHosts setting is on, and even then IP addresses, local names and names that resolve to local or private addresses are refused.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AddThreadRequest" },
+              "examples": {
+                "add": { "value": { "url": "https://boards.4chan.org/wg/thread/100" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The thread was added",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Thread" },
+                "examples": {
+                  "added": {
+                    "value": {
+                      "id": "4chan/wg/100",
+                      "url": "https://boards.4chan.org/wg/thread/100",
+                      "description": "4chan_wg_100",
+                      "category": "",
+                      "state": "running",
+                      "stopReason": null,
+                      "addedOn": "2026-10-05T12:30:00+02:00",
+                      "addedFrom": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": {
+            "description": "The thread is already in the list (it is left as it is), is blacklisted, or the list is full",
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/Problem" },
+                "examples": {
+                  "alreadyWatched": {
+                    "value": { "type": "about:blank", "title": "The thread is already in the list.", "status": 409, "code": "already_watched" }
+                  }
+                }
+              }
+            }
+          },
+          "408": { "$ref": "#/components/responses/Problem" },
+          "413": { "$ref": "#/components/responses/Problem" },
+          "415": { "$ref": "#/components/responses/Problem" },
+          "422": {
+            "description": "The URL is not accepted",
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/Problem" },
+                "examples": {
+                  "unknownHost": {
+                    "value": { "type": "about:blank", "title": "The site is not a known site, and unknown sites are not allowed.", "status": 422, "code": "unknown_host" }
+                  }
+                }
+              }
+            }
+          },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "503": { "$ref": "#/components/responses/Unavailable" },
+          "507": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "summary": "This document",
+        "responses": {
+          "200": {
+            "description": "This document",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The token made in the program (ctw_ followed by 43 characters). Only its hash is saved."
+      }
+    },
+    "schemas": {
+      "AddThreadRequest": {
+        "type": "object",
+        "required": ["url"],
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string", "maxLength": 2048, "description": "An absolute http or https thread URL without a login" }
+        }
+      },
+      "Thread": {
+        "type": "object",
+        "required": ["id", "url", "description", "category", "state", "stopReason", "addedOn", "addedFrom"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "url": { "type": "string", "description": "Without a login" },
+          "description": { "type": "string" },
+          "category": { "type": "string" },
+          "state": { "type": "string", "enum": ["running", "waiting", "stopped", "notFound"] },
+          "stopReason": { "type": ["string", "null"], "enum": ["other", "userRequest", "exiting", "pageNotFound", "downloadComplete", "ioError", null] },
+          "addedOn": { "type": "string", "format": "date-time" },
+          "addedFrom": { "type": ["string", "null"], "description": "The id of the thread it was auto-followed from" }
+        }
+      },
+      "ThreadList": {
+        "type": "object",
+        "required": ["threads"],
+        "additionalProperties": false,
+        "properties": {
+          "threads": { "type": "array", "items": { "$ref": "#/components/schemas/Thread" } }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": ["type", "title", "status", "code"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_host", "query_not_allowed", "forbidden_origin", "unauthorized", "not_found", "method_not_allowed",
+              "unsupported_media_type", "body_too_large", "request_timeout", "invalid_body", "invalid_url", "unknown_host", "blocked_host",
+              "unresolvable_host", "rate_limited", "add_rate_limited", "already_watched", "blacklisted", "thread_limit",
+              "insufficient_storage", "unavailable", "internal_error"
+            ]
+          }
+        }
+      }
+    },
+    "responses": {
+      "NotFound": {
+        "description": "No such path (sent after the request checks)",
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "The path exists but not with this method (sent after the request checks)",
+        "headers": {
+          "Allow": { "schema": { "type": "string" } }
+        },
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      },
+      "InternalError": {
+        "description": "The request failed in the program",
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      },
+      "Problem": {
+        "description": "An error",
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      },
+      "BadRequest": {
+        "description": "Wrong Host header, a query string, or a body that is not one JSON object with a string url",
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      },
+      "Unauthorized": {
+        "description": "No valid bearer token",
+        "headers": {
+          "WWW-Authenticate": { "schema": { "type": "string", "const": "Bearer" } }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" },
+            "examples": {
+              "unauthorized": {
+                "value": { "type": "about:blank", "title": "A valid bearer token is required.", "status": 401, "code": "unauthorized" }
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "A request from a browser page of another origin",
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Over a rate limit",
+        "headers": {
+          "Retry-After": { "schema": { "type": "integer" } }
+        },
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      },
+      "Unavailable": {
+        "description": "The program is busy or exiting",
+        "content": {
+          "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+        }
+      }
+    }
+  }
+}
