@@ -107,12 +107,16 @@ jobs:
 
       # Starts the published x64 exe from a temp folder, with settings.txt next to it and then without it (the
       # runner's own AppData; this runner is a throwaway VM). Each run must reach the main window, save its
-      # settings in the expected folder and exit with code 0. The arm64 exe cannot run on this x64 runner.
+      # settings in the expected folder and exit with code 0. The third run turns on the local API with a token
+      # from the published ctw and expects it to answer. The arm64 exe cannot run on this x64 runner.
       - name: Start the published exe
         shell: pwsh
         run: |
           ./.github/scripts/test-published-app.ps1 -ExePath publish/ChanThreadWatch-win-x64.exe -Mode Portable
           ./.github/scripts/test-published-app.ps1 -ExePath publish/ChanThreadWatch-win-x64.exe -Mode AppData
+          $ctw = @(Get-Item publish/ctw-*-win-x64.exe)
+          if ($ctw.Count -ne 1) { throw "Expected one published ctw for win-x64 in publish/, found $($ctw.Count)" }
+          ./.github/scripts/test-published-app.ps1 -ExePath publish/ChanThreadWatch-win-x64.exe -Mode Portable -CtwPath $ctw[0].FullName
 
       # A failed UI test saves a PNG of the app window (or the whole desktop) under TestResults
       - name: Upload test results

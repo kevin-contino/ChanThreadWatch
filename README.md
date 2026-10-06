@@ -8,6 +8,16 @@ You can find the original official site here: [https://sites.google.com/site/cha
 
 For documentation, changelog and any other information, please visit the wiki: [https://github.com/SuperGouge/ChanThreadWatch/wiki](https://github.com/SuperGouge/ChanThreadWatch/wiki)
 
+## Local API in the app
+
+The app can run the same local HTTP API as `ctw watch` (see [Local API](#local-api) below), so scripts on this computer can list the watched threads and add threads. It is off by default. Open Settings, then "Local API...":
+
+- "Enable the local API" turns it on. "Port" is a port from 1024 to 65535 (47710 by default); another value keeps the dialog open with a message. OK applies the change at once, without a restart, and waits a moment for the start: if it fails, the dialog stays open so you can fix the port. The status line shows "Listening on 127.0.0.1:<port>", "Off", or why it could not start (for example the port is in use, or there is no token yet). A failure at start never shows a message box; it is in the status line and in `log.txt`.
+- "New token..." makes the token that every request needs, and shows it once, with a Copy button. Only its hash is saved, in `api-token.txt` in the settings folder, which only your user can read. A new token replaces the old one at once. Copy keeps the token out of the Windows clipboard history and the cloud clipboard, but other clipboard tools may still keep it.
+- "Allow unknown sites" also lets scripts add threads of sites the app has no support for (never IP addresses or local names).
+
+The dialog writes `ApiEnabled`, `ApiPort` and `ApiAllowUnknownHosts` in `settings.txt`, the same keys `ctw watch` reads. The app starts the API once the thread list is loaded, adds a thread from the API as if you had added it (with the main window's current check interval, one-time download, auto-follow and category, never with a login), and stops the API first when it closes. Moving the settings folder in Settings takes `api-token.txt` along; backups never copy it. Connect to `127.0.0.1`, not `localhost`. The notes under [Local API](#local-api) apply to the app too: `settings.txt` decides whether the API is on, and the port is fixed, so another program that starts first could take it.
+
 ## Command line (ctw)
 
 `ctw` lists, adds and removes watched threads without opening the app, and `ctw watch` watches them without a window and can run a local API for scripts. Download the file for your system from the same release as the app. Each one is a single self-contained file that needs no .NET install:
@@ -49,7 +59,7 @@ ctw --help
 
 ### Local API
 
-`ctw watch` can run a local HTTP API, so scripts on this computer can list the watched threads and add threads (`GET` and `POST` on `/api/v1/threads`, described by `GET /api/v1/openapi.json`). It is off by default. The app's dialog for it comes in a later release; until then, turn it on in `settings.txt` while neither the app nor `ctw watch` runs:
+`ctw watch` can run a local HTTP API, so scripts on this computer can list the watched threads and add threads (`GET` and `POST` on `/api/v1/threads`, described by `GET /api/v1/openapi.json`). It is off by default. The app and `ctw watch` use the same settings and token (see [Local API in the app](#local-api-in-the-app)). Without the app, turn it on in `settings.txt` while neither the app nor `ctw watch` runs:
 
 ```
 ApiEnabled=1

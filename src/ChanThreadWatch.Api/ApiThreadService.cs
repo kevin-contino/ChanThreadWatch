@@ -66,9 +66,65 @@ namespace JDP.Api {
         public async Task<ApiAddResult> AddAsync(Uri uri, CancellationToken cancellationToken) {
             ApiError error = await CheckResolvedAddressesAsync(uri, cancellationToken).ConfigureAwait(false) ?? CheckFreeSpace();
             if (error != null) return ApiAddResult.Failed(error);
+            Uri named = await LookUpThreadNameAsync(uri, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            string url = uri.AbsoluteUri;
+            string url = named.AbsoluteUri;
             return await _dispatcher.RunAsync(() => AddOnOwnerThread(url), _policy.OwnerThreadTimeout).ConfigureAwait(false);
+        }
+
+        // The 4chan slug, when the settings use it and the URL lacks it: the watcher's constructor would download the
+        // page on the owner thread to learn it, so it is downloaded here, on the request's thread, on the guarded
+        // clients, within ThreadNameLookupTimeout. The URL the page names (its canonical link) is taken only if it is
+        // the same thread with the same scheme, host and port, and passes every check the request's URL passed.
+        // Otherwise, or when the download fails, takes too long or can't be read, the request's URL is added and the
+        // thread is named by its number; the watcher never downloads the page for its name
+        // (ThreadInfo.ThreadNameLookedUp). A canonical link to another host of the same site (boards.4channel.org to
+        // boards.4chan.org) is not taken either: its page ID differs, so it would be another entry in the list.
+        private async Task<Uri> LookUpThreadNameAsync(Uri uri, CancellationToken cancellationToken) {
+            SiteHelper siteHelper = SiteHelpers.GetInstance(uri.Host);
+            siteHelper.SetURL(uri.AbsoluteUri);
+            if (!siteHelper.NeedsThreadNameLookup()) return uri;
+            string page = await FetchThreadPageAsync(uri.AbsoluteUri, cancellationToken).ConfigureAwait(false);
+            Uri named = page != null ? FindNamedUrl(siteHelper, page, uri) : null;
+            return named != null && await CheckResolvedAddressesAsync(named, cancellationToken).ConfigureAwait(false) == null ? named : uri;
+        }
+
+        // A page the parser can't read gives no URL, as a failed download does
+        private Uri FindNamedUrl(SiteHelper siteHelper, string page, Uri requested) {
+            try {
+                return ParseNamedUrl(siteHelper.GetURLWithThreadName(page), requested, siteHelper.GetPageID());
+            }
+            catch (Exception ex) {
+                Logger.Log("Local API: the thread's page could not be read for its name, so it is added without it: " + ex.GetType().FullName);
+                return null;
+            }
+        }
+
+        // Null when the download failed or took too long; a request the client cancels throws OperationCanceledException
+        private async Task<string> FetchThreadPageAsync(string url, CancellationToken cancellationToken) {
+            using (CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)) {
+                timeout.CancelAfter(_policy.ThreadNameLookupTimeout);
+                try {
+                    return await _policy.FetchThreadPage(url, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested) {
+                    Logger.Log("Local API: the thread's name could not be looked up, so it is added without it: " + ex.GetType().FullName);
+                    return null;
+                }
+            }
+        }
+
+        // The URL the page names, if it passes the URL rules and the host rules, and is the same thread at the same
+        // place
+        private Uri ParseNamedUrl(string url, Uri requested, string pageID) {
+            Uri named = ApiUrlRules.ParseThreadUrl(url, _policy.MaxUrlLength);
+            if (named == null || ApiUrlRules.CheckHostName(named, Settings.ApiAllowUnknownHosts == true) != null) return null;
+            return IsSamePlace(named, requested) && GetPageID(named.AbsoluteUri) == pageID ? named : null;
+        }
+
+        // The same scheme (never https to http), host and port
+        private static bool IsSamePlace(Uri named, Uri requested) {
+            return named.Scheme == requested.Scheme && String.Equals(named.Host, requested.Host, StringComparison.OrdinalIgnoreCase) && named.Port == requested.Port;
         }
 
         // Every address the host resolves to must be public. A known site whose name does not resolve is added (the
@@ -129,6 +185,7 @@ namespace JDP.Api {
             thread.ImageAuth = String.Empty;
             thread.SaveDir = String.Empty;
             thread.Guarded = true;
+            thread.ThreadNameLookedUp = true;
             return thread;
         }
 

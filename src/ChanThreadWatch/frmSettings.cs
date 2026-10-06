@@ -2,10 +2,14 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Windows.Forms;
+using JDP.Api;
 
 namespace JDP {
     public partial class frmSettings : Form {
-        public frmSettings() {
+        private readonly LocalApiHost _localApi;
+
+        internal frmSettings(LocalApiHost localApi) {
+            _localApi = localApi ?? throw new ArgumentNullException(nameof(localApi));
             InitializeComponent();
             GUI.SetFontAndScaling(this);
         }
@@ -168,12 +172,12 @@ namespace JDP {
             try {
                 MoveSettingsFiles(oldSettingsFolder, newSettingsFolder);
             }
-            catch {
+            catch (Exception ex) {
                 // Settings stay in the old folder, so take back its mutex (this releases the new one).
                 // If another instance took the old folder in the meantime, the new mutex is kept.
                 ReleaseNewFolderLock(newLock);
                 Program.ObtainMutex(oldSettingsFolder);
-                MessageBox.Show(this, "Unable to move the settings files.",
+                MessageBox.Show(this, GetMoveFailureMessage(ex),
                     "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
@@ -187,19 +191,67 @@ namespace JDP {
             if (newLock != null) newLock.Dispose();
         }
 
+        // A drive that can't keep owner-only access gets its own reason; any other failure (of the token file's copy too:
+        // access denied, a sharing violation) the general one
+        internal static string GetMoveFailureMessage(Exception ex) {
+            if (!(ex is ApiTokenException tokenError && tokenError.OwnerOnlyNotSupported)) return "Unable to move the settings files.";
+            return "The settings files were not moved: on that drive (for example a FAT or exFAT drive), the local API's token file " +
+                ApiTokenStore.FileName + " can't be protected so that only your user can read it. Nothing was copied or deleted. " +
+                "Choose a folder on an NTFS drive.";
+        }
+
         // Every file is copied before any old one is deleted, so a copy that fails leaves the old folder whole (the
-        // program keeps using it). The marks of the threads added through the local API move with the thread list.
+        // program keeps using it). The marks of the threads added through the local API move with the thread list, and
+        // the local API's token file moves first, so a failure to write it owner-only copies nothing. The new folder
+        // never keeps a token file that is not the old folder's: one already there goes when the old folder has none
+        // (or none that is trusted), and the copy goes again when a later copy fails.
         internal static void MoveSettingsFiles(string oldSettingsFolder, string newSettingsFolder) {
             List<string> copied = new List<string>();
+            string newTokenPath = Path.Combine(newSettingsFolder, ApiTokenStore.FileName);
+            if (CopyApiTokenFile(oldSettingsFolder, newSettingsFolder)) copied.Add(Path.Combine(oldSettingsFolder, ApiTokenStore.FileName));
+            else File.Delete(newTokenPath);
+            try {
+                CopySettingsFiles(oldSettingsFolder, newSettingsFolder, copied);
+            }
+            catch {
+                TryDeleteLogged(newTokenPath);
+                throw;
+            }
+            foreach (string oldPath in copied) {
+                TryDeleteLogged(oldPath);
+            }
+        }
+
+        private static void CopySettingsFiles(string oldSettingsFolder, string newSettingsFolder, List<string> copied) {
             foreach (string fileName in new[] { Settings.SettingsFileName, Settings.ApiThreadsFileName, Settings.ThreadsFileName }) {
                 string oldPath = Path.Combine(oldSettingsFolder, fileName);
                 if (!File.Exists(oldPath)) continue;
                 File.WriteAllBytes(Path.Combine(newSettingsFolder, fileName), File.ReadAllBytes(oldPath));
                 copied.Add(oldPath);
             }
-            foreach (string oldPath in copied) {
-                try { File.Delete(oldPath); }
-                catch { }
+        }
+
+        // A file that can't be deleted is left; only a token file's is logged, since its token would still pass there
+        private static void TryDeleteLogged(string path) {
+            try {
+                File.Delete(path);
+            }
+            catch (Exception ex) {
+                if (Path.GetFileName(path) == ApiTokenStore.FileName) Logger.Log("Local API: " + path + " could not be deleted after the settings folder move: " + ex.GetType().FullName);
+            }
+        }
+
+        // api-token.txt is written again in the new folder with owner-only access (ApiTokenStore), never copied byte for
+        // byte, which would give the copy the new folder's access. Returns false, and leaves the old file, when it is
+        // missing or not trusted (its token would not pass in either folder). Throws ApiTokenException, leaving no copy,
+        // when the new folder can't keep owner-only access.
+        private static bool CopyApiTokenFile(string oldSettingsFolder, string newSettingsFolder) {
+            return new ApiTokenStore(oldSettingsFolder).CopyTo(new ApiTokenStore(newSettingsFolder));
+        }
+
+        private void btnLocalApi_Click(object sender, EventArgs e) {
+            using (frmLocalApi localApiForm = new frmLocalApi(_localApi)) {
+                localApiForm.ShowDialog(this);
             }
         }
 

@@ -28,6 +28,7 @@
             this.btnDownloadFolder = new System.Windows.Forms.Button();
             this.btnOK = new System.Windows.Forms.Button();
             this.btnCancel = new System.Windows.Forms.Button();
+            this.btnLocalApi = new System.Windows.Forms.Button();
             this.chkCustomUserAgent = new System.Windows.Forms.CheckBox();
             this.txtCustomUserAgent = new System.Windows.Forms.TextBox();
             this.chkDownloadFolderRelative = new System.Windows.Forms.CheckBox();
@@ -123,7 +124,7 @@
             this.btnOK.Location = new System.Drawing.Point(698, 385);
             this.btnOK.Name = "btnOK";
             this.btnOK.Size = new System.Drawing.Size(60, 23);
-            this.btnOK.TabIndex = 14;
+            this.btnOK.TabIndex = 15;
             this.btnOK.Text = "OK";
             this.btnOK.UseVisualStyleBackColor = true;
             this.btnOK.Click += new System.EventHandler(this.btnOK_Click);
@@ -135,9 +136,20 @@
             this.btnCancel.Location = new System.Drawing.Point(766, 385);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(68, 23);
-            this.btnCancel.TabIndex = 15;
+            this.btnCancel.TabIndex = 16;
             this.btnCancel.Text = "Cancel";
             this.btnCancel.UseVisualStyleBackColor = true;
+            // 
+            // btnLocalApi
+            // 
+            this.btnLocalApi.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnLocalApi.Location = new System.Drawing.Point(600, 385);
+            this.btnLocalApi.Name = "btnLocalApi";
+            this.btnLocalApi.Size = new System.Drawing.Size(90, 23);
+            this.btnLocalApi.TabIndex = 14;
+            this.btnLocalApi.Text = "Local API...";
+            this.btnLocalApi.UseVisualStyleBackColor = true;
+            this.btnLocalApi.Click += new System.EventHandler(this.btnLocalApi_Click);
             // 
             // chkCustomUserAgent
             // 
@@ -670,6 +682,7 @@
             this.Controls.Add(this.chkDownloadFolderRelative);
             this.Controls.Add(this.txtCustomUserAgent);
             this.Controls.Add(this.chkCustomUserAgent);
+            this.Controls.Add(this.btnLocalApi);
             this.Controls.Add(this.btnCancel);
             this.Controls.Add(this.btnOK);
             this.Controls.Add(this.btnDownloadFolder);
@@ -713,6 +726,7 @@
         private System.Windows.Forms.Button btnDownloadFolder;
         private System.Windows.Forms.Button btnOK;
         private System.Windows.Forms.Button btnCancel;
+        private System.Windows.Forms.Button btnLocalApi;
         private System.Windows.Forms.CheckBox chkCustomUserAgent;
         private System.Windows.Forms.TextBox txtCustomUserAgent;
         private System.Windows.Forms.CheckBox chkDownloadFolderRelative;

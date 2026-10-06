@@ -298,9 +298,20 @@ namespace JDP {
         // guarded: every request, each redirect hop included, goes out on the guarded clients
         public static string DownloadPageToString(string url, bool guarded) {
             ConnectionManager.GetInstance(url).ThrowIfPaused();
+            // On the thread pool, where no synchronization context (the UI thread's) can deadlock the wait
+            return Task.Run(() => DownloadPageToStringPausingAsync(url, guarded, CancellationToken.None)).GetAwaiter().GetResult();
+        }
+
+        // As DownloadPageToString, without a thread that waits, and ended by the token (the local API's lookup of the
+        // 4chan slug on a request's thread). A paused host throws, and a rate limit pauses the host, as there.
+        internal static Task<string> DownloadPageToStringAsync(string url, bool guarded, CancellationToken cancellationToken) {
+            ConnectionManager.GetInstance(url).ThrowIfPaused();
+            return DownloadPageToStringPausingAsync(url, guarded, cancellationToken);
+        }
+
+        private static async Task<string> DownloadPageToStringPausingAsync(string url, bool guarded, CancellationToken cancellationToken) {
             try {
-                // On the thread pool, where no synchronization context (the UI thread's) can deadlock the wait
-                return Task.Run(() => DownloadPageToStringAsync(url, guarded)).GetAwaiter().GetResult();
+                return await DownloadPageToStringCoreAsync(url, guarded, cancellationToken).ConfigureAwait(false);
             }
             catch (HTTPRateLimitedException ex) {
                 // The host that answered, which a redirect may have made another one
@@ -309,11 +320,11 @@ namespace JDP {
             }
         }
 
-        private static async Task<string> DownloadPageToStringAsync(string url, bool guarded) {
-            using (HttpResponseMessage response = await GetResponseAsync(url, null, null, null, false, guarded, CancellationToken.None).ConfigureAwait(false)) {
+        private static async Task<string> DownloadPageToStringCoreAsync(string url, bool guarded, CancellationToken cancellationToken) {
+            using (HttpResponseMessage response = await GetResponseAsync(url, null, null, null, false, guarded, cancellationToken).ConfigureAwait(false)) {
                 string contentType = GetContentType(response);
-                Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                byte[] pageBytes = await ReadPageBytesAsync(stream, CancellationToken.None).ConfigureAwait(false);
+                Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                byte[] pageBytes = await ReadPageBytesAsync(stream, cancellationToken).ConfigureAwait(false);
                 Encoding encoding = DetectHTMLEncoding(pageBytes, contentType);
                 return encoding.GetString(pageBytes);
             }

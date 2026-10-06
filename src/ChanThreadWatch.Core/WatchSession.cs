@@ -212,7 +212,7 @@ namespace JDP {
         // A thread followed from a guarded thread is guarded, and so is one the thread list marks (MarkGuardedThreads)
         private ThreadWatcher CreateThreadWatcher(ThreadInfo thread, bool isFromFile, out ThreadWatcher parentThread) {
             parentThread = FindAddedFromThread(thread);
-            ThreadWatcher watcher = new ThreadWatcher(thread.URL, thread.Guarded || IsGuarded(parentThread));
+            ThreadWatcher watcher = new ThreadWatcher(thread.URL, thread.Guarded || IsGuarded(parentThread), !thread.ThreadNameLookedUp);
             UpdateMarks(watcher, parentThread, isFromFile);
             watcher.ThreadDownloadDirectory = thread.SaveDir;
             watcher.Description = thread.Description;

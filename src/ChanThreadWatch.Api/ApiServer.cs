@@ -42,6 +42,21 @@ namespace JDP.Api {
         public ApiStartError Error { get; }
     }
 
+    // How the hosts (ctw watch, the app) treat a start that failed
+    internal static class ApiStartFailure {
+        // The typed failures, and what the token file's checks or the server's setup can throw before it listens
+        public static bool IsExpected(Exception ex) {
+            return ex is ApiStartException || ex is InvalidOperationException || ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException;
+        }
+
+        // The type of the failure's cause, for the log; never its message, which can hold a path. Null for a typed
+        // failure without a cause.
+        public static string GetCauseTypeName(Exception ex) {
+            Exception cause = ex is ApiStartException ? ex.InnerException : ex;
+            return cause?.GetType().FullName;
+        }
+    }
+
     // The local API (MP-7a): Kestrel on 127.0.0.1 only, HTTP/1.1, no configuration from files or the environment, and
     // no log output but CoreLoggerProvider's. A host starts it after its thread list is loaded and stops it first
     // when it exits.

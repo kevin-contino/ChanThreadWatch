@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using JDP.Properties;
 
@@ -18,6 +19,7 @@ namespace JDP {
         private int[] _columnWidths;
         private object _cboCheckEveryLastValue;
         private readonly WatchSession _session;
+        private readonly LocalApiHost _localApi;
         private static Dictionary<string, int> _categories = new Dictionary<string, int>();
         // Each watcher's row in lvThreads; only touched on the UI thread
         private static Dictionary<ThreadWatcher, ListViewItem> _listViewItems = new Dictionary<ThreadWatcher, ListViewItem>();
@@ -33,6 +35,8 @@ namespace JDP {
             _session.ThreadListLoadStarting += () => UpdateCategories(String.Empty);
             _session.AddedFromChanged += DisplayAddedFrom;
             _session.ThreadWatcherRemoved += Session_ThreadWatcherRemoved;
+            // A thread the local API adds takes the window's current choices; the API calls this on the UI thread
+            _localApi = new LocalApiHost(_session, a => BeginInvoke(new MethodInvoker(a)), url => GetNewThreadChoices().CreateApiThread(url));
             InitializeComponent();
             Icon = Resources.ChanThreadWatchIcon;
             niTrayIcon.Icon = Resources.ChanThreadWatchIcon;
@@ -192,6 +196,8 @@ namespace JDP {
                     lvThreads.ListViewItemSorter = new ListViewItemSorter(Settings.SortColumn ?? (int)ColumnIndex.AddedOn) { Ascending = Settings.SortAscending ?? true };
                     lvThreads.Sort();
                     FocusLastThread();
+                    // Only now, so no request sees the thread list before it is loaded
+                    _localApi.OnThreadListLoaded();
                 });
             });
             thread.Start();
@@ -199,6 +205,7 @@ namespace JDP {
 
         private void frmChanThreadWatch_FormClosed(object sender, FormClosedEventArgs e) {
             if (IsDisposed) return;
+            Task apiStopped = StopLocalApi();
             SaveExitSettings();
 
             Settings.Save();
@@ -215,10 +222,33 @@ namespace JDP {
 
             _session.SaveThreadList();
 
+            WaitForLocalApiToStop(apiStopped);
+
             // In the reverse of the order they were taken
             Program.ReplaceSettingsFolderLock(null);
             Program.ReleaseMutex();
         }
+
+        // The local API stops first and closes its dispatcher at once, so no request adds a thread once the watchers
+        // stop: work a request posted to this thread that has not run never runs (503). The stop is not waited for
+        // here, so the first save is not delayed, and a failure never skips the saves.
+        private Task StopLocalApi() {
+            try {
+                return _localApi.StopForExit();
+            }
+            catch (Exception ex) {
+                Logger.Log(ex.ToString());
+                return Task.CompletedTask;
+            }
+        }
+
+        // After the final save, so the port is free when the program ends. The stop never needs this thread, so the
+        // wait can't deadlock; one that takes too long is logged, and the program ends anyway (which frees the port).
+        private static void WaitForLocalApiToStop(Task apiStopped) {
+            if (!apiStopped.Wait(LocalApiExitWait)) Logger.Log("Local API: the stop did not finish within " + (int)LocalApiExitWait.TotalSeconds + " seconds.");
+        }
+
+        private static readonly TimeSpan LocalApiExitWait = TimeSpan.FromSeconds(10);
 
         // A failure here must not skip the settings and thread list saves that follow on exit.
         private void SaveExitSettings() {
@@ -589,10 +619,12 @@ namespace JDP {
 
         private void btnSettings_Click(object sender, EventArgs e) {
             if (_isExiting) return;
-            using (frmSettings settingsForm = new frmSettings()) {
+            using (frmSettings settingsForm = new frmSettings(_localApi)) {
                 GUI.CenterChildForm(this, settingsForm);
                 settingsForm.ShowDialog(this);
             }
+            // The settings folder may have moved, with the local API's token file
+            _localApi.Apply();
             niTrayIcon.Visible = Settings.MinimizeToTray ?? false;
             tmrBackupThreadList.Interval = (Settings.BackupEvery ?? 1) * 60 * 1000;
             UpdateWindowTitle(_session.GetMonitoringInfo());
@@ -885,20 +917,31 @@ namespace JDP {
         }
 
         private bool AddThread(string pageURL) {
+            NewThreadChoices choices = GetNewThreadChoices();
             ThreadInfo thread = new ThreadInfo {
                 URL = pageURL,
                 PageAuth = GetAuthText(chkPageAuth, txtPageAuth),
                 ImageAuth = GetAuthText(chkImageAuth, txtImageAuth),
-                CheckIntervalSeconds = pnlCheckEvery.Enabled ? GetCheckEveryMinutes() * 60 : 0,
-                OneTimeDownload = chkOneTime.Checked,
+                CheckIntervalSeconds = choices.CheckIntervalSeconds,
+                OneTimeDownload = choices.OneTimeDownload,
                 SaveDir = null,
                 Description = String.Empty,
                 StopReason = null,
                 ExtraData = null,
-                Category = cboCategory.Text,
-                AutoFollow = chkAutoFollow.Checked
+                Category = choices.Category,
+                AutoFollow = choices.AutoFollow
             };
             return _session.AddThread(thread);
+        }
+
+        // The window's choices for a new thread but the logins, which the local API never uses
+        private NewThreadChoices GetNewThreadChoices() {
+            return new NewThreadChoices {
+                CheckIntervalSeconds = pnlCheckEvery.Enabled ? GetCheckEveryMinutes() * 60 : 0,
+                OneTimeDownload = chkOneTime.Checked,
+                AutoFollow = chkAutoFollow.Checked,
+                Category = cboCategory.Text
+            };
         }
 
         private static string GetAuthText(CheckBox chkAuth, TextBox txtAuth) {

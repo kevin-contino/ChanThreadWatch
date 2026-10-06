@@ -97,14 +97,19 @@ namespace JDP {
 
         // guarded: every download of the thread (the page lookup in this constructor included) goes
         // out on the guarded clients, which never connect to a local or private address (see SSRFGuard)
-        public ThreadWatcher(string pageURL, bool guarded) {
+        public ThreadWatcher(string pageURL, bool guarded) : this(pageURL, guarded, true) {
+        }
+
+        // lookUpThreadName false: the page is never downloaded here, as the caller has already looked up the thread's
+        // name (the local API, off the owner thread); a URL without the name is named by its number
+        public ThreadWatcher(string pageURL, bool guarded, bool lookUpThreadName) {
             _pageURL = pageURL;
             _guarded = guarded;
             _siteHelper = SiteHelpers.GetInstance(PageHost);
             _siteHelper.Guarded = guarded;
             _siteHelper.SetURL(PageURL);
             _pageID = _siteHelper.GetPageID();
-            _threadName = _siteHelper.GetThreadName();
+            _threadName = lookUpThreadName ? _siteHelper.GetThreadName() : _siteHelper.GetThreadNameWithoutLookup();
         }
 
         public string PageURL {
