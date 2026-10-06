@@ -714,7 +714,7 @@ namespace JDP.Tests.Integration {
             var done = new ManualResetEvent(false);
             var data = new MemoryStream();
             Exception error = null;
-            General.DownloadAsync(url, auth, null, false, null, r => { }, (b, n) => { lock (data) data.Write(b, 0, n); }, () => done.Set(), ex => { error = ex; done.Set(); });
+            General.DownloadAsync(url, auth, null, false, false, null, r => { }, (b, n) => { lock (data) data.Write(b, 0, n); }, () => done.Set(), ex => { error = ex; done.Set(); });
             Assert.IsTrue(done.WaitOne(TimeSpan.FromSeconds(30)), "Download did not end");
             lock (data) body = Encoding.UTF8.GetString(data.ToArray());
             return error == null ? "ok" : DescribeFailure(error);

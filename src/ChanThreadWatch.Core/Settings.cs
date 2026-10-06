@@ -257,6 +257,13 @@ namespace JDP {
             set { SetBool("ApiAllowUnknownHosts", value); }
         }
 
+        // Set once api-threads.txt has been written in this settings folder: a missing one is then guarded like one that
+        // can't be read (WatchSession). Only "1" is on.
+        public static bool? ApiThreadsFileWritten {
+            get { return GetStrictBool("ApiThreadsFileWritten"); }
+            set { SetBool("ApiThreadsFileWritten", value); }
+        }
+
         public static string WindowTitle {
             get { return Get("WindowTitle"); }
             set { Set("WindowTitle", value); }
@@ -283,6 +290,11 @@ namespace JDP {
 
         public static string ThreadsFileName {
             get { return "threads.txt"; }
+        }
+
+        // The page IDs of the threads added through the local API (ApiThreadsFile)
+        public static string ApiThreadsFileName {
+            get { return "api-threads.txt"; }
         }
 
         public static string LogFileName {
@@ -613,11 +625,13 @@ namespace JDP {
             }
         }
 
-        public static void Save() {
-            Save(Path.Combine(GetSettingsDirectory(), SettingsFileName));
+        public static bool Save() {
+            return Save(Path.Combine(GetSettingsDirectory(), SettingsFileName));
         }
 
-        public static void Save(string path) {
+        // Returns false if the settings were not written (saving is blocked, or the write failed, which is logged)
+        public static bool Save(string path) {
+            bool written = false;
             try {
                 // Copies made aside by a version that kept them byte for byte can hold plaintext
                 // logins, so after the first save following a load they are written again without
@@ -626,13 +640,15 @@ namespace JDP {
                 // Items of replaced or cleared logins are deleted once the file is saved.
                 ProtectPlaintextAuth();
                 bool checkCopies;
-                if (!WriteSettingsFile(path, out checkCopies)) return;
+                written = WriteSettingsFile(path, out checkCopies);
+                if (!written) return false;
                 if (checkCopies) TextFile.RewriteCopies(path, BlankPlaintextAuth);
                 StoredAuthDeletes.Flush(Path.GetDirectoryName(Path.GetFullPath(path)), null);
             }
             catch (Exception ex) {
                 Logger.Log(ex.ToString());
             }
+            return written;
         }
 
         // Returns false if saving is blocked. checkCopies is true if the copies have yet to be

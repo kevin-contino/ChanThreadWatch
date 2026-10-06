@@ -43,10 +43,13 @@ namespace JDP.Cli {
         private readonly Thread _ownerThread;
         private readonly WatchSession _session;
         private readonly WatchStatusOutput _output;
+        // Warnings
+        private readonly WatchStatusOutput _error;
         private volatile bool _isExiting;
 
-        public HeadlessWatch(WatchStatusOutput output, string settingsFolder) {
+        public HeadlessWatch(WatchStatusOutput output, string settingsFolder, WatchStatusOutput error) {
             _output = output;
+            _error = error ?? throw new ArgumentNullException(nameof(error));
             _session = new WatchSession(Invoke, Post, settingsFolder);
             _session.ThreadWatcherCreated += Subscribe;
             _session.ThreadWatcherAdded += OnThreadAdded;
@@ -75,7 +78,15 @@ namespace JDP.Cli {
         private void Load() {
             _session.LoadThreadList();
             _session.LoadBlacklist();
+            WarnIfApiThreadsUnreadable();
             _output.WriteStarted(_session.GetMonitoringInfo(), Settings.GetSettingsDirectory());
+        }
+
+        private void WarnIfApiThreadsUnreadable() {
+            if (!_session.ApiThreadsUnreadable) return;
+            _error.WriteLine("ctw: warning: " + Settings.ApiThreadsFileName + " could not be used (it can't be read, is not valid, or is missing although it was " +
+                "written before), so for this session every thread is watched as one added through the local API: it never connects to a local or private " +
+                "address (see " + Settings.LogFileName + ").");
         }
 
         private void RunOwnerThread() {

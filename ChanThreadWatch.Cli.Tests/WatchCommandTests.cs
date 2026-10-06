@@ -415,6 +415,44 @@ namespace JDP.Cli.Tests {
             CollectionAssert.AreEqual(before, File.ReadAllBytes(ThreadListPath));
         }
 
+        // MP-7a L2b: with api-threads.txt unreadable, every thread is guarded for this session: the loopback thread is
+        // never connected to, watch says so on stderr, and the save writes no mark from the unreadable file
+        [TestMethod]
+        public void Watch_WithAnUnreadableApiThreadsFile_GuardsEveryThreadForTheSession() {
+            WriteSettings();
+            WriteThreadList(ThreadLines(ThreadURL));
+            string apiThreads = Path.Combine(Folder, Settings.ApiThreadsFileName);
+            File.WriteAllLines(apiThreads, new[] { "2", "4chan/a/1" });
+            StringWriter output = new StringWriter(CultureInfo.InvariantCulture);
+
+            CliResult result = RunWatchUntil(() => output.ToString().Contains(ThreadURL + ": ", StringComparison.Ordinal), output);
+
+            Assert.AreEqual(CliApp.ExitSuccess, result.ExitCode, result.ToString());
+            StringAssert.StartsWith(result.Error, "ctw: warning: " + Settings.ApiThreadsFileName + " could not be used (it can't be read, is not valid, or is missing although it was written before), so for this session every thread is watched as one added through the local API");
+            StringAssert.Contains(result.Output, "blocked");
+            Assert.AreEqual(0, _server.ConnectionCount);
+            CollectionAssert.AreEqual(new[] { "1" }, File.ReadAllLines(apiThreads));
+            Assert.HasCount(1, Directory.GetFiles(Folder, TextFile.GetCopySearchPattern(apiThreads)));
+        }
+
+        // Round 2: api-threads.txt is missing although the settings say it was written: guarded for the session like
+        // one that can't be read, with the same warning, and no empty file is made to hide it
+        [TestMethod]
+        public void Watch_WithAMissingApiThreadsFileThatWasWritten_GuardsEveryThreadForTheSession() {
+            WriteSettings();
+            File.AppendAllLines(SettingsPath, new[] { "ApiThreadsFileWritten=1" });
+            WriteThreadList(ThreadLines(ThreadURL));
+            StringWriter output = new StringWriter(CultureInfo.InvariantCulture);
+
+            CliResult result = RunWatchUntil(() => output.ToString().Contains(ThreadURL + ": ", StringComparison.Ordinal), output);
+
+            Assert.AreEqual(CliApp.ExitSuccess, result.ExitCode, result.ToString());
+            StringAssert.StartsWith(result.Error, "ctw: warning: " + Settings.ApiThreadsFileName + " could not be used");
+            StringAssert.Contains(result.Output, "blocked");
+            Assert.AreEqual(0, _server.ConnectionCount);
+            Assert.IsFalse(File.Exists(Path.Combine(Folder, Settings.ApiThreadsFileName)));
+        }
+
         [TestMethod]
         public void Watch_TakesNoArguments() {
             AssertFailed(Run("watch", "extra"), CliApp.ExitUsage, "Wrong arguments. Usage: ctw watch");

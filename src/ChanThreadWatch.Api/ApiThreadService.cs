@@ -72,9 +72,10 @@ namespace JDP.Api {
         }
 
         // Every address the host resolves to must be public. A known site whose name does not resolve is added (the
-        // watcher reports the error); an unknown one is refused. This checks the addresses at add time only: the
-        // watcher's own connections are checked against SSRFGuard's ranges only in service mode (Phase 8), so a name
-        // that later resolves elsewhere, or a redirect, is not covered here.
+        // watcher reports the error); an unknown one is refused. This refuses a bad URL early, with an answer the
+        // client sees; it is not what keeps the thread off local addresses. The thread is guarded (CreateThread), so
+        // each of its watcher's connections, every redirect and meta refresh hop and a name that later resolves
+        // elsewhere included, is checked against SSRFGuard's ranges when it connects.
         private async Task<ApiError> CheckResolvedAddressesAsync(Uri uri, CancellationToken cancellationToken) {
             IPAddress[] addresses = await ResolveAsync(uri.IdnHost, cancellationToken).ConfigureAwait(false);
             if (addresses == null) return SiteHelpers.IsKnownHost(uri.Host) ? null : ApiError.UnresolvableHost;
@@ -118,19 +119,23 @@ namespace JDP.Api {
             return _session.TryGetThreadWatcher(pageID, out watcher) ? ApiAddResult.Added(ApiThreadProjection.From(watcher)) : ApiAddResult.Failed(ApiError.InternalError);
         }
 
-        // The host's defaults, but never a login or a folder (D8, G11), and always the URL that was checked
+        // The host's defaults, but never a login or a folder (D8, G11), and always the URL that was checked. Guarded:
+        // the watcher never connects to a local or private address, nor through a proxy (SSRFGuard), and the mark is
+        // saved in api-threads.txt.
         private ThreadInfo CreateThread(string url) {
             ThreadInfo thread = _newThread(url) ?? throw new InvalidOperationException("No thread was made.");
             thread.URL = url;
             thread.PageAuth = String.Empty;
             thread.ImageAuth = String.Empty;
             thread.SaveDir = String.Empty;
+            thread.Guarded = true;
             return thread;
         }
 
         // The unknown-sites setting is read again here, in case it was turned off while the lookup ran
         private ApiError CheckCanAdd(string url, string pageID) {
             if (_policy.IsExiting()) return ApiError.Unavailable;
+            if (!_session.CanSaveApiThreadMarks) return ApiError.MarksUnavailable;
             return ApiUrlRules.CheckHostName(new Uri(url), Settings.ApiAllowUnknownHosts == true) ?? CheckSession(url, pageID);
         }
 

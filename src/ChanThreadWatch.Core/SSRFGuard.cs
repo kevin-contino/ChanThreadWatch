@@ -15,14 +15,27 @@ namespace JDP {
 
         public BlockedAddressException(string host, string reason)
             : base("requests to " + host + " are blocked: " + reason) { }
+
+        // A connection through a proxy refused; guarded: the request was a guarded one (a thread added through the
+        // local API), not one refused in service mode
+        internal static BlockedAddressException Proxied(string host, bool guarded) {
+            return new BlockedAddressException(host, "it would be reached through a proxy") { IsProxied = true, IsGuardedRequest = guarded };
+        }
+
+        // Refused because the connection would go through a proxy
+        public bool IsProxied { get; private set; }
+
+        // The refused request was a guarded one
+        public bool IsGuardedRequest { get; private set; }
     }
 
     // Security item 9 (SSRF). Every connection of the HTTP transport is made here (it is the handler's
     // ConnectCallback), so every redirect and meta refresh hop is checked, against the address the
     // connection actually goes to. Off in desktop mode: the desktop app downloads from wherever its
-    // user points it, LAN boards included. In service mode, loopback, private, link-local, CGNAT,
-    // unique local, multicast, unspecified and reserved addresses are refused, unless the host or
-    // address is in AllowedHosts.
+    // user points it, LAN boards included. In service mode, and always for a guarded request (a
+    // thread added through the local API, see ThreadWatcher.Guarded), loopback, private,
+    // link-local, CGNAT, unique local, multicast, unspecified and reserved addresses are refused,
+    // unless the host or address is in AllowedHosts, and so is a connection through a proxy.
     public static class SSRFGuard {
         private static readonly object _settingsSync = new object();
         private static volatile bool _serviceMode;
@@ -78,21 +91,34 @@ namespace JDP {
         // Test only: sees the addresses just before the socket connects to them, and may throw instead
         internal static Action<IPAddress[]> BeforeConnect { get; set; } = addresses => { };
 
+        // Set on every request of a guarded download (General.BuildWebRequest). Only the guarded
+        // clients send such requests (General.SendAsync checks this before sending), and their
+        // connection pools are their own, so a guarded request never goes out on a connection that
+        // was not checked.
+        internal static readonly HttpRequestOptionsKey<bool> GuardedRequest = new HttpRequestOptionsKey<bool>("ChanThreadWatch.GuardedRequest");
+
+        // The ConnectCallback of the transport's normal clients: checked in service mode only
+        internal static ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken) {
+            return ConnectAsync(context, cancellationToken, false);
+        }
+
+        // The ConnectCallback of the guarded clients: always checked
+        internal static ValueTask<Stream> ConnectGuardedAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken) {
+            return ConnectAsync(context, cancellationToken, true);
+        }
+
         // Resolves the host, checks every address it resolves to (one blocked address blocks the host,
-        // so a DNS answer cannot mix in a private address), then connects to those same addresses
-        internal static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken) {
+        // so a DNS answer cannot mix in a private address), then connects to those same addresses.
+        // The check runs when enforce is set or in service mode. A guarded request that reaches a
+        // connection that is not enforced (a client mix-up) is refused before anything else.
+        internal static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken, bool enforce) {
             lock (_settingsSync) {
                 _connected = true;
             }
+            if (!enforce) ThrowIfGuardedRequest(context.InitialRequestMessage);
             DnsEndPoint endPoint = context.DnsEndPoint;
-            IPAddress literal;
-            // The DNS lookup refuses an unspecified address (0.0.0.0) instead of returning it
-            IPAddress[] addresses = IPAddress.TryParse(endPoint.Host, out literal) ? new[] { literal } :
-                await ResolveHost(endPoint.Host, cancellationToken).ConfigureAwait(false);
-            if (ServiceMode) {
-                ThrowIfProxied(endPoint, context.InitialRequestMessage.RequestUri);
-                ThrowIfBlocked(endPoint.Host, addresses);
-            }
+            IPAddress[] addresses = await ResolveAsync(endPoint.Host, cancellationToken).ConfigureAwait(false);
+            if (enforce || ServiceMode) ThrowIfRefused(endPoint, context.InitialRequestMessage.RequestUri, addresses, enforce);
             BeforeConnect(addresses);
             Socket socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try {
@@ -105,11 +131,38 @@ namespace JDP {
             }
         }
 
+        // The DNS lookup refuses an unspecified address (0.0.0.0) instead of returning it
+        private static async Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) {
+            IPAddress literal;
+            return IPAddress.TryParse(host, out literal) ? new[] { literal } : await ResolveHost(host, cancellationToken).ConfigureAwait(false);
+        }
+
+        // guarded: the guarded clients' check (enforce), not service mode's
+        private static void ThrowIfRefused(DnsEndPoint endPoint, Uri requestUri, IPAddress[] addresses, bool guarded) {
+            ThrowIfProxied(endPoint, requestUri, guarded);
+            ThrowIfBlocked(endPoint.Host, addresses);
+        }
+
+        // Tripwire for a new connection of an unguarded client: the request that makes it must not be a guarded one. It
+        // can't see a guarded request that goes out on a connection already in that client's pool; General.SendAsync
+        // checks the client before sending (ThrowIfGuardedRequestOnUnguardedClient).
+        internal static void ThrowIfGuardedRequest(HttpRequestMessage request) {
+            if (IsGuardedRequest(request)) {
+                throw new BlockedAddressException(request.RequestUri?.IdnHost ?? "?", "a guarded request reached a connection that is not checked");
+            }
+        }
+
+        internal static bool IsGuardedRequest(HttpRequestMessage request) {
+            bool guarded;
+            return request != null && request.Options.TryGetValue(GuardedRequest, out guarded) && guarded;
+        }
+
         // Through a proxy the connection goes to the proxy, and the proxy resolves the target, so no
-        // check here could stop a private target. Service mode refuses such a connection.
-        internal static void ThrowIfProxied(DnsEndPoint endPoint, Uri requestUri) {
+        // check here could stop a private target. Service mode and guarded requests refuse such a
+        // connection.
+        internal static void ThrowIfProxied(DnsEndPoint endPoint, Uri requestUri, bool guarded = false) {
             if (!String.Equals(endPoint.Host.Trim('[', ']'), requestUri.IdnHost.Trim('[', ']'), StringComparison.OrdinalIgnoreCase) || endPoint.Port != requestUri.Port) {
-                throw new BlockedAddressException(requestUri.IdnHost, "it would be reached through a proxy");
+                throw BlockedAddressException.Proxied(requestUri.IdnHost, guarded);
             }
         }
 

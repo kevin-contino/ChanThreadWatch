@@ -48,6 +48,9 @@ namespace JDP.Api {
         public static readonly ApiError ThreadLimit = new ApiError(StatusCodes.Status409Conflict, "thread_limit", "The thread list is full.");
         public static readonly ApiError InsufficientStorage = new ApiError(StatusCodes.Status507InsufficientStorage, "insufficient_storage", "The download folder's drive is almost full.");
         public static readonly ApiError Unavailable = new ApiError(StatusCodes.Status503ServiceUnavailable, "unavailable", "The program is busy or exiting.");
+        // The marks of the threads added through the API (api-threads.txt) can't be saved this session, so a new thread
+        // would lose its guard at the next start
+        public static readonly ApiError MarksUnavailable = new ApiError(StatusCodes.Status503ServiceUnavailable, "marks_unavailable", "Threads can't be added now: the list of threads added through the API can't be saved.");
         public static readonly ApiError InternalError = new ApiError(StatusCodes.Status500InternalServerError, "internal_error", "The request failed.");
 
         public Task WriteAsync(HttpContext context) {

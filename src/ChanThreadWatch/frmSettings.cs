@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Windows.Forms;
 
@@ -186,13 +187,17 @@ namespace JDP {
             if (newLock != null) newLock.Dispose();
         }
 
-        private static void MoveSettingsFiles(string oldSettingsFolder, string newSettingsFolder) {
-            foreach (string fileName in new[] { Settings.SettingsFileName, Settings.ThreadsFileName }) {
+        // Every file is copied before any old one is deleted, so a copy that fails leaves the old folder whole (the
+        // program keeps using it). The marks of the threads added through the local API move with the thread list.
+        internal static void MoveSettingsFiles(string oldSettingsFolder, string newSettingsFolder) {
+            List<string> copied = new List<string>();
+            foreach (string fileName in new[] { Settings.SettingsFileName, Settings.ApiThreadsFileName, Settings.ThreadsFileName }) {
                 string oldPath = Path.Combine(oldSettingsFolder, fileName);
-                string newPath = Path.Combine(newSettingsFolder, fileName);
                 if (!File.Exists(oldPath)) continue;
-                byte[] contents = File.ReadAllBytes(oldPath);
-                File.WriteAllBytes(newPath, contents);
+                File.WriteAllBytes(Path.Combine(newSettingsFolder, fileName), File.ReadAllBytes(oldPath));
+                copied.Add(oldPath);
+            }
+            foreach (string oldPath in copied) {
                 try { File.Delete(oldPath); }
                 catch { }
             }

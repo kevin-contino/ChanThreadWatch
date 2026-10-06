@@ -90,6 +90,10 @@ namespace JDP {
         protected string _url = String.Empty;
         protected HTMLParser _htmlParser;
 
+        // Set for a guarded thread (ThreadWatcher.Guarded) before anything is downloaded, so a request
+        // the site helper sends itself (the 4chan slug lookup) goes out on the guarded clients
+        public bool Guarded { get; set; }
+
         public void SetURL(string url) {
             _url = url;
         }
@@ -443,7 +447,7 @@ namespace JDP {
             }
             if (Settings.UseSlug == true) {
                 try {
-                    HTMLParser parser = new HTMLParser(General.DownloadPageToString(_url));
+                    HTMLParser parser = new HTMLParser(General.DownloadPageToString(_url, Guarded));
                     HTMLTag canonicalLinkTag = Enumerable.FirstOrDefault(Enumerable.Where(parser.FindStartTags(parser.CreateTagRange(parser.FindStartTag("head")), "link"), t => t.GetAttributeValueOrEmpty("rel").Equals("canonical")));
                     return GetThreadName(canonicalLinkTag.GetAttributeValueOrEmpty("href"), Settings.SlugType);
                 }
