@@ -10,6 +10,7 @@ updates:
       - /src/*
       - /ChanThreadWatch.Core.Tests
       - /ChanThreadWatch.Cli.Tests
+      - /ChanThreadWatch.Api.Tests
       - /ChanThreadWatch.Tests
       - /ChanThreadWatch.UITests
       - /tools/stored-auth-check
