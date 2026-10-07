@@ -208,7 +208,7 @@ namespace JDP.Cli.Tests {
             }
         }
 
-        private sealed class FailingWriter : StringWriter {
+        internal sealed class FailingWriter : StringWriter {
             public FailingWriter() : base(CultureInfo.InvariantCulture) {
             }
 
@@ -226,7 +226,7 @@ namespace JDP.Cli.Tests {
         }
 
         [SupportedOSPlatform("windows")]
-        private static void AssertOwnerOnlyOnWindows(string path) {
+        internal static void AssertOwnerOnlyOnWindows(string path) {
             SecurityIdentifier user = WindowsIdentity.GetCurrent().User;
             FileSecurity security = new FileInfo(path).GetAccessControl();
             Assert.AreEqual(user, security.GetOwner(typeof(SecurityIdentifier)));

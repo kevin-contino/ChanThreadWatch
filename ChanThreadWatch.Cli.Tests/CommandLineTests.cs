@@ -18,7 +18,7 @@ namespace JDP.Cli.Tests {
             StringAssert.StartsWith(result.Output, "Usage: ctw <command> [options]");
             StringAssert.Contains(result.Output, "add <url> [--description <text>] [--category <text>]");
             // Every command is listed
-            foreach (string command in new[] { "list", "add", "remove", "watch", "api-token" }) {
+            foreach (string command in new[] { "list", "add", "remove", "watch", "api-token", "api-pair" }) {
                 StringAssert.Contains(result.Output, "\n  " + command + " ");
             }
         }
@@ -45,6 +45,8 @@ namespace JDP.Cli.Tests {
         [DataRow(new[] { "remove", "https://boards.4chan.org/a/thread/1", "--description", "x" }, "Unknown option '--description'.")]
         [DataRow(new[] { "list", "extra" }, "Wrong arguments. Usage: ctw list")]
         [DataRow(new[] { "api-token", "extra" }, "Wrong arguments. Usage: ctw api-token")]
+        [DataRow(new[] { "api-pair", "extra" }, "Wrong arguments. Usage: ctw api-pair [--list | --remove <chrome|firefox>]")]
+        [DataRow(new[] { "api-pair", "--remove", "safari" }, "Option '--remove' takes chrome or firefox, not 'safari'.")]
         [DataRow(new[] { "--version", "list" }, "'--version' takes no other arguments.")]
         public void InvalidCommandLine_FailsWithUsageExitCode(string[] args, string message) {
             CliResult result = Run(args);
@@ -60,6 +62,7 @@ namespace JDP.Cli.Tests {
         [DataRow(new[] { "remove", "--help" }, "Usage: ctw remove <url>")]
         [DataRow(new[] { "list", "-h" }, "Usage: ctw list")]
         [DataRow(new[] { "api-token", "--help" }, "Usage: ctw api-token")]
+        [DataRow(new[] { "api-pair", "--list", "-h" }, "Usage: ctw api-pair [--list | --remove <chrome|firefox>]")]
         public void CommandHelp_PrintsThatCommandsUsageAndChangesNothing(string[] args, string usage) {
             CliResult result = Run(args);
 

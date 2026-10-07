@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using JDP.Api;
 
 namespace JDP.Cli {
     internal enum CliCommandKind {
@@ -13,7 +15,8 @@ namespace JDP.Cli {
         Add,
         Remove,
         Watch,
-        ApiToken
+        ApiToken,
+        ApiPair
     }
 
     internal sealed class CliCommand {
@@ -22,16 +25,23 @@ namespace JDP.Cli {
         // Null when the option is not given
         public string Description { get; set; }
         public string Category { get; set; }
+        // api-pair --list
+        public bool ListPaired { get; set; }
+        // The value of api-pair --remove; null when the option is not given
+        public string UnpairFamily { get; set; }
         // The command's usage, for CommandHelp
         public string HelpText { get; set; }
     }
 
-    // The command line: "ctw --help", "ctw --version", or a command followed by its positional arguments and its
-    // "--name value" options, in any order. Each option may be given once, and its value may not start with "--".
-    // "--help" (or "-h") anywhere shows the command's usage, and after "--" every argument is a positional value.
+    // The command line: "ctw --help", "ctw --version", or a command followed by its positional arguments, its
+    // "--name value" options and its "--name" flags, in any order. Each option may be given once, and its value may
+    // not start with "--". "--help" (or "-h") anywhere shows the command's usage, and after "--" every argument is a
+    // positional value.
     internal static class CliArguments {
         public const string DescriptionOption = "--description";
         public const string CategoryOption = "--category";
+        public const string ListOption = "--list";
+        public const string RemoveOption = "--remove";
         private const string EndOfOptions = "--";
 
         private sealed class CommandSpec {
@@ -39,6 +49,12 @@ namespace JDP.Cli {
             public string Usage;
             public int PositionalCount;
             public string[] Options;
+            // Options without a value
+            public string[] Flags = new string[0];
+            // At most one of the options and flags may be given
+            public bool OneOption;
+            // The values an option takes, for an option that takes only some
+            public Dictionary<string, string[]> Values = new Dictionary<string, string[]>(StringComparer.Ordinal);
         }
 
         // What has been read of a command's arguments
@@ -61,7 +77,10 @@ namespace JDP.Cli {
                 Options = new[] { DescriptionOption, CategoryOption } } },
             { "remove", new CommandSpec { Kind = CliCommandKind.Remove, Usage = "ctw remove <url>", PositionalCount = 1, Options = new string[0] } },
             { "watch", new CommandSpec { Kind = CliCommandKind.Watch, Usage = "ctw watch", PositionalCount = 0, Options = new string[0] } },
-            { "api-token", new CommandSpec { Kind = CliCommandKind.ApiToken, Usage = "ctw api-token", PositionalCount = 0, Options = new string[0] } }
+            { "api-token", new CommandSpec { Kind = CliCommandKind.ApiToken, Usage = "ctw api-token", PositionalCount = 0, Options = new string[0] } },
+            { "api-pair", new CommandSpec { Kind = CliCommandKind.ApiPair, Usage = "ctw api-pair [--list | --remove <chrome|firefox>]", PositionalCount = 0,
+                Options = new[] { RemoveOption }, Flags = new[] { ListOption }, OneOption = true,
+                Values = new Dictionary<string, string[]>(StringComparer.Ordinal) { { RemoveOption, ApiPairing.Families } } } }
         };
 
         // Returns false with a one-line error for a command line that is not valid
@@ -102,12 +121,31 @@ namespace JDP.Cli {
                 command = new CliCommand { Kind = CliCommandKind.CommandHelp, HelpText = spec.Usage };
                 return true;
             }
-            if (state.Positionals.Count != spec.PositionalCount) {
-                error = "Wrong arguments. Usage: " + spec.Usage;
-                return false;
-            }
+            error = CheckCounts(spec, state);
+            if (error != null) return false;
             command = CreateCommand(spec.Kind, state);
             return true;
+        }
+
+        // Null when the positional arguments and options are as many as the command takes, and each option's value is
+        // one it takes. Options are named in the order of the command's spec (flags first), never the order given.
+        private static string CheckCounts(CommandSpec spec, ParseState state) {
+            if (state.Positionals.Count != spec.PositionalCount) return "Wrong arguments. Usage: " + spec.Usage;
+            if (spec.OneOption && state.Options.Count > 1) {
+                return "Give only one of '" + String.Join("' and '", spec.Flags.Concat(spec.Options).Where(state.Options.ContainsKey)) + "'. Usage: " + spec.Usage;
+            }
+            return CheckValues(spec, state);
+        }
+
+        // Exact values, in their case
+        private static string CheckValues(CommandSpec spec, ParseState state) {
+            foreach (KeyValuePair<string, string[]> allowed in spec.Values) {
+                string value;
+                if (state.Options.TryGetValue(allowed.Key, out value) && Array.IndexOf(allowed.Value, value) == -1) {
+                    return "Option '" + allowed.Key + "' takes " + String.Join(" or ", allowed.Value) + ", not '" + ConsoleText.Clean(value) + "'. Usage: " + spec.Usage;
+                }
+            }
+            return null;
         }
 
         // Reads args[i], and for an option also its value (i is then moved past it)
@@ -132,6 +170,7 @@ namespace JDP.Cli {
         private static bool TryReadOption(string[] args, ref int i, CommandSpec spec, ParseState state, out string error) {
             error = null;
             string option = args[i];
+            if (Array.IndexOf(spec.Flags, option) != -1) return TryAddOption(state, option, "", out error);
             if (Array.IndexOf(spec.Options, option) == -1) {
                 error = "Unknown option '" + ConsoleText.Clean(option) + "'. Usage: " + spec.Usage;
                 return false;
@@ -140,7 +179,12 @@ namespace JDP.Cli {
                 error = "Option '" + option + "' needs a value (one that does not start with \"--\").";
                 return false;
             }
-            if (!state.Options.TryAdd(option, args[++i])) error = "Option '" + option + "' is given more than once.";
+            return TryAddOption(state, option, args[++i], out error);
+        }
+
+        // A flag's value is ""
+        private static bool TryAddOption(ParseState state, string option, string value, out string error) {
+            error = state.Options.TryAdd(option, value) ? null : "Option '" + option + "' is given more than once.";
             return error == null;
         }
 
@@ -158,7 +202,9 @@ namespace JDP.Cli {
                 Kind = kind,
                 Url = state.Positionals.Count != 0 ? state.Positionals[0] : null,
                 Description = state.Options.GetValueOrDefault(DescriptionOption),
-                Category = state.Options.GetValueOrDefault(CategoryOption)
+                Category = state.Options.GetValueOrDefault(CategoryOption),
+                ListPaired = state.Options.ContainsKey(ListOption),
+                UnpairFamily = state.Options.GetValueOrDefault(RemoveOption)
             };
         }
     }
