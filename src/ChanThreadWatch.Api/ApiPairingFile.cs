@@ -90,21 +90,21 @@ namespace JDP.Api {
             return new ApiPairingCode(ApiPairing.FormatCode(code), id, expires);
         }
 
-        // The pending code, or null when there is none. Untrusted is set when a file is there but is a link, others
+        // The pending code, or null when there is none. Refused is set when a file is there but is a link, others
         // could read or write it, it could not be read, or it does not parse.
-        public ApiPendingPairing Read(out bool untrusted) {
+        public ApiPendingPairing Read(out bool refused) {
             bool unreadable;
-            return Read(out untrusted, out unreadable);
+            return Read(out refused, out unreadable);
         }
 
-        // The same; unreadable is also set (with untrusted) when the file is there but could not be read at all (in use
+        // The same; unreadable is also set (with refused) when the file is there but could not be read at all (in use
         // past the retries, access denied), as opposed to content that is not trusted
-        public ApiPendingPairing Read(out bool untrusted, out bool unreadable) {
-            TrustedRead status;
-            string text = ApiTokenStore.ReadTrustedText(_path, MaxFileBytes, out status);
+        public ApiPendingPairing Read(out bool refused, out bool unreadable) {
+            OwnerOnlyRead status;
+            string text = ApiTokenStore.ReadOwnerOnlyText(_path, MaxFileBytes, out status);
             ApiPendingPairing pending = text != null ? Parse(text) : null;
-            untrusted = pending == null && status != TrustedRead.Missing;
-            unreadable = status == TrustedRead.Failed;
+            refused = pending == null && status != OwnerOnlyRead.Missing;
+            unreadable = status == OwnerOnlyRead.Failed;
             return pending;
         }
 
@@ -137,9 +137,9 @@ namespace JDP.Api {
         }
 
         internal CodeInFile Check(string id) {
-            TrustedRead status;
-            string text = ApiTokenStore.ReadTrustedText(_path, MaxFileBytes, out status);
-            if (status == TrustedRead.Failed) return CodeInFile.Unknown;
+            OwnerOnlyRead status;
+            string text = ApiTokenStore.ReadOwnerOnlyText(_path, MaxFileBytes, out status);
+            if (status == OwnerOnlyRead.Failed) return CodeInFile.Unknown;
             return text != null && Parse(text)?.Id == id ? CodeInFile.Holds : CodeInFile.Other;
         }
 

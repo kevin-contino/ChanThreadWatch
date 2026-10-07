@@ -29,7 +29,7 @@ namespace JDP.Api {
     internal sealed class ApiCredentials {
         private readonly ApiTokenStore _tokens;
         private readonly ApiClientStore _clients;
-        private int _untrustedLogged;
+        private int _refusalLogged;
 
         public ApiCredentials(ApiTokenStore tokens, ApiClientStore clients) {
             _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
@@ -67,10 +67,10 @@ namespace JDP.Api {
         public IReadOnlyList<ApiClient> ReadClients() {
             IReadOnlyList<ApiClient> clients = _clients.Read();
             if (clients != null) {
-                Volatile.Write(ref _untrustedLogged, 0);
+                Volatile.Write(ref _refusalLogged, 0);
                 return clients;
             }
-            if (Interlocked.Exchange(ref _untrustedLogged, 1) == 0) Logger.Log("Local API: " + ApiClientStore.FileName + " is not trusted, so no paired browser can connect.");
+            if (Interlocked.Exchange(ref _refusalLogged, 1) == 0) Logger.Log("Local API: " + ApiClientStore.FileName + " is not trusted, so no paired browser can connect.");
             return Array.Empty<ApiClient>();
         }
 

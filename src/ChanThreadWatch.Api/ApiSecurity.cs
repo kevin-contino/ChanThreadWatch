@@ -4,14 +4,19 @@ using System.Threading.RateLimiting;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Primitives;
 
 namespace JDP.Api {
-    // The first middleware, ahead of routing, so every route gets the same checks (security items 2, 3, 7, 13, 14,
-    // 15, 17), in this order: Host, Origin / Sec-Fetch-Site, query string, then bearer token, Origin binding and global
-    // rate. The two pairing routes (MP-7b design E1, E5) take no token: POST on exactly /api/v1/pairing or
-    // /api/v1/proof gets the route's Origin rule and its own rate limit in place of the token, the binding and the
-    // global rate; any other method, case, encoding or trailing slash still needs the token. The global rate limit
+    // The first middleware after routing (which only selects the endpoint; nothing runs before these checks), so every
+    // route gets the same checks (security items 2, 3, 7, 13, 14, 15, 17), in this order: Host, Origin /
+    // Sec-Fetch-Site, query string, then bearer token, Origin binding and global rate. Which routes take no token is
+    // decided by server-side endpoint metadata only (OpenRouteMetadata on the two pairing routes, MP-7b design E1, E5),
+    // never by request text. A request routed to one of them must also be POST on exactly that route's path (raw target
+    // and decoded path): any other method, case, encoding, trailing slash or absolute-form target gets 401, and no
+    // token is read. Then the route's Origin rule, its body head checks and its own rate limit run in place of the
+    // token, the binding and the global rate. An endpoint without the marker (every other route, the 405 endpoint
+    // routing picks for a wrong method) and a request no route matched need the token. The global rate limit
     // counts authenticated requests only, so requests that a web page or another program can make without the token
     // never use it up. A request refused by these security checks gets Connection: close, so such clients cannot hold
     // the 16 connections. Every response gets Cache-Control: no-store and X-Content-Type-Options: nosniff; no
@@ -46,8 +51,15 @@ namespace JDP.Api {
         private ApiError Check(HttpContext context) {
             ApiError error = CheckForm(context);
             if (error != null) return error;
-            if (IsExactPost(context, PairingEndpoints.PairingPath)) return CheckPairingRoute(context.Request, true, _pairing);
-            return IsExactPost(context, PairingEndpoints.ProofPath) ? CheckPairingRoute(context.Request, false, _proof) : CheckAuthenticated(context.Request);
+            OpenRouteMetadata openRoute = context.GetEndpoint()?.Metadata.GetMetadata<OpenRouteMetadata>();
+            return openRoute != null ? CheckOpenRoute(context, openRoute) : CheckAuthenticated(context.Request);
+        }
+
+        // A route that takes no token: only its one exact spelling, then its own checks
+        private ApiError CheckOpenRoute(HttpContext context, OpenRouteMetadata route) {
+            if (!IsExactPost(context, route.Path)) return ApiError.Unauthorized;
+            bool pairing = route.Route == OpenRoute.Pairing;
+            return CheckPairingRoute(context.Request, pairing, pairing ? _pairing : _proof);
         }
 
         // Host, Origin / Sec-Fetch-Site and query string, for every route

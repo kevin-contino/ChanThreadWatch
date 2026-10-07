@@ -48,8 +48,8 @@ namespace JDP.Api.Tests {
             StringAssert.Contains(response.Head, "Connection: close");
         }
 
-        // Only POST on exactly these paths skips the token; any other method, case, encoding or trailing slash gets
-        // 401 first
+        // Only POST on exactly these paths skips the token; any other method, case, encoding, trailing slash or
+        // absolute-form target gets 401 first
         [TestMethod]
         public void Scope_OnlyExactPostSkipsTheToken() {
             foreach (string path in new[] { PairingEndpoints.PairingPath, PairingEndpoints.ProofPath }) {
@@ -65,7 +65,8 @@ namespace JDP.Api.Tests {
                     }
                 }
                 string encoded = path.Substring(0, path.Length - 1) + "%" + ((int)path[path.Length - 1]).ToString("x2", CultureInfo.InvariantCulture);
-                foreach (string raw in new[] { RawPost(encoded, "Origin: " + ChromeOrigin + "\r\n"), RawPost("/" + path, "Origin: " + ChromeOrigin + "\r\n"), RawPost(path, "Origin: " + ChromeOrigin + "\r\n", "{}", "post") }) {
+                string absolute = "http://127.0.0.1:" + P + path;
+                foreach (string raw in new[] { RawPost(encoded, "Origin: " + ChromeOrigin + "\r\n"), RawPost("/" + path, "Origin: " + ChromeOrigin + "\r\n"), RawPost(path, "Origin: " + ChromeOrigin + "\r\n", "{}", "post"), RawPost(absolute, "Origin: " + ChromeOrigin + "\r\n") }) {
                     RawResponse response = SendRaw(raw);
                     Assert.AreEqual(401, response.Status, raw + " => " + response);
                 }
@@ -81,15 +82,79 @@ namespace JDP.Api.Tests {
             }
         }
 
-        // A path that routing also matches (another case) reaches the handler only with a token; the handler still
-        // needs an extension Origin, so the scripts' token cannot pair without one
+        // A spelling of an open route that routing also matches (another case, a trailing slash, an encoded letter, an
+        // absolute-form target) is 401 with or without a token: the open route's marker allows only its one exact
+        // spelling, and no token is read for it. The handler is never reached.
         [TestMethod]
-        public void Scope_OtherCaseWithTheScriptTokenStillNeedsAnExtensionOrigin() {
+        public void Scope_NonCanonicalSpellingIs401WithOrWithoutAToken() {
+            string chrome = Pair(ChromeOrigin);
             NewCode();
             string body = JsonSerializer.Serialize(new { step = "hello", clientNonce = ApiPairing.NewNonce() });
-            AssertProblem(Send(HttpMethod.Post, PairingEndpoints.PairingPath.ToUpperInvariant(), body), HttpStatusCode.Forbidden, "forbidden_origin");
-            AssertProblem(Send(HttpMethod.Get, PairingEndpoints.PairingPath), HttpStatusCode.MethodNotAllowed, "method_not_allowed");
+            foreach (string path in new[] { PairingEndpoints.PairingPath, PairingEndpoints.ProofPath }) {
+                foreach (string variant in new[] { path.ToUpperInvariant(), path + "/", path.Replace("/v1/", "/V1/", StringComparison.Ordinal) }) {
+                    AssertProblem(Send(HttpMethod.Post, variant, body), HttpStatusCode.Unauthorized, "unauthorized");
+                    AssertProblem(SendWithToken(HttpMethod.Post, variant, chrome, ChromeOrigin, body), HttpStatusCode.Unauthorized, "unauthorized");
+                    AssertProblem(PostAnonymous(variant, body, ChromeOrigin), HttpStatusCode.Unauthorized, "unauthorized");
+                }
+                string encoded = path.Substring(0, path.Length - 1) + "%" + ((int)path[path.Length - 1]).ToString("x2", CultureInfo.InvariantCulture);
+                foreach (string target in new[] { encoded, "http://127.0.0.1:" + P + path }) {
+                    RawResponse response = SendRaw(RawPost(target, "Origin: " + ChromeOrigin + "\r\nAuthorization: Bearer " + chrome + "\r\n", body));
+                    Assert.AreEqual(401, response.Status, target + " => " + response);
+                }
+            }
             Assert.AreEqual(HttpStatusCode.OK, PostHello(ChromeOrigin).StatusCode, "the code was not used");
+            AssertProblem(Send(HttpMethod.Get, PairingEndpoints.PairingPath), HttpStatusCode.MethodNotAllowed, "method_not_allowed");
+        }
+
+        // A path no route matches, and a wrong method on an open route (routing picks its 405 endpoint, which has no
+        // marker), need the token as before: 401 without it, 404 or 405 with it
+        [TestMethod]
+        public void Scope_UnmatchedPathAndWrongMethodNeedTheToken() {
+            foreach (string path in new[] { "/api/v1/nothing", "/api/v1/pairings", "/api/v1/proof/x", "/" }) {
+                AssertProblem(PostAnonymous(path, "{}", ChromeOrigin), HttpStatusCode.Unauthorized, "unauthorized");
+                AssertProblem(Send(HttpMethod.Post, path, "{}"), HttpStatusCode.NotFound, "not_found");
+            }
+            foreach (string path in new[] { PairingEndpoints.PairingPath, PairingEndpoints.ProofPath }) {
+                foreach (HttpMethod method in new[] { HttpMethod.Get, HttpMethod.Put, HttpMethod.Delete }) {
+                    using (HttpRequestMessage request = new HttpRequestMessage(method, path)) {
+                        AssertProblem(Anonymous.SendAsync(request).GetAwaiter().GetResult(), HttpStatusCode.Unauthorized, "unauthorized");
+                    }
+                    AssertProblem(Send(method, path), HttpStatusCode.MethodNotAllowed, "method_not_allowed");
+                }
+            }
+        }
+
+        // The marker is on exactly the two pairing endpoints, each with its own path; every other endpoint (the threads
+        // routes, the OpenAPI document, and any route added later without it) needs the token
+        [TestMethod]
+        public void Scope_OnlyThePairingEndpointsAreOpen() {
+            Dictionary<string, OpenRouteMetadata> marked = new Dictionary<string, OpenRouteMetadata>();
+            int unmarked = 0;
+            foreach (Microsoft.AspNetCore.Routing.RouteEndpoint endpoint in Server.GetRouteEndpoints()) {
+                OpenRouteMetadata open = endpoint.Metadata.GetMetadata<OpenRouteMetadata>();
+                if (open == null) {
+                    unmarked++;
+                    continue;
+                }
+                string methods = String.Join(",", endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.Routing.IHttpMethodMetadata>().HttpMethods);
+                marked.Add(methods + " " + endpoint.RoutePattern.RawText, open);
+            }
+            CollectionAssert.AreEquivalent(new[] { "POST " + PairingEndpoints.PairingPath, "POST " + PairingEndpoints.ProofPath }, marked.Keys.ToArray());
+            Assert.AreEqual(OpenRoute.Pairing, marked["POST " + PairingEndpoints.PairingPath].Route);
+            Assert.AreEqual(PairingEndpoints.PairingPath, marked["POST " + PairingEndpoints.PairingPath].Path);
+            Assert.AreEqual(OpenRoute.Proof, marked["POST " + PairingEndpoints.ProofPath].Route);
+            Assert.AreEqual(PairingEndpoints.ProofPath, marked["POST " + PairingEndpoints.ProofPath].Path);
+            Assert.AreEqual(3, unmarked);
+            foreach (string origin in new[] { null, ChromeOrigin }) {
+                AssertProblem(PostAnonymous(ThreadsEndpoints.ThreadsPath, JsonSerializer.Serialize(new { url = ThreadUrl }), origin), HttpStatusCode.Unauthorized, "unauthorized");
+                foreach (string path in new[] { ThreadsEndpoints.ThreadsPath, ThreadsEndpoints.OpenApiPath }) {
+                    using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, path)) {
+                        if (origin != null) request.Headers.TryAddWithoutValidation("Origin", origin);
+                        AssertProblem(Anonymous.SendAsync(request).GetAwaiter().GetResult(), HttpStatusCode.Unauthorized, "unauthorized");
+                    }
+                }
+            }
+            Assert.AreEqual(0, ThreadCount());
         }
 
         // Size, content type and JSON shape: refused before any state changes, so a malformed request never burns the

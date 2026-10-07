@@ -7,6 +7,23 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
 namespace JDP.Api {
+    internal enum OpenRoute {
+        Pairing,
+        Proof
+    }
+
+    // Endpoint metadata of a route that takes no token (ApiSecurity): which one it is, and its one exact path. Only the
+    // two pairing routes carry it; a route without it needs the token.
+    internal sealed class OpenRouteMetadata {
+        public OpenRouteMetadata(OpenRoute route, string path) {
+            Route = route;
+            Path = path;
+        }
+
+        public OpenRoute Route { get; }
+        public string Path { get; }
+    }
+
     // The browser pairing (MP-7b design, section 3): POST /api/v1/pairing (steps hello and finish) and POST
     // /api/v1/proof, the two routes without a token. ApiSecurity has already checked the Host, the Origin rule of the
     // route, the query string and the route's own rate. The state of the one pending code (answered hellos, burned,
@@ -32,9 +49,9 @@ namespace JDP.Api {
         // state, even if its file comes back
         private readonly Queue<string> _endedIds = new Queue<string>();
         private const int EndedIdsKept = 8;
-        // Set once an untrusted api-pairing.txt was logged, under _sync; cleared by a trusted read, so the log says so
+        // Set once a refused api-pairing.txt was logged, under _sync; cleared by an accepted read, so the log says so
         // once per spell
-        private bool _untrustedLogged;
+        private bool _refusalLogged;
 
         // Test only: run at the start of a finish (before the lock), and when a finish starts to complete (in the lock)
         internal static Action FinishArrivingForTesting { get; set; }
@@ -51,8 +68,8 @@ namespace JDP.Api {
         }
 
         public void Map(IEndpointRouteBuilder routes) {
-            routes.MapPost(PairingPath, context => ThreadsEndpoints.RunAsync(context, PairAsync));
-            routes.MapPost(ProofPath, context => ThreadsEndpoints.RunAsync(context, ProveAsync));
+            routes.MapPost(PairingPath, context => ThreadsEndpoints.RunAsync(context, PairAsync)).WithMetadata(new OpenRouteMetadata(OpenRoute.Pairing, PairingPath));
+            routes.MapPost(ProofPath, context => ThreadsEndpoints.RunAsync(context, ProveAsync)).WithMetadata(new OpenRouteMetadata(OpenRoute.Proof, ProofPath));
         }
 
         // Content type, body size, body, step rules, then the step
@@ -66,8 +83,8 @@ namespace JDP.Api {
             await reply(context).ConfigureAwait(false);
         }
 
-        // ApiSecurity checked the Origin for this exact path; checked again here for a path routing also matches (another
-        // case), which only a request with a token reaches
+        // ApiSecurity checked the Origin, and refused any other spelling of the path; checked again here as a second
+        // line
         private Func<HttpContext, Task> Pair(PairingRequest request, string origin) {
             if (!ApiPairing.IsPairingOrigin(origin)) return Fail(ApiError.ForbiddenOrigin);
             if (IsHello(request)) return Hello(request.ClientNonce, origin);
@@ -208,10 +225,10 @@ namespace JDP.Api {
 
         // The file as read before the lock, so a file another program holds usually does not hold the lock
         private PendingFile ReadFile() {
-            bool untrusted;
+            bool refused;
             bool unreadable;
-            ApiPendingPairing pending = _pairingFile.Read(out untrusted, out unreadable);
-            return new PendingFile(pending, untrusted, unreadable);
+            ApiPendingPairing pending = _pairingFile.Read(out refused, out unreadable);
+            return new PendingFile(pending, refused, unreadable);
         }
 
         // The state of the code in the file, or null when there is none, it is used, not trusted or unreadable, or it
@@ -247,11 +264,11 @@ namespace JDP.Api {
         // The pending code, or null. A file that is a link, open to others, does not parse, or expires too far ahead is
         // not trusted, and the log says so (once until the file is trusted again).
         private ApiPendingPairing CheckPending(PendingFile file) {
-            if (file.Untrusted || IsTooFarAhead(file.Pending)) {
-                LogUntrusted(file.Unreadable);
+            if (file.Refused || IsTooFarAhead(file.Pending)) {
+                LogRefused(file.Unreadable);
                 return null;
             }
-            _untrustedLogged = false;
+            _refusalLogged = false;
             return file.Pending != null && file.Pending.PairedFamily != null ? DropUsed(file.Pending) : file.Pending;
         }
 
@@ -262,9 +279,9 @@ namespace JDP.Api {
             return null;
         }
 
-        private void LogUntrusted(bool unreadable) {
-            if (!_untrustedLogged) Logger.Log("Local API: " + ApiPairingFile.FileName + (unreadable ? " could not be read" : " is not trusted") + ", so no pairing code is active.");
-            _untrustedLogged = true;
+        private void LogRefused(bool unreadable) {
+            if (!_refusalLogged) Logger.Log("Local API: " + ApiPairingFile.FileName + (unreadable ? " could not be read" : " is not trusted") + ", so no pairing code is active.");
+            _refusalLogged = true;
         }
 
         private bool IsTooFarAhead(ApiPendingPairing pending) {
@@ -318,14 +335,14 @@ namespace JDP.Api {
         }
 
         private sealed class PendingFile {
-            public PendingFile(ApiPendingPairing pending, bool untrusted, bool unreadable) {
+            public PendingFile(ApiPendingPairing pending, bool refused, bool unreadable) {
                 Pending = pending;
-                Untrusted = untrusted;
+                Refused = refused;
                 Unreadable = unreadable;
             }
 
             public ApiPendingPairing Pending { get; }
-            public bool Untrusted { get; }
+            public bool Refused { get; }
             public bool Unreadable { get; }
         }
 

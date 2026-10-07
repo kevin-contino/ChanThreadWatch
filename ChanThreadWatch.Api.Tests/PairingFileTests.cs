@@ -60,7 +60,7 @@ namespace JDP.Api.Tests {
         // Pairing over an untrusted file starts a new file with the new line alone, so a damaged file never blocks
         // pairing; the other family pairs again
         [TestMethod]
-        public void ClientsFile_PairingReplacesAnUntrustedFile() {
+        public void ClientsFile_PairingReplacesARefusedFile() {
             string firefox = Pair(FirefoxOrigin);
             ApiTokenStore.WriteOwnerOnlyText(Clients.Path, Version + "garbage\n", "test: ");
             string logBefore = ReadCoreLog();
@@ -152,9 +152,9 @@ namespace JDP.Api.Tests {
             string text = File.ReadAllText(PairingFile.Path);
             Assert.IsFalse(text.Contains(code.Code.Replace("-", ""), StringComparison.Ordinal));
             Assert.IsFalse(text.Contains(code.Code, StringComparison.Ordinal));
-            bool untrusted;
-            ApiPendingPairing pending = PairingFile.Read(out untrusted);
-            Assert.IsFalse(untrusted);
+            bool refused;
+            ApiPendingPairing pending = PairingFile.Read(out refused);
+            Assert.IsFalse(refused);
             Assert.AreEqual(code.Id, pending.Id);
             Assert.IsNull(pending.PairedFamily);
             byte[] salt = ApiPairing.FromBase64Url(pending.Salt, 16);
@@ -165,7 +165,7 @@ namespace JDP.Api.Tests {
 
             ApiPairingCode next = NewCode();
             Assert.AreNotEqual(code.Id, next.Id);
-            Assert.AreEqual(next.Id, PairingFile.Read(out untrusted).Id);
+            Assert.AreEqual(next.Id, PairingFile.Read(out refused).Id);
             Assert.AreEqual(0, Directory.GetFiles(Folder, "*.tmp").Length);
             Assert.IsTrue(PairingFile.Delete(code.Id), "an older code is not in the file");
             Assert.IsTrue(File.Exists(PairingFile.Path), "the newer code is not deleted");
@@ -195,7 +195,7 @@ namespace JDP.Api.Tests {
         // A pairing file that is not trusted (malformed, a link, open to others, or expiring too far ahead) is no code:
         // 409, and the log says so
         [TestMethod]
-        public void PairingFile_UntrustedIsNoCode() {
+        public void PairingFile_RefusedIsNoCode() {
             ApiPairingCode code = NewCode();
             string good = File.ReadAllText(PairingFile.Path);
             ApiPendingPairing pending = PairingFile.Read(out _);
@@ -221,9 +221,9 @@ namespace JDP.Api.Tests {
             File.Delete(PairingFile.Path);
             File.WriteAllText(PairingFile.Path, text);
             AssertProblem(PostHello(ChromeOrigin), HttpStatusCode.Conflict, "pairing_unavailable");
-            bool untrusted;
-            Assert.IsNull(PairingFile.Read(out untrusted));
-            Assert.IsTrue(untrusted);
+            bool refused;
+            Assert.IsNull(PairingFile.Read(out refused));
+            Assert.IsTrue(refused);
         }
 
         [TestMethod]

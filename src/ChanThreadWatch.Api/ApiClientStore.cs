@@ -57,9 +57,9 @@ namespace JDP.Api {
         // The paired browsers: an empty list when there is no file, null when the file is not trusted or could not be
         // read (no paired browser passes then)
         public IReadOnlyList<ApiClient> Read() {
-            TrustedRead status;
-            string text = ApiTokenStore.ReadTrustedText(_path, MaxFileBytes, out status);
-            if (text == null) return status == TrustedRead.Missing ? Array.Empty<ApiClient>() : null;
+            OwnerOnlyRead status;
+            string text = ApiTokenStore.ReadOwnerOnlyText(_path, MaxFileBytes, out status);
+            if (text == null) return status == OwnerOnlyRead.Missing ? Array.Empty<ApiClient>() : null;
             return Parse(text);
         }
 
@@ -96,10 +96,10 @@ namespace JDP.Api {
 
         // The lines, an empty list for no file, null for untrusted content; throws when the file could not be read
         private IReadOnlyList<ApiClient> ReadForWrite() {
-            TrustedRead status;
-            string text = ApiTokenStore.ReadTrustedText(_path, MaxFileBytes, out status);
-            if (status == TrustedRead.Failed) throw new ApiTokenException(ReadFailure + _path);
-            if (text == null) return status == TrustedRead.Missing ? Array.Empty<ApiClient>() : null;
+            OwnerOnlyRead status;
+            string text = ApiTokenStore.ReadOwnerOnlyText(_path, MaxFileBytes, out status);
+            if (status == OwnerOnlyRead.Failed) throw new ApiTokenException(ReadFailure + _path);
+            if (text == null) return status == OwnerOnlyRead.Missing ? Array.Empty<ApiClient>() : null;
             return Parse(text);
         }
 

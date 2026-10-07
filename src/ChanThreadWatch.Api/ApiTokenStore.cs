@@ -5,13 +5,13 @@ using System.Text;
 using System.Threading;
 
 namespace JDP.Api {
-    // How a read of an owner-only file ended (ApiTokenStore.ReadTrustedText)
-    internal enum TrustedRead {
+    // How a read of an owner-only file ended (ApiTokenStore.ReadOwnerOnlyText)
+    internal enum OwnerOnlyRead {
         Read,
         // No file (or no folder)
         Missing,
         // A link, access for others, a file system without ACLs, or more than the limit
-        Untrusted,
+        Refused,
         // An I/O or access failure: a sharing violation after the retries, access denied, an ACL that can't be read
         Failed
     }
@@ -96,40 +96,40 @@ namespace JDP.Api {
         // The token's SHA-256 hash (also the key of the script's proof, POST /api/v1/proof). Null when the file is
         // missing, unreadable, not trusted or not one valid line.
         internal byte[] ReadHash() {
-            string text = ReadTrustedText(_path, MaxFileBytes);
+            string text = ReadOwnerOnlyText(_path, MaxFileBytes);
             return text != null ? ParseHash(text.TrimEnd('\r', '\n')) : null;
         }
 
         // The text of an owner-only file of at most that many bytes (ASCII), or null when it is missing, unreadable,
         // longer, a link, or others could read or write it. Also used for api-clients.txt and api-pairing.txt. A file
         // being replaced (here or in another process) is read again after a short wait.
-        internal static string ReadTrustedText(string path, int maxBytes) {
-            TrustedRead status;
-            return ReadTrustedText(path, maxBytes, out status);
+        internal static string ReadOwnerOnlyText(string path, int maxBytes) {
+            OwnerOnlyRead status;
+            return ReadOwnerOnlyText(path, maxBytes, out status);
         }
 
         // The same, and how the read ended, so a writer can tell a file it may replace (missing or untrusted) from one
         // it could not read
-        internal static string ReadTrustedText(string path, int maxBytes, out TrustedRead status) {
+        internal static string ReadOwnerOnlyText(string path, int maxBytes, out OwnerOnlyRead status) {
             for (int attempt = 1; ; attempt++) {
                 try {
-                    string text = TryReadTrustedText(path, maxBytes);
-                    status = text != null ? TrustedRead.Read : TrustedRead.Untrusted;
+                    string text = TryReadOwnerOnlyText(path, maxBytes);
+                    status = text != null ? OwnerOnlyRead.Read : OwnerOnlyRead.Refused;
                     return text;
                 }
                 catch (IOException ex) when (IsRetryable(ex, attempt)) {
                     Thread.Sleep(RetryDelay);
                 }
-                catch (Exception ex) when (IsUntrustedFailure(ex)) {
+                catch (Exception ex) when (IsRefusedReadFailure(ex)) {
                     status = Classify(ex);
                     return null;
                 }
             }
         }
 
-        private static TrustedRead Classify(Exception ex) {
-            if (ex is FileNotFoundException || ex is DirectoryNotFoundException) return TrustedRead.Missing;
-            return ex is NotSupportedException ? TrustedRead.Untrusted : TrustedRead.Failed;
+        private static OwnerOnlyRead Classify(Exception ex) {
+            if (ex is FileNotFoundException || ex is DirectoryNotFoundException) return OwnerOnlyRead.Missing;
+            return ex is NotSupportedException ? OwnerOnlyRead.Refused : OwnerOnlyRead.Failed;
         }
 
         // Only a sharing violation (another program has the file open for a moment) is read again; anything else
@@ -144,7 +144,7 @@ namespace JDP.Api {
 
         // Also a file system without ACLs (NotSupportedException) or an ACL that cannot be read
         // (PrivilegeNotHeldException, an UnauthorizedAccessException): the file is not trusted
-        private static bool IsUntrustedFailure(Exception ex) {
+        private static bool IsRefusedReadFailure(Exception ex) {
             return IsFileFailure(ex) || ex is NotSupportedException;
         }
 
@@ -153,7 +153,7 @@ namespace JDP.Api {
 
         // The path is checked for a link again once the file is open, so a link put in its place between the first check
         // and the open (which follows it on Unix) is refused
-        private static string TryReadTrustedText(string path, int maxBytes) {
+        private static string TryReadOwnerOnlyText(string path, int maxBytes) {
             if (OwnerOnlyFile.IsLink(path)) return null;
             OpeningForTesting?.Invoke(path);
             using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {

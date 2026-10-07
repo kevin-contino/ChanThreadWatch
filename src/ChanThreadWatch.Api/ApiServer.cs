@@ -287,9 +287,11 @@ namespace JDP.Api {
             string settingsFolder = Path.GetDirectoryName(_tokens.Path);
             ApiCredentials credentials = new ApiCredentials(_tokens, new ApiClientStore(settingsFolder));
             ApiSecurity security = new ApiSecurity(credentials, () => _boundPort, _requests, _pairing, _proof, policy.MaxBodyBytes);
+            // Routing only selects the endpoint here, so the security checks can read its metadata; the endpoint runs
+            // after them
+            app.UseRouting();
             app.Use(security.InvokeAsync);
             app.Use(WriteEmptyErrorAsProblemAsync);
-            app.UseRouting();
             new ThreadsEndpoints(_threads, _adds).Map(app);
             new PairingEndpoints(policy, credentials, new ApiPairingFile(settingsFolder), () => _boundPort).Map(app);
         }

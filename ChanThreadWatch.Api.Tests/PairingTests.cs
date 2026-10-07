@@ -227,8 +227,8 @@ namespace JDP.Api.Tests {
             Assert.IsFalse(File.ReadAllText(Clients.Path).Contains(token.Substring(5), StringComparison.Ordinal));
             AssertOwnerOnly(Clients.Path);
 
-            bool untrusted;
-            ApiPendingPairing pending = PairingFile.Read(out untrusted);
+            bool refused;
+            ApiPendingPairing pending = PairingFile.Read(out refused);
             Assert.AreEqual(family, pending.PairedFamily);
             StringAssert.EndsWith(File.ReadAllText(PairingFile.Path), "state:paired:" + family + "\n");
             Assert.AreEqual(0, Directory.GetFiles(Folder, "*.tmp").Length);
@@ -246,8 +246,8 @@ namespace JDP.Api.Tests {
             HttpResponseMessage response = PostHello(ChromeOrigin);
             JsonElement json = Json(response);
             Assert.AreEqual("Chan Thread Watch", json.GetProperty("serverName").GetString());
-            bool untrusted;
-            ApiPendingPairing pending = PairingFile.Read(out untrusted);
+            bool refused;
+            ApiPendingPairing pending = PairingFile.Read(out refused);
             Assert.AreEqual(pending.Id, json.GetProperty("pairingId").GetString());
             Assert.AreEqual(pending.Salt, json.GetProperty("salt").GetString());
             CollectionAssert.AreEquivalent(new[] { "pairingId", "salt", "serverNonce", "serverName", "proof" }, json.EnumerateObject().Select(member => member.Name).ToArray());
