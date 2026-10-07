@@ -36,6 +36,69 @@ namespace JDP.Api {
         public string Code { get; set; }
     }
 
+    // POST /api/v1/pairing: "step" is "hello" with "clientNonce" only, or "finish" with all four others. Any other
+    // member, case, duplicate or type fails the parse; the step rules are checked after it. Each setter counts its
+    // member, so a member that is present with the value null still counts (a hello with "proof": null is refused).
+    internal sealed class PairingRequest {
+        private string _step;
+        private string _clientNonce;
+        private string _pairingId;
+        private string _serverNonce;
+        private string _proof;
+
+        [JsonRequired]
+        public string Step {
+            get { return _step; }
+            set { _step = value; MemberCount++; }
+        }
+
+        public string ClientNonce {
+            get { return _clientNonce; }
+            set { _clientNonce = value; MemberCount++; }
+        }
+
+        public string PairingId {
+            get { return _pairingId; }
+            set { _pairingId = value; MemberCount++; }
+        }
+
+        public string ServerNonce {
+            get { return _serverNonce; }
+            set { _serverNonce = value; MemberCount++; }
+        }
+
+        public string Proof {
+            get { return _proof; }
+            set { _proof = value; MemberCount++; }
+        }
+
+        // Not a JSON member (internal)
+        internal int MemberCount { get; private set; }
+    }
+
+    internal sealed class PairingHelloResponse {
+        public string PairingId { get; set; }
+        public string Salt { get; set; }
+        public string ServerNonce { get; set; }
+        public string ServerName { get; set; }
+        public string Proof { get; set; }
+    }
+
+    internal sealed class PairingFinishResponse {
+        public string Token { get; set; }
+        public string Proof { get; set; }
+    }
+
+    // POST /api/v1/proof
+    internal sealed class ProofRequest {
+        [JsonRequired]
+        public string ClientNonce { get; set; }
+    }
+
+    internal sealed class ProofResponse {
+        public string Proof { get; set; }
+    }
+
     [JsonSourceGenerationOptions(
         PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = false,
@@ -48,6 +111,11 @@ namespace JDP.Api {
     [JsonSerializable(typeof(ApiThread))]
     [JsonSerializable(typeof(ApiThreadList))]
     [JsonSerializable(typeof(ApiProblemBody))]
+    [JsonSerializable(typeof(PairingRequest))]
+    [JsonSerializable(typeof(PairingHelloResponse))]
+    [JsonSerializable(typeof(PairingFinishResponse))]
+    [JsonSerializable(typeof(ProofRequest))]
+    [JsonSerializable(typeof(ProofResponse))]
     internal sealed partial class ApiJsonContext : JsonSerializerContext {
     }
 }

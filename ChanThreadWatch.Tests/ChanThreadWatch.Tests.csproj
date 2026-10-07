@@ -28,6 +28,7 @@
   <ItemGroup>
     <!-- Every test assembly sends the default folders and the application data folder to a temporary folder -->
     <Compile Include="..\ChanThreadWatch.Core.Tests\TestDefaultFolders.cs" Link="TestDefaultFolders.cs" />
+    <Compile Include="..\ChanThreadWatch.Api.Tests\TestTokenCheck.cs" Link="TestTokenCheck.cs" />
   </ItemGroup>
 
   <ItemGroup>

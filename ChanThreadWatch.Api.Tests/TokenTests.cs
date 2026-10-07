@@ -58,7 +58,7 @@ namespace JDP.Api.Tests {
             string overlong = "Bearer " + Token + new string('A', 257 - 7 - Token.Length);
             Assert.AreEqual(257, overlong.Length);
             AssertProblem(Get(ThreadsEndpoints.ThreadsPath, request => request.Headers.TryAddWithoutValidation("Authorization", overlong)), HttpStatusCode.Unauthorized, "unauthorized");
-            Assert.IsFalse(Tokens.Verify(Token + new string('A', 300)));
+            Assert.IsNull(new ApiCredentials(Tokens, new ApiClientStore(Folder)).Identify(Token + new string('A', 300)));
         }
 
         [TestMethod]
@@ -179,6 +179,20 @@ namespace JDP.Api.Tests {
             ApiTokenStore store = new ApiTokenStore(Path.Combine(Folder, "missing-folder"));
             Assert.ThrowsExactly<ApiTokenException>(() => store.Generate());
             Assert.IsFalse(Directory.Exists(Path.Combine(Folder, "missing-folder")));
+        }
+
+        // A file over 128 bytes is refused as a whole, not cut: the valid line followed by many blank lines does not pass
+        [TestMethod]
+        public void TokenFile_LongerThanTheLimitIsRefusedAsAWhole() {
+            string line = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Token)));
+            Tokens.WriteHashFile(line + new string('\n', 3));
+            Assert.IsTrue(Tokens.IsConfigured());
+            Tokens.WriteHashFile(line + new string('\n', 128 - line.Length - 1));
+            Assert.AreEqual(128, File.ReadAllBytes(Tokens.Path).Length);
+            Assert.IsTrue(Tokens.IsConfigured(), "128 bytes is the limit");
+            Tokens.WriteHashFile(line + new string('\n', 128 - line.Length));
+            Assert.IsFalse(Tokens.IsConfigured());
+            AssertProblem(Get(ThreadsEndpoints.ThreadsPath), HttpStatusCode.Unauthorized, "unauthorized");
         }
 
         [TestMethod]
@@ -375,7 +389,7 @@ namespace JDP.Api.Tests {
             Directory.CreateDirectory(otherFolder);
             ApiTokenStore other = new ApiTokenStore(otherFolder);
             string otherToken = other.Generate();
-            ApiTokenStore.OpeningForTesting = () => {
+            ApiTokenStore.OpeningForTesting = path => {
                 ApiTokenStore.OpeningForTesting = null;
                 File.Delete(Tokens.Path);
                 File.CreateSymbolicLink(Tokens.Path, other.Path);

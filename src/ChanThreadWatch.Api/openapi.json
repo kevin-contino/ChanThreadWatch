@@ -3,7 +3,7 @@
   "info": {
     "title": "ChanThreadWatch local API",
     "version": "1",
-    "description": "Off by default. Listens on 127.0.0.1 only. Every request needs the Host header 127.0.0.1:<port> or localhost:<port>, no query string, no foreign Origin, and Authorization: Bearer <token>; a request refused by these security checks (400, 401, 403, 429) also gets Connection: close. Any other path gets 404 (NotFound) and any other method 405 (MethodNotAllowed, with Allow), after the checks. Every response has Cache-Control: no-store and X-Content-Type-Options: nosniff. Limits: 120 authenticated requests per minute, 30 adds per minute, 4 KiB bodies, 2048-character URLs, 1000 threads."
+    "description": "Off by default. Listens on 127.0.0.1 only. Every request needs the Host header 127.0.0.1:<port> or localhost:<port> and no query string. An Origin header must be this server's own (http://127.0.0.1:<port> or http://localhost:<port>) or a browser extension's (chrome-extension:// and 32 letters a-p, moz-extension:// and a lowercase UUID); without one, Sec-Fetch-Site must be absent, none or same-origin. Every route but POST /api/v1/pairing and POST /api/v1/proof needs Authorization: Bearer <token>, with the scripts' token (ctw_) or a paired browser's token (ctwe_). Those two take no token only in their one exact spelling (POST, that path, no other case, encoding, trailing slash or absolute-form target); any other spelling of them gets 401 with or without a token. The token is bound to the Origin: a paired browser's token passes only with the Origin it paired with, and the scripts' token never with an extension Origin (403 forbidden_origin). A request refused by these security checks (400, 401, 403, 429) also gets Connection: close, as does every refusal of the two pairing routes. Any other path gets 404 (NotFound) and any other method 405 (MethodNotAllowed, with Allow), after the checks. Every response has Cache-Control: no-store and X-Content-Type-Options: nosniff. Limits: 120 authenticated requests per minute, 30 adds per minute, 10 pairing requests and 60 proof requests per minute (each its own limit, apart from the authenticated one), 4 KiB bodies, 2048-character URLs, 1000 threads."
   },
   "servers": [
     { "url": "http://127.0.0.1:47710", "description": "The default port; the port is a setting (ApiPort)." }
@@ -128,6 +128,101 @@
         }
       }
     },
+    "/api/v1/pairing": {
+      "post": {
+        "operationId": "pairBrowser",
+        "summary": "Pair a browser extension with a one-time code",
+        "description": "No token. Needs the Origin of a browser extension (Chrome: the pinned extension id only). The program shows an 8-symbol code for 5 minutes; the code itself never goes over the wire. Step hello: the server answers its salt, a server nonce, its name and P1 = HMAC(K, \"ctw-pair-v1\", \"server-hello\", \"127.0.0.1:<port>\", origin, pairingId, clientNonce, serverNonce, serverName), where K = PBKDF2-HMAC-SHA256(code, salt, 600000, 32 bytes) and the lines are joined with a line feed. The extension checks P1 before it sends anything more. Step finish: the extension sends P2 = HMAC(K, \"ctw-pair-v1\", \"client-finish\", \"127.0.0.1:<port>\", origin, pairingId, clientNonce, serverNonce) with the nonces of an answered hello from the same Origin; the server answers the token and P3 = HMAC(K, \"ctw-pair-v1\", \"server-finish\", \"127.0.0.1:<port>\", origin, pairingId, clientNonce, serverNonce, token). Pairing replaces the browser family's older token (chrome or firefox); the scripts' token is never changed. A code answers 3 hellos; the 4th, a finish with a wrong proof or unknown nonces, and a finish after the code expired end the code (403 pairing_failed). Nonces and proofs are base64url without padding (43 characters), the pairingId and salt 22.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PairingRequest" },
+              "examples": {
+                "hello": { "value": { "step": "hello", "clientNonce": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Hello: PairingHelloResponse. Finish: PairingFinishResponse; the token is shown only here.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PairingResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "403": {
+            "description": "Not an extension Origin that may pair (forbidden_origin), or the code was ended by this request (pairing_failed)",
+            "content": {
+              "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+            }
+          },
+          "408": { "$ref": "#/components/responses/Problem" },
+          "409": {
+            "description": "No pairing code is active: none was made, it expired, was ended or used, or its file is not trusted (pairing_unavailable)",
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/Problem" },
+                "examples": {
+                  "pairingUnavailable": {
+                    "value": { "type": "about:blank", "title": "No pairing code is active.", "status": 409, "code": "pairing_unavailable" }
+                  }
+                }
+              }
+            }
+          },
+          "413": { "$ref": "#/components/responses/Problem" },
+          "415": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/proof": {
+      "post": {
+        "operationId": "proveServer",
+        "summary": "Prove this is the program that holds the token, before the token is sent",
+        "description": "No token. With a paired extension's Origin, the key is the SHA-256 hash of that browser's token (only if the Origin is the one it paired with); without an Origin, the SHA-256 hash of the scripts' token. The proof is HMAC-SHA256(key, \"ctw-proof-v1\", \"127.0.0.1:<port>\", origin or an empty line, clientNonce), the lines joined with a line feed, base64url without padding. A client computes the same value from its token and sends the token only if they are equal: another program on the port cannot make it, and a proof for another port does not match.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProofRequest" },
+              "examples": {
+                "proof": { "value": { "clientNonce": "MDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk8" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The proof",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProofResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "403": {
+            "description": "Not an extension Origin that may ask (forbidden_origin), or nothing is paired for this Origin, or no scripts' token is set (not_paired)",
+            "content": {
+              "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
+            }
+          },
+          "408": { "$ref": "#/components/responses/Problem" },
+          "413": { "$ref": "#/components/responses/Problem" },
+          "415": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
     "/api/v1/openapi.json": {
       "get": {
         "operationId": "getOpenApiDocument",
@@ -155,7 +250,7 @@
       "bearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The token made in the program (ctw_ followed by 43 characters). Only its hash is saved."
+        "description": "The scripts' token made in the program (ctw_ followed by 43 characters), or a paired browser's token (ctwe_ followed by 43 characters). Only their hashes are saved."
       }
     },
     "schemas": {
@@ -190,6 +285,69 @@
           "threads": { "type": "array", "items": { "$ref": "#/components/schemas/Thread" } }
         }
       },
+      "PairingRequest": {
+        "type": "object",
+        "required": ["step", "clientNonce"],
+        "additionalProperties": false,
+        "description": "hello: step and clientNonce only. finish: all five members.",
+        "properties": {
+          "step": { "type": "string", "enum": ["hello", "finish"] },
+          "clientNonce": { "type": "string", "maxLength": 43, "description": "32 random bytes, base64url" },
+          "pairingId": { "type": "string", "maxLength": 22, "description": "From the hello's answer" },
+          "serverNonce": { "type": "string", "maxLength": 43, "description": "From the hello's answer" },
+          "proof": { "type": "string", "maxLength": 43, "description": "P2" }
+        }
+      },
+      "PairingResponse": {
+        "type": "object",
+        "description": "PairingHelloResponse (hello) or PairingFinishResponse (finish)",
+        "additionalProperties": false,
+        "properties": {
+          "pairingId": { "type": "string" },
+          "salt": { "type": "string" },
+          "serverNonce": { "type": "string" },
+          "serverName": { "type": "string", "maxLength": 80 },
+          "proof": { "type": "string" },
+          "token": { "type": "string" }
+        }
+      },
+      "PairingHelloResponse": {
+        "type": "object",
+        "required": ["pairingId", "salt", "serverNonce", "serverName", "proof"],
+        "additionalProperties": false,
+        "properties": {
+          "pairingId": { "type": "string", "maxLength": 22 },
+          "salt": { "type": "string", "maxLength": 22 },
+          "serverNonce": { "type": "string", "maxLength": 43 },
+          "serverName": { "type": "string", "maxLength": 80, "description": "Printable, without line breaks; shown before the token is saved" },
+          "proof": { "type": "string", "maxLength": 43, "description": "P1" }
+        }
+      },
+      "PairingFinishResponse": {
+        "type": "object",
+        "required": ["token", "proof"],
+        "additionalProperties": false,
+        "properties": {
+          "token": { "type": "string", "maxLength": 48, "description": "ctwe_ followed by 43 characters; save it only after P3 checks" },
+          "proof": { "type": "string", "maxLength": 43, "description": "P3" }
+        }
+      },
+      "ProofRequest": {
+        "type": "object",
+        "required": ["clientNonce"],
+        "additionalProperties": false,
+        "properties": {
+          "clientNonce": { "type": "string", "maxLength": 43, "description": "32 random bytes, base64url" }
+        }
+      },
+      "ProofResponse": {
+        "type": "object",
+        "required": ["proof"],
+        "additionalProperties": false,
+        "properties": {
+          "proof": { "type": "string", "maxLength": 43 }
+        }
+      },
       "Problem": {
         "type": "object",
         "required": ["type", "title", "status", "code"],
@@ -204,7 +362,8 @@
               "invalid_host", "query_not_allowed", "forbidden_origin", "unauthorized", "not_found", "method_not_allowed",
               "unsupported_media_type", "body_too_large", "request_timeout", "invalid_body", "invalid_url", "unknown_host", "blocked_host",
               "unresolvable_host", "rate_limited", "add_rate_limited", "already_watched", "blacklisted", "thread_limit",
-              "insufficient_storage", "unavailable", "marks_unavailable", "internal_error"
+              "insufficient_storage", "unavailable", "marks_unavailable", "pairing_unavailable", "pairing_failed", "not_paired",
+              "pairing_rate_limited", "internal_error"
             ]
           }
         }
@@ -239,7 +398,7 @@
         }
       },
       "BadRequest": {
-        "description": "Wrong Host header, a query string, or a body that is not one JSON object with a string url",
+        "description": "Wrong Host header, a query string, or a body that is not the JSON object of the operation",
         "content": {
           "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
         }
@@ -261,7 +420,7 @@
         }
       },
       "Forbidden": {
-        "description": "A request from a browser page of another origin",
+        "description": "A request from a browser page of another origin, or a token used with an Origin it is not bound to",
         "content": {
           "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } }
         }

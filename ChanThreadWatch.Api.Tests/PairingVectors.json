@@ -1,0 +1,54 @@
+{
+  "description": "Pairing protocol v1 test vectors (MP-7b design, section 3.4). Every input is a fixed, fake test value, never a real code or token. Byte values are base64url without padding, except the members whose names end in Hex. A proof is HMAC-SHA256 over the lines joined with a line feed (no line feed at the end); the pairing key is PBKDF2-HMAC-SHA256(code as ASCII, salt, 600000, 32 bytes), and the useProof key is SHA-256 of the token (UTF-8). The script proof has no Origin, so its origin line is empty.",
+  "pbkdf2Iterations": 600000,
+  "vectors": [
+    {
+      "name": "chrome",
+      "code": "TEST2345",
+      "displayCode": "TEST-2345",
+      "salt": "AAECAwQFBgcICQoLDA0ODw",
+      "pairingId": "EBESExQVFhcYGRobHB0eHw",
+      "clientNonce": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+      "serverNonce": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+      "port": 47710,
+      "origin": "chrome-extension://eifjifphdncjkkolefjepjhdlmcdbndh",
+      "serverName": "Chan Thread Watch 1.0.0 on TEST-PC",
+      "token": "ctwe_YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+      "keyHex": "f735857ab701d63827e6a7dce70e5b0f514c11606232110cb4627e0bfcb58743",
+      "serverHelloProof": "2c2xs_39H-W73I-UmYQEi4Z_ukXO8V6qHHLlbg3b7p4",
+      "clientFinishProof": "ATgI4t6xC7l6dBPH7B6gRLryi2rDa8RkJNQrBntwusg",
+      "serverFinishProof": "l4TCVrprCTKrZBgI1o6H2GYr_ssBmPeK2yNxAYimCe4",
+      "tokenHashHex": "22e61322862675598797d33e21ca2fb98030c9538205617e71c130057563c03f",
+      "useProof": "OjGDCg52X5aiAAMsvczlXK_3fZXVSoxaDThnXr9urw4"
+    },
+    {
+      "name": "firefox",
+      "code": "0ABCDEFG",
+      "displayCode": "0ABC-DEFG",
+      "salt": "gIGCg4SFhoeIiYqLjI2Ojw",
+      "pairingId": "kJGSk5SVlpeYmZqbnJ2enw",
+      "clientNonce": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+      "serverNonce": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
+      "port": 50001,
+      "origin": "moz-extension://00000000-0000-4000-8000-000000000001",
+      "serverName": "ctw watch 1.0.0 on TEST-PC",
+      "token": "ctwe_4OHi4-Tl5ufo6err7O3u7_Dx8vP09fb3-Pn6-_z9_v8",
+      "keyHex": "11810c6b06060dd5d887ae0d465d56714a68201811698604a824ff7abe6eed88",
+      "serverHelloProof": "J6zCWh3JiM-SAwf45hHHyMqRT6k8MYHNhHh9v0j7pZM",
+      "clientFinishProof": "Fg9A14JY_BL-9zSpmJl8JbOXQ0vaMNJWqFvnwp1V0rc",
+      "serverFinishProof": "Qt8BBZvPXp0zH8J_tguI2X2HKOirghmDnuAVabIto6M",
+      "tokenHashHex": "4f4b5bb472b6cc9f5f0679da52e7731813fb12bee65a07cc8d6de20a8a903d19",
+      "useProof": "NyrUIWam8F9F9T9FVzYRQlD6r1eZr0eINIFgPJbKJ14"
+    }
+  ],
+  "scriptProofs": [
+    {
+      "token": "ctw_ERERERERERERERERERERERERERERERERERERERERERE",
+      "port": 47710,
+      "origin": "",
+      "clientNonce": "MDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk8",
+      "tokenHashHex": "1129cd5ac94af7c4211acc69ef84c4daa379439883ae5398406ab86accdd4a3a",
+      "useProof": "fRY8nJasS7nhKSKZVqXBWf1mngx8pB2ONF6zR2AJp_0"
+    }
+  ]
+}

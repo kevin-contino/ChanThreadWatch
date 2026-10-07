@@ -51,6 +51,12 @@ namespace JDP.Api {
         // The marks of the threads added through the API (api-threads.txt) can't be saved this session, so a new thread
         // would lose its guard at the next start
         public static readonly ApiError MarksUnavailable = new ApiError(StatusCodes.Status503ServiceUnavailable, "marks_unavailable", "Threads can't be added now: the list of threads added through the API can't be saved.");
+        // Browser pairing (MP-7b). A pairing body has the shared code invalid_body with its own title.
+        public static readonly ApiError InvalidPairingBody = new ApiError(StatusCodes.Status400BadRequest, "invalid_body", "The body must be a JSON object with the members of this step, in their form.");
+        public static readonly ApiError PairingUnavailable = new ApiError(StatusCodes.Status409Conflict, "pairing_unavailable", "No pairing code is active.");
+        public static readonly ApiError PairingFailed = new ApiError(StatusCodes.Status403Forbidden, "pairing_failed", "The pairing failed, and the code is no longer valid.");
+        public static readonly ApiError NotPaired = new ApiError(StatusCodes.Status403Forbidden, "not_paired", "Nothing is paired for this origin.");
+        public static readonly ApiError PairingRateLimited = new ApiError(StatusCodes.Status429TooManyRequests, "pairing_rate_limited", "Too many pairing or proof requests.");
         public static readonly ApiError InternalError = new ApiError(StatusCodes.Status500InternalServerError, "internal_error", "The request failed.");
 
         public Task WriteAsync(HttpContext context) {
