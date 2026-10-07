@@ -36,7 +36,7 @@ namespace JDP.Api.Tests {
                     live.Add(method + " " + endpoint.RoutePattern.RawText);
                 }
             }
-            CollectionAssert.AreEquivalent(new[] { "GET /api/v1/threads", "POST /api/v1/threads", "GET /api/v1/openapi.json" }, live.ToArray());
+            CollectionAssert.AreEquivalent(new[] { "GET /api/v1/threads", "POST /api/v1/threads", "GET /api/v1/openapi.json", "POST /api/v1/pairing", "POST /api/v1/proof" }, live.ToArray());
             Assert.IsTrue(documented.SetEquals(live), "documented: " + String.Join(", ", documented) + "; live: " + String.Join(", ", live));
         }
 
@@ -69,7 +69,10 @@ namespace JDP.Api.Tests {
             Dictionary<string, string[]> expected = new Dictionary<string, string[]> {
                 ["GET /api/v1/threads"] = new[] { "200", "400", "401", "403", "429", "500", "503" },
                 ["POST /api/v1/threads"] = new[] { "201", "400", "401", "403", "408", "409", "413", "415", "422", "429", "500", "503", "507" },
-                ["GET /api/v1/openapi.json"] = new[] { "200", "400", "401", "403", "429", "500" }
+                ["GET /api/v1/openapi.json"] = new[] { "200", "400", "401", "403", "429", "500" },
+                // The two routes without a token (MP-7b): no 401, and no 503 (they never wait for the owner thread)
+                ["POST /api/v1/pairing"] = new[] { "200", "400", "403", "408", "409", "413", "415", "429", "500" },
+                ["POST /api/v1/proof"] = new[] { "200", "400", "403", "408", "413", "415", "429", "500" }
             };
             foreach (JsonProperty path in Document.GetProperty("paths").EnumerateObject()) {
                 foreach (JsonProperty operation in path.Value.EnumerateObject()) {
@@ -86,11 +89,11 @@ namespace JDP.Api.Tests {
             CollectionAssert.AreEquivalent(new[] { "GET", "POST" }, notAllowed.Content.Headers.Allow.ToArray());
         }
 
-        // Every code the server can send is documented, and nothing else is
+        // Every code the server can send is documented, and nothing else is (InvalidPairingBody shares invalid_body)
         [TestMethod]
         public void Contract_ProblemCodesMatchTheServer() {
             string[] documented = SchemaAt("#/components/schemas/Problem").GetProperty("properties").GetProperty("code").GetProperty("enum").EnumerateArray().Select(code => code.GetString()).ToArray();
-            string[] sent = typeof(ApiError).GetFields(BindingFlags.Public | BindingFlags.Static).Where(field => field.FieldType == typeof(ApiError)).Select(field => ((ApiError)field.GetValue(null)).Code).ToArray();
+            string[] sent = typeof(ApiError).GetFields(BindingFlags.Public | BindingFlags.Static).Where(field => field.FieldType == typeof(ApiError)).Select(field => ((ApiError)field.GetValue(null)).Code).Distinct().ToArray();
             CollectionAssert.AreEquivalent(documented, sent);
         }
 

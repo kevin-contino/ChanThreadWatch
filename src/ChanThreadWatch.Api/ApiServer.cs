@@ -66,6 +66,8 @@ namespace JDP.Api {
         private WebApplication _app;
         private RateLimiter _requests;
         private RateLimiter _adds;
+        private RateLimiter _pairing;
+        private RateLimiter _proof;
         private volatile int _boundPort;
         // Set by StartAsync, and cleared again by a start that failed; a server starts once
         private int _startCalled;
@@ -212,8 +214,9 @@ namespace JDP.Api {
             catch (Exception ex) {
                 LogFailure("dispose", ex);
             }
-            _requests?.Dispose();
-            _adds?.Dispose();
+            foreach (RateLimiter limiter in new[] { _requests, _adds, _pairing, _proof }) {
+                limiter?.Dispose();
+            }
         }
 
         private static void LogFailure(string step, Exception ex) {
@@ -273,14 +276,22 @@ namespace JDP.Api {
             logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.None);
         }
 
+        // The paired browsers (api-clients.txt) and the pending pairing code (api-pairing.txt) are in the token file's
+        // folder, the settings folder
         private void ConfigurePipeline(WebApplication app) {
-            _requests = CreateLimiter(_threads.Policy.RequestsPerMinute, _threads.Policy.RateWindow);
-            _adds = CreateLimiter(_threads.Policy.AddsPerMinute, _threads.Policy.RateWindow);
-            ApiSecurity security = new ApiSecurity(_tokens, () => _boundPort, _requests);
+            ApiPolicy policy = _threads.Policy;
+            _requests = CreateLimiter(policy.RequestsPerMinute, policy.RateWindow);
+            _adds = CreateLimiter(policy.AddsPerMinute, policy.RateWindow);
+            _pairing = CreateLimiter(policy.PairingRequestsPerMinute, policy.RateWindow);
+            _proof = CreateLimiter(policy.ProofRequestsPerMinute, policy.RateWindow);
+            string settingsFolder = Path.GetDirectoryName(_tokens.Path);
+            ApiCredentials credentials = new ApiCredentials(_tokens, new ApiClientStore(settingsFolder));
+            ApiSecurity security = new ApiSecurity(credentials, () => _boundPort, _requests, _pairing, _proof, policy.MaxBodyBytes);
             app.Use(security.InvokeAsync);
             app.Use(WriteEmptyErrorAsProblemAsync);
             app.UseRouting();
             new ThreadsEndpoints(_threads, _adds).Map(app);
+            new PairingEndpoints(policy, credentials, new ApiPairingFile(settingsFolder), () => _boundPort).Map(app);
         }
 
         private static RateLimiter CreateLimiter(int permits, TimeSpan window) {

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,12 +17,51 @@ namespace JDP.Api {
         public const long DefaultFreeSpaceFloorBytes = 1024L * 1024 * 1024;
         public const int MaxAuthorizationLength = 256;
 
+        // Browser pairing (MP-7b). The iteration count is a protocol constant, never a server value, so a program that
+        // is not this one cannot make the extension run a larger derivation.
+        public const int PairingIterations = 600000;
+        public const int MaxHellosPerCode = 3;
+        public const int DefaultPairingRequestsPerMinute = 10;
+        public const int DefaultProofRequestsPerMinute = 60;
+        public const string DefaultServerName = "Chan Thread Watch";
+        public static readonly TimeSpan PairingCodeLifetime = TimeSpan.FromMinutes(5);
+
+        private string _serverName = DefaultServerName;
+
         public int MaxBodyBytes { get; set; } = DefaultMaxBodyBytes;
         public int MaxUrlLength { get; set; } = DefaultMaxUrlLength;
         public int RequestsPerMinute { get; set; } = DefaultRequestsPerMinute;
         public int AddsPerMinute { get; set; } = DefaultAddsPerMinute;
         public int ThreadCap { get; set; } = DefaultThreadCap;
         public long FreeSpaceFloorBytes { get; set; } = DefaultFreeSpaceFloorBytes;
+
+        // The two routes without a token, POST /api/v1/pairing and POST /api/v1/proof, each have their own window; they
+        // never use the window of the authenticated requests, nor it theirs
+        public int PairingRequestsPerMinute { get; set; } = DefaultPairingRequestsPerMinute;
+        public int ProofRequestsPerMinute { get; set; } = DefaultProofRequestsPerMinute;
+
+        // The name a pairing extension shows before it saves the token ("Pair with <name> at 127.0.0.1:<port>?"). The
+        // host sets it; a name that is empty, longer than 80 characters, or has a line break or another character that
+        // is not printable is refused, since it is a line of the pairing proof.
+        public string ServerName {
+            get { return _serverName; }
+            set {
+                if (!ApiPairing.IsValidServerName(value)) throw new ArgumentException("The server name must be 1 to 80 printable characters without line breaks.", nameof(value));
+                _serverName = value;
+            }
+        }
+
+        // A name the setter takes, made from any text (a host's "ctw watch <version> on <machine>" with a long or odd
+        // machine name): characters that are not printable are dropped, white space at the ends is trimmed, and the
+        // name is cut to 80 characters; nothing left gives the default name
+        public static string NormalizeServerName(string name) {
+            string printable = new string((name ?? "").Where(c => ApiPairing.IsValidServerName(c.ToString())).ToArray()).Trim();
+            string cut = printable.Length > ApiPairing.MaxServerNameLength ? printable.Substring(0, ApiPairing.MaxServerNameLength).TrimEnd() : printable;
+            return cut.Length != 0 ? cut : DefaultServerName;
+        }
+
+        // The time for the pairing code's expiry and the paired date. The tests put a fake clock in its place.
+        public Func<DateTimeOffset> UtcNow { get; set; } = () => DateTimeOffset.UtcNow;
 
         // The window of both rate limits (requests and adds per window). The tests make it long, so a test can never
         // span two windows.

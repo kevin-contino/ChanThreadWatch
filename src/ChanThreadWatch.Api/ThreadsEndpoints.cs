@@ -10,8 +10,9 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Net.Http.Headers;
 
 namespace JDP.Api {
-    // The only routes (security item 19: nothing opens a folder or a URL): GET and POST /api/v1/threads, and the
-    // OpenAPI document. They run after ApiSecurity.
+    // The routes that need the token (security item 19: nothing opens a folder or a URL): GET and POST
+    // /api/v1/threads, and the OpenAPI document. They run after ApiSecurity. The only other routes are the browser
+    // pairing's POST /api/v1/pairing and POST /api/v1/proof (PairingEndpoints; MP-7b maintainer decision Q1).
     internal sealed class ThreadsEndpoints {
         public const string ThreadsPath = "/api/v1/threads";
         public const string OpenApiPath = "/api/v1/openapi.json";
@@ -48,7 +49,7 @@ namespace JDP.Api {
 
         // A busy or exiting owner thread gives 503; a request the client gave up on ends quietly; any other failure
         // gives 500 and is logged as the exception's type only (its text can hold a URL with a login)
-        private static async Task RunAsync(HttpContext context, Func<HttpContext, Task> handler) {
+        internal static async Task RunAsync(HttpContext context, Func<HttpContext, Task> handler) {
             try {
                 await handler(context).ConfigureAwait(false);
             }
@@ -74,7 +75,7 @@ namespace JDP.Api {
 
         // Content type, body size, body, URL, add rate, then the add itself
         private async Task AddAsync(HttpContext context) {
-            ApiBody body = await ApiBody.ReadAsync(context.Request, _threads.Policy.MaxBodyBytes).ConfigureAwait(false);
+            ApiJsonBody<AddThreadRequest> body = await ApiJsonBody<AddThreadRequest>.ReadAsync(context.Request, _threads.Policy.MaxBodyBytes, ApiJsonContext.Default.AddThreadRequest, ApiError.InvalidBody).ConfigureAwait(false);
             if (body.IsAborted) {
                 context.Abort();
                 return;
@@ -84,9 +85,11 @@ namespace JDP.Api {
             await (error != null ? error.WriteAsync(context) : AddCheckedAsync(context, uri)).ConfigureAwait(false);
         }
 
-        private ApiError CheckAdd(ApiBody body, out Uri uri) {
+        // One JSON object with one string member "url" (a null "url" is invalid), then the URL rules and the add rate
+        private ApiError CheckAdd(ApiJsonBody<AddThreadRequest> body, out Uri uri) {
             uri = null;
-            return body.Error ?? _threads.ValidateUrl(body.Url, out uri) ?? AcquireAdd();
+            if (body.Error != null) return body.Error;
+            return body.Value.Url == null ? ApiError.InvalidBody : _threads.ValidateUrl(body.Value.Url, out uri) ?? AcquireAdd();
         }
 
         private async Task AddCheckedAsync(HttpContext context, Uri uri) {
@@ -100,80 +103,10 @@ namespace JDP.Api {
             }
         }
 
-        private static Task WriteJsonAsync<T>(HttpContext context, int status, T value, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) {
+        internal static Task WriteJsonAsync<T>(HttpContext context, int status, T value, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) {
             context.Response.StatusCode = status;
             context.Response.ContentType = "application/json; charset=utf-8";
             return JsonSerializer.SerializeAsync(context.Response.Body, value, typeInfo, context.RequestAborted);
-        }
-    }
-
-    // The body of an add, read only after the request passed ApiSecurity: application/json (UTF-8), at most the limit
-    // in bytes, one JSON object with one string member "url" and nothing after it
-    internal sealed class ApiBody {
-        private ApiBody(string url, ApiError error) {
-            Url = url;
-            Error = error;
-        }
-
-        public string Url { get; }
-        public ApiError Error { get; }
-
-        // The connection broke or the client gave up while the body was read: nothing to answer, nothing to log
-        public bool IsAborted { get; private set; }
-
-        public static Task<ApiBody> ReadAsync(HttpRequest request, int maxBytes) {
-            ApiError error = CheckContentType(request.ContentType) ?? CheckLength(request.ContentLength, maxBytes);
-            return error != null ? Task.FromResult(new ApiBody(null, error)) : ReadBodyAsync(request, maxBytes);
-        }
-
-        private static ApiError CheckLength(long? contentLength, int maxBytes) {
-            return contentLength > maxBytes ? ApiError.BodyTooLarge : null;
-        }
-
-        private static async Task<ApiBody> ReadBodyAsync(HttpRequest request, int maxBytes) {
-            try {
-                byte[] bytes = await ReadLimitedAsync(request, maxBytes).ConfigureAwait(false);
-                return bytes == null ? new ApiBody(null, ApiError.BodyTooLarge) : Parse(bytes);
-            }
-            catch (BadHttpRequestException ex) {
-                return new ApiBody(null, ToError(ex));
-            }
-            catch (Exception ex) when (ex is IOException || ex is OperationCanceledException) {
-                return new ApiBody(null, null) { IsAborted = true };
-            }
-        }
-
-        // Kestrel's own body errors: over its size limit, too slow, or malformed (a bad chunk)
-        private static ApiError ToError(BadHttpRequestException ex) {
-            if (ex.StatusCode == StatusCodes.Status413PayloadTooLarge) return ApiError.BodyTooLarge;
-            return ex.StatusCode == StatusCodes.Status408RequestTimeout ? ApiError.RequestTimeout : ApiError.InvalidBody;
-        }
-
-        private static ApiError CheckContentType(string contentType) {
-            MediaTypeHeaderValue mediaType;
-            if (!MediaTypeHeaderValue.TryParse(contentType, out mediaType) || !mediaType.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase)) return ApiError.UnsupportedMediaType;
-            return !mediaType.Charset.HasValue || mediaType.Charset.Equals("utf-8", StringComparison.OrdinalIgnoreCase) ? null : ApiError.UnsupportedMediaType;
-        }
-
-        // Null when the body is over the limit
-        private static async Task<byte[]> ReadLimitedAsync(HttpRequest request, int maxBytes) {
-            byte[] buffer = new byte[maxBytes + 1];
-            int total = 0;
-            int read;
-            while (total < buffer.Length && (read = await request.Body.ReadAsync(buffer.AsMemory(total), request.HttpContext.RequestAborted).ConfigureAwait(false)) > 0) {
-                total += read;
-            }
-            return total > maxBytes ? null : buffer.AsSpan(0, total).ToArray();
-        }
-
-        private static ApiBody Parse(byte[] bytes) {
-            try {
-                AddThreadRequest body = JsonSerializer.Deserialize(bytes, ApiJsonContext.Default.AddThreadRequest);
-                return body?.Url != null ? new ApiBody(body.Url, null) : new ApiBody(null, ApiError.InvalidBody);
-            }
-            catch (JsonException) {
-                return new ApiBody(null, ApiError.InvalidBody);
-            }
         }
     }
 }
