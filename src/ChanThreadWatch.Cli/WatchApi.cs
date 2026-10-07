@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Threading.Tasks;
 using JDP.Api;
 
@@ -44,7 +43,7 @@ namespace JDP.Cli {
                 output.WriteLine("Local API listening on http://127.0.0.1:" + port + "/api/v1/");
                 return new WatchApi(server);
             }
-            catch (Exception ex) when (IsStartFailure(ex)) {
+            catch (Exception ex) when (ApiStartFailure.IsExpected(ex)) {
                 error.WriteLine("ctw: warning: " + DescribeStartFailure(ex));
                 LogStartFailure(ex);
                 return null;
@@ -70,11 +69,6 @@ namespace JDP.Cli {
             return ListenPortForTesting != null ? ListenPortForTesting(port) : port;
         }
 
-        // The typed failures, and what the token file's checks or the server's setup can throw before it listens
-        private static bool IsStartFailure(Exception ex) {
-            return ex is ApiStartException || ex is InvalidOperationException || ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException;
-        }
-
         // Never the token or its hash
         internal static string DescribeStartFailure(Exception ex) {
             ApiStartException start = ex as ApiStartException;
@@ -89,8 +83,8 @@ namespace JDP.Cli {
 
         // The type only, as the server logs (ApiLogging): an exception's message can hold a path
         private static void LogStartFailure(Exception ex) {
-            Exception cause = ex is ApiStartException ? ex.InnerException : ex;
-            if (cause != null) Logger.Log("Local API: ctw watch could not start it: " + cause.GetType().FullName);
+            string causeType = ApiStartFailure.GetCauseTypeName(ex);
+            if (causeType != null) Logger.Log("Local API: ctw watch could not start it: " + causeType);
         }
 
         // Closes the dispatcher before it returns, so no work of a request runs on the owner thread after this; the

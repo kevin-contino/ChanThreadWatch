@@ -33,6 +33,7 @@
     <InternalsVisibleTo Include="ctw" />
     <InternalsVisibleTo Include="ChanThreadWatch.Api.Tests" />
     <InternalsVisibleTo Include="ChanThreadWatch.Cli.Tests" />
+    <InternalsVisibleTo Include="ChanThreadWatch.Tests" />
   </ItemGroup>
 
 </Project>

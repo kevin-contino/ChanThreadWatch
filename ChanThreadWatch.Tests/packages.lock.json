@@ -95,6 +95,13 @@
       "chanthreadwatch": {
         "type": "Project",
         "dependencies": {
+          "ChanThreadWatch.Api": "[1.0.0, )",
+          "ChanThreadWatch.Core": "[1.0.0, )"
+        }
+      },
+      "chanthreadwatch.api": {
+        "type": "Project",
+        "dependencies": {
           "ChanThreadWatch.Core": "[1.0.0, )"
         }
       },

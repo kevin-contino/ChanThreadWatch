@@ -213,10 +213,11 @@ namespace JDP.UITests {
             }
         }
 
-        // The app's framework-dependent build: the exe starts ChanThreadWatch.dll on the installed .NET runtime.
-        // The release is a self-contained single-file exe instead; .github/scripts/test-published-app.ps1 starts that.
+        // The app's framework-dependent build: the exe starts ChanThreadWatch.dll on the installed .NET runtime (with the
+        // ASP.NET Core shared framework, for the local API in ChanThreadWatch.Api.dll). The release is a self-contained
+        // single-file exe instead; .github/scripts/test-published-app.ps1 starts that.
         private static readonly string[] AppFiles = {
-            AppExeName, "ChanThreadWatch.dll", "ChanThreadWatch.runtimeconfig.json", "ChanThreadWatch.deps.json", CoreDllName
+            AppExeName, "ChanThreadWatch.dll", "ChanThreadWatch.runtimeconfig.json", "ChanThreadWatch.deps.json", CoreDllName, "ChanThreadWatch.Api.dll"
         };
 
         // Copies only the app's own files, not the test runner's assemblies, so a missing dependency fails here too

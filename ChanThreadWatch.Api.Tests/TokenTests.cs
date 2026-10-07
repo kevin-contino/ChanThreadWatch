@@ -298,6 +298,40 @@ namespace JDP.Api.Tests {
             AssertTokenFileRefused();
         }
 
+        // The app's settings folder move: the copy holds the same hash, is owner-only, and the same token passes there
+        [TestMethod]
+        public void TokenFile_CopyToAnotherFolderIsOwnerOnlyAndKeepsTheToken() {
+            ApiTokenStore other = new ApiTokenStore(Directory.CreateDirectory(Path.Combine(Folder, "other")).FullName);
+
+            Assert.IsTrue(Tokens.CopyTo(other));
+
+            Assert.AreEqual(File.ReadAllText(Tokens.Path), File.ReadAllText(other.Path));
+            Assert.IsTrue(other.Verify(Token));
+            using (FileStream stream = new FileStream(other.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+                Assert.IsTrue(OwnerOnlyFile.IsOwnerOnly(stream));
+            }
+        }
+
+        // A file that is missing or not valid is not copied: nothing is written in the other folder
+        [TestMethod]
+        public void TokenFile_CopyOfAMissingOrMalformedFileWritesNothing() {
+            ApiTokenStore other = new ApiTokenStore(Directory.CreateDirectory(Path.Combine(Folder, "other")).FullName);
+            Tokens.WriteHashFile("sha256:");
+            Assert.IsFalse(Tokens.CopyTo(other));
+            File.Delete(Tokens.Path);
+            Assert.IsFalse(Tokens.CopyTo(other));
+            Assert.AreEqual(0, Directory.GetFiles(Path.GetDirectoryName(other.Path)).Length);
+        }
+
+        // A copy that can't be made owner-only fails, and leaves no file in the other folder
+        [TestMethod]
+        public void TokenFile_CopyToAVolumeWithoutOwnerOnlyAccessIsAnError() {
+            ApiTokenStore other = new ApiTokenStore(Directory.CreateDirectory(Path.Combine(Folder, "other")).FullName);
+            OwnerOnlyFile.NewFileCheckForTesting = stream => false;
+            Assert.ThrowsExactly<ApiTokenException>(() => Tokens.CopyTo(other));
+            Assert.AreEqual(0, Directory.GetFiles(Path.GetDirectoryName(other.Path)).Length);
+        }
+
         // A volume that keeps no owner-only access (FAT on Windows): Generate fails with a clear message and leaves
         // the old file and no temporary file
         [TestMethod]

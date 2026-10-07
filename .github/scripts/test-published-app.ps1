@@ -8,15 +8,24 @@
 #                   variable, so this mode uses the real profile folder. It runs only on a GitHub Actions
 #                   runner (an ephemeral VM) and refuses to run when the folder already exists.
 #
+#   -CtwPath        Portable only: the published ctw exe. The run also turns on the local API (ApiEnabled=1 on a
+#                   free port) with a token that this ctw makes in the temp folder (ctw api-token), and expects
+#                   GET /api/v1/threads to answer 200 with it once the thread list is loaded. The token stays in a
+#                   variable and is never printed.
+#
 # Example: pwsh .github/scripts/test-published-app.ps1 -ExePath publish/ChanThreadWatch-win-x64.exe -Mode Portable
 param(
     [Parameter(Mandatory)] [string] $ExePath,
     [Parameter(Mandatory)] [ValidateSet('Portable', 'AppData')] [string] $Mode,
+    [string] $CtwPath,
     [int] $TimeoutSeconds = 60
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+if ($PSBoundParameters.ContainsKey('CtwPath') -and ([string]::IsNullOrWhiteSpace($CtwPath) -or -not (Test-Path -LiteralPath $CtwPath -PathType Leaf))) {
+    throw "-CtwPath was given, but '$CtwPath' is empty or not a file"
+}
 $exe = (Resolve-Path -LiteralPath $ExePath).Path
 $runDir = Join-Path ([IO.Path]::GetTempPath()) ('ctw-published-' + [guid]::NewGuid().ToString('N'))
 $downloadDir = Join-Path $runDir 'downloads'
@@ -26,6 +35,16 @@ Copy-Item -LiteralPath $exe -Destination $runExe
 
 # The download folder is set so the app never falls back to My Documents, and the update check is off
 $settings = @("DownloadFolder=$downloadDir", 'DownloadFolderIsRelative=0', 'CheckForUpdates=0')
+# The local API on a port that was free a moment ago, never the default one
+$apiPort = $null
+if ($CtwPath) {
+    if ($Mode -ne 'Portable') { throw '-CtwPath runs only with -Mode Portable, which writes nothing outside the temp folder' }
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $apiPort = $listener.LocalEndpoint.Port
+    $listener.Stop()
+    $settings += @('ApiEnabled=1', "ApiPort=$apiPort")
+}
 if ($Mode -eq 'Portable') {
     $settingsDir = $runDir
 } else {
@@ -79,6 +98,31 @@ public static class CtwWindows {
 }
 "@
 
+# ctw next to the app and its settings.txt uses the same (portable) settings folder. Its stdout holds only the token,
+# which is returned and never written out; stderr, which names the folder, is read and dropped. A ctw that does not
+# finish within the time limit is killed and fails the run.
+function Get-ApiToken([string] $CtwExe) {
+    $info = [Diagnostics.ProcessStartInfo]::new($CtwExe)
+    $info.ArgumentList.Add('api-token')
+    $info.WorkingDirectory = $runDir
+    $info.UseShellExecute = $false
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $ctw = [Diagnostics.Process]::Start($info)
+    try {
+        $stdout = $ctw.StandardOutput.ReadToEndAsync()
+        $null = $ctw.StandardError.ReadToEndAsync()
+        if (-not $ctw.WaitForExit($TimeoutSeconds * 1000)) { throw "ctw api-token did not finish within $TimeoutSeconds s" }
+        if ($ctw.ExitCode -ne 0) { throw "ctw api-token failed with exit code $($ctw.ExitCode)" }
+        $lines = @($stdout.GetAwaiter().GetResult() -split "`r?`n" | Where-Object { $_ -ne '' })
+    } finally {
+        if (-not $ctw.HasExited) { $ctw.Kill(); $ctw.WaitForExit() }
+        $ctw.Dispose()
+    }
+    if ($lines.Count -ne 1 -or -not $lines[0].StartsWith('ctw_', [StringComparison]::Ordinal)) { throw 'ctw api-token did not print one token line' }
+    return $lines[0].Trim()
+}
+
 function Wait-Until([scriptblock] $Condition, [string] $Description) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while (-not (& $Condition)) {
@@ -92,8 +136,16 @@ $startInfo.WorkingDirectory = $runDir
 $startInfo.UseShellExecute = $false
 # Anything the app would open in Explorer or a browser is written here instead (see src/ChanThreadWatch/Classes/Shell.cs)
 $startInfo.Environment['CTW_TEST_SHELL_LOG'] = Join-Path $runDir 'shell-log.txt'
-$process = [Diagnostics.Process]::Start($startInfo)
+$process = $null
+$token = $null
 try {
+    if ($CtwPath) {
+        $runCtw = Join-Path $runDir 'ctw.exe'
+        Copy-Item -LiteralPath (Resolve-Path -LiteralPath $CtwPath).Path -Destination $runCtw
+        $token = Get-ApiToken $runCtw
+        if (-not (Test-Path -LiteralPath (Join-Path $settingsDir 'api-token.txt'))) { throw "ctw api-token did not write api-token.txt in $settingsDir" }
+    }
+    $process = [Diagnostics.Process]::Start($startInfo)
     Wait-Until { $process.Refresh(); $process.HasExited -or $process.MainWindowTitle -eq 'Chan Thread Watch' } 'the main window'
     if ($process.HasExited) { throw "The app exited with code $($process.ExitCode) before its main window appeared" }
     Write-Host "$Mode run: main window up (process $($process.Id))"
@@ -109,6 +161,30 @@ try {
         ([DateTime]::UtcNow - $script:enabledSince).TotalSeconds -ge 2
     } 'the thread list to load (Add Thread enabled for 2 s)'
 
+    # The app starts the local API once the thread list is loaded; it must answer with the token from ctw
+    if ($apiPort) {
+        $client = [Net.Http.HttpClient]::new([Net.Http.HttpClientHandler]@{ UseProxy = $false })
+        try {
+            Wait-Until {
+                $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "http://127.0.0.1:$apiPort/api/v1/threads")
+                $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
+                try {
+                    $response = $client.SendAsync($request).GetAwaiter().GetResult()
+                    $ok = [int]$response.StatusCode -eq 200
+                    $response.Dispose()
+                    $ok
+                } catch {
+                    $false
+                } finally {
+                    $request.Dispose()
+                }
+            } "the local API to answer GET /api/v1/threads with 200 on port $apiPort (see log.txt in $settingsDir)"
+        } finally {
+            $client.Dispose()
+        }
+        Write-Host "$Mode run: the local API answered on port $apiPort"
+    }
+
     # WM_CLOSE, as when the user closes the window; the app saves its settings on exit
     if (-not $process.CloseMainWindow()) { throw 'Could not send WM_CLOSE to the main window' }
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { throw "The app did not exit within $TimeoutSeconds s after its window was closed" }
@@ -117,6 +193,9 @@ try {
     $saved = @(Get-Content -LiteralPath $settingsPath)
     if (-not ($saved | Where-Object { $_.StartsWith('ColumnWidths=', [StringComparison]::Ordinal) })) {
         throw "settings.txt in $settingsDir was not saved on exit"
+    }
+    if ($apiPort -and -not ($saved -contains 'ApiEnabled=1')) {
+        throw "settings.txt in $settingsDir lost ApiEnabled=1 in the save on exit"
     }
     if ($Mode -eq 'AppData' -and (Test-Path -LiteralPath (Join-Path $runDir 'settings.txt'))) {
         throw 'AppData mode wrote settings.txt next to the exe'
@@ -132,8 +211,10 @@ try {
     }
     Write-Host "$Mode run: exited with code 0 and saved settings in $settingsDir"
 } finally {
-    if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
-    $process.Dispose()
+    if ($process) {
+        if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        $process.Dispose()
+    }
     Remove-Item -LiteralPath $runDir -Recurse -Force -ErrorAction SilentlyContinue
     if ($Mode -eq 'AppData') { Remove-Item -LiteralPath $settingsDir -Recurse -Force -ErrorAction SilentlyContinue }
 }

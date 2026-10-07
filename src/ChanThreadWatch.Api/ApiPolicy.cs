@@ -33,6 +33,14 @@ namespace JDP.Api {
         // How long the add-time DNS lookup may take
         public TimeSpan ResolveTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
+        // How long the add may take to download the thread's page for its name (the 4chan slug); then the thread is
+        // added without it
+        public TimeSpan ThreadNameLookupTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+        // That download, always on the guarded clients (every connection and redirect hop is checked by the SSRF
+        // guard). The tests put a fake one in its place.
+        public Func<string, CancellationToken, Task<string>> FetchThreadPage { get; set; } = (url, token) => General.DownloadPageToStringAsync(url, true, token);
+
         // True once the host is exiting; checked on the owner thread before a thread is added
         public Func<bool> IsExiting { get; set; } = () => false;
 

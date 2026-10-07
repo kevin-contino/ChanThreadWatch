@@ -65,18 +65,43 @@
     <RuntimeHostConfigurationOption Include="System.Globalization.UseNls" Value="true" />
   </ItemGroup>
 
+  <!-- The Windows runtime packs of ASP.NET Core carry its IIS in-process module, a native file that the single file
+       would extract to disk. The app never runs in IIS (the local API is Kestrel only), so it is left out of the
+       runtime pack's assets, which both ChanThreadWatch.deps.json and the publish are made from, as for ctw (see
+       ChanThreadWatch.Cli.csproj). ResolveRuntimePackAssets also adds them to ReferenceCopyLocalPaths, so it goes
+       from there too. -->
+  <Target Name="RemoveIisModule" AfterTargets="ResolveRuntimePackAssets">
+    <ItemGroup>
+      <_CtwIisModule Include="@(RuntimePackAsset)" Condition="'%(Filename)%(Extension)' == 'aspnetcorev2_inprocess.dll'" />
+      <RuntimePackAsset Remove="@(_CtwIisModule)" />
+      <ReferenceCopyLocalPaths Remove="@(_CtwIisModule)" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="..\ChanThreadWatch.Core\ChanThreadWatch.Core.csproj" />
+    <!-- The local API that the app hosts (MP-7a). It brings the ASP.NET Core shared framework, which the
+         self-contained single file then carries (no trimming) -->
+    <ProjectReference Include="..\ChanThreadWatch.Api\ChanThreadWatch.Api.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Include="Classes\GUI.cs" />
+    <Compile Include="Classes\LocalApiHost.cs" />
+    <Compile Include="Classes\LocalApiSettings.cs" />
+    <Compile Include="Classes\NewThreadChoices.cs" />
     <Compile Include="Classes\Shell.cs" />
     <Compile Include="frmChanThreadWatch.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="frmChanThreadWatch.Designer.cs">
       <DependentUpon>frmChanThreadWatch.cs</DependentUpon>
+    </Compile>
+    <Compile Include="frmLocalApi.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="frmLocalApi.Designer.cs">
+      <DependentUpon>frmLocalApi.cs</DependentUpon>
     </Compile>
     <Compile Include="frmDownloads.cs">
       <SubType>Form</SubType>
@@ -104,6 +129,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="frmDownloads.resx">
       <DependentUpon>frmDownloads.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="frmLocalApi.resx">
+      <DependentUpon>frmLocalApi.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="frmSettings.resx">
       <DependentUpon>frmSettings.cs</DependentUpon>

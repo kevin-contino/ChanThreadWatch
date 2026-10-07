@@ -163,6 +163,23 @@ namespace JDP {
             return HasSlug(_url);
         }
 
+        // True when GetThreadName would download the page to learn the thread's name (the 4chan slug). The local API
+        // downloads it first, off the owner thread, and the watcher then takes GetThreadNameWithoutLookup.
+        public virtual bool NeedsThreadNameLookup() {
+            return false;
+        }
+
+        // The thread's URL with its name, as the downloaded page names itself (its canonical link), or null when the
+        // page names none that has it. The caller checks the URL as it checks any other.
+        public virtual string GetURLWithThreadName(string page) {
+            return null;
+        }
+
+        // GetThreadName without a download: a URL without the name is named by its number
+        public virtual string GetThreadNameWithoutLookup() {
+            return GetThreadName();
+        }
+
         protected virtual bool HasSlug(string url) {
             return false;
         }
@@ -447,15 +464,37 @@ namespace JDP {
             }
             if (Settings.UseSlug == true) {
                 try {
-                    HTMLParser parser = new HTMLParser(General.DownloadPageToString(_url, Guarded));
-                    HTMLTag canonicalLinkTag = Enumerable.FirstOrDefault(Enumerable.Where(parser.FindStartTags(parser.CreateTagRange(parser.FindStartTag("head")), "link"), t => t.GetAttributeValueOrEmpty("rel").Equals("canonical")));
-                    return GetThreadName(canonicalLinkTag.GetAttributeValueOrEmpty("href"), Settings.SlugType);
+                    string canonicalURL = FindCanonicalURL(General.DownloadPageToString(_url, Guarded));
+                    return canonicalURL != null ? GetThreadName(canonicalURL, Settings.SlugType) : GetThreadID();
                 }
                 catch {
                     return GetThreadID();
                 }
             }
             return GetThreadID();
+        }
+
+        public override bool NeedsThreadNameLookup() {
+            return Settings.UseSlug == true && !HasSlug();
+        }
+
+        public override string GetURLWithThreadName(string page) {
+            string url = FindCanonicalURL(page);
+            return url != null && HasSlug(url) ? url : null;
+        }
+
+        public override string GetThreadNameWithoutLookup() {
+            return HasSlug() ? GetThreadName(Settings.SlugType) : GetThreadID();
+        }
+
+        // The href of the canonical link in the page's head, or null when there is none
+        private static string FindCanonicalURL(string page) {
+            HTMLParser parser = new HTMLParser(page);
+            HTMLTag head = parser.FindStartTag("head");
+            HTMLTagRange headRange = head != null ? parser.CreateTagRange(head) : null;
+            if (headRange == null) return null;
+            HTMLTag canonicalLinkTag = Enumerable.FirstOrDefault(Enumerable.Where(parser.FindStartTags(headRange, "link"), t => t.GetAttributeValueOrEmpty("rel").Equals("canonical")));
+            return canonicalLinkTag?.GetAttributeValueOrEmpty("href");
         }
 
         protected override string GetThreadName(string url, SlugType slugType) {

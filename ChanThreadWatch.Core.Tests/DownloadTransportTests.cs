@@ -602,6 +602,25 @@ namespace JDP.Tests {
             }
         }
 
+        // The async page download (the local API's slug lookup) pauses a host that rate limits it, as the sync one does,
+        // so the watchers do not ask again during the pause
+        [TestMethod]
+        public void DownloadPageToStringAsyncPausesARateLimitedHost() {
+            try {
+                using (var server = new LoopbackHttpServer()) {
+                    server.Route("/page", LoopbackResponse.StatusOnly(429, "Too Many Requests").WithHeader("Retry-After", "30"));
+                    string url = server.URL("/page");
+
+                    Assert.ThrowsExactly<HTTPRateLimitedException>(() => General.DownloadPageToStringAsync(url, false, CancellationToken.None).GetAwaiter().GetResult());
+
+                    Assert.IsTrue(ConnectionManager.GetInstance(url).IsPaused);
+                }
+            }
+            finally {
+                ConnectionManager.ResetForTesting();
+            }
+        }
+
         [TestMethod]
         public void DownloadPageToStringRejectsPageOverMax() {
             General.MaxPageBytes = SmallMaxPageBytes;

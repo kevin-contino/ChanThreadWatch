@@ -7,8 +7,15 @@ using System.Threading;
 namespace JDP.Api {
     // The token file could not be written with owner-only access, or could not be written at all
     internal sealed class ApiTokenException : Exception {
-        public ApiTokenException(string message, Exception innerException = null)
-            : base(message, innerException) { }
+        public ApiTokenException(string message, Exception innerException = null, bool ownerOnlyNotSupported = false)
+            : base(message, innerException) {
+            OwnerOnlyNotSupported = ownerOnlyNotSupported;
+        }
+
+        // The folder's file system does not keep owner-only access (FAT or exFAT on Windows, a mount without file
+        // modes elsewhere), so no token file can be written there; not set for any other failure (access denied, a
+        // sharing violation, a full disk)
+        public bool OwnerOnlyNotSupported { get; }
     }
 
     // The API's one bearer token (maintainer decisions D2, D3; security item 15). Only its SHA-256 hash is kept, in
@@ -52,6 +59,18 @@ namespace JDP.Api {
             string token = TokenPrefix + Base64Url(RandomNumberGenerator.GetBytes(TokenBytes));
             WriteHashFile(HashPrefix + Convert.ToHexStringLower(Hash(token)));
             return token;
+        }
+
+        // Writes this file's hash to the other store's file, which only the current user can read, as Generate writes it
+        // (the app's settings folder move). Returns false, and writes nothing, when this file is missing or not trusted:
+        // a token that does not pass here would not pass in the other folder either. Throws ApiTokenException when the
+        // copy cannot be written with owner-only access.
+        public bool CopyTo(ApiTokenStore destination) {
+            if (destination == null) throw new ArgumentNullException(nameof(destination));
+            byte[] hash = ReadHash();
+            if (hash == null) return false;
+            destination.WriteHashFile(HashPrefix + Convert.ToHexStringLower(hash));
+            return true;
         }
 
         // A value longer than the limit is refused before it is hashed
@@ -158,7 +177,8 @@ namespace JDP.Api {
             }
             catch (Exception ex) when (IsWriteFailure(ex)) {
                 TryDelete(tempPath);
-                throw new ApiTokenException("The API token file could not be written: " + _path, ex);
+                // An access check that throws NotSupportedException means a file system without ACLs
+                throw new ApiTokenException("The API token file could not be written: " + _path, ex, ex is NotSupportedException);
             }
         }
 

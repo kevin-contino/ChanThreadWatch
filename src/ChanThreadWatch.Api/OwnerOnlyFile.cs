@@ -29,7 +29,7 @@ namespace JDP.Api {
                 stream.Dispose();
                 throw new ApiTokenException(OperatingSystem.IsWindows() ?
                     "The settings folder does not support owner-only files; move it to an NTFS folder." :
-                    "The settings folder does not keep file permissions (mode 0600); move it to a local folder.");
+                    "The settings folder does not keep file permissions (mode 0600); move it to a local folder.", null, true);
             }
             return stream;
         }

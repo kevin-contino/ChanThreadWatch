@@ -85,6 +85,10 @@ namespace JDP {
         // file, whose format stays as the previous release reads it; the mark is kept in the
         // api-threads.txt file beside it (ApiThreadsFile).
         public bool Guarded { get; set; }
+        // The local API has already looked up the thread's name (the 4chan slug) off the owner thread, so the new
+        // watcher does not download the page for it (SiteHelper.GetThreadNameWithoutLookup). Never written to the
+        // thread list file.
+        public bool ThreadNameLookedUp { get; set; }
     }
 
     public class MonitoringInfo {
