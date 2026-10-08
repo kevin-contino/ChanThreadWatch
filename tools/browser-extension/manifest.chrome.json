@@ -1,0 +1,10 @@
+{
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAow9m0WxBqLou7QRCsenKp2EW+kwjozHS2KGZok/6sWx0LKkEpescafhR+b3urlyUBCLNOmZ9VHjVjNRdMdf+kvhAo1b4bNFkaT2OmOWbaSP+z99TVyMQ7Nk5VzZ2xBOXCqnBsdYK1jzolh7/tSvrnN2xeamFqzUGOBpWb0dAZDr+nMPK+X7ecEpaPDooPBAUO3hSOtFEPLD5n8oSG/v8XP8xwgxIQ5gOboeiZ3EAhr9yTXd6KF9TNxxRW1kD5Fj/GaPVOy954tpPzKtdCdJtUGa3PAVBYNdNHd/ZcNCkFud2Uo6YoTyBNI9SVo+jdUItuOghA53lA8acCs/sr7Y+ywIDAQAB",
+  "externally_connectable": {
+    "ids": []
+  }
+}

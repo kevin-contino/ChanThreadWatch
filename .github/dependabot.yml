@@ -26,3 +26,9 @@ updates:
     directory: /tools/offline-page-script
     schedule:
       interval: weekly
+
+  # No dependencies yet; the entry keeps any future one under review
+  - package-ecosystem: npm
+    directory: /tools/browser-extension
+    schedule:
+      interval: weekly

@@ -38,6 +38,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The Chrome manifest overlay of the browser extension, whose key gives the pinned extension id -->
+    <None Include="..\tools\browser-extension\manifest.chrome.json" Link="manifest.chrome.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Every test assembly sends the default folders and the application data folder to a temporary folder -->
     <Compile Include="..\ChanThreadWatch.Core.Tests\TestDefaultFolders.cs" Link="TestDefaultFolders.cs" />
   </ItemGroup>

@@ -259,6 +259,9 @@ FakesAssemblies/
 .ntvs_analysis.dat
 node_modules/
 
+# Browser extension build output (node scripts/package.mjs)
+tools/browser-extension/dist/
+
 # Visual Studio 6 build log
 *.plg
 

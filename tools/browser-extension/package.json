@@ -1,0 +1,13 @@
+{
+  "name": "chan-thread-watch-extension",
+  "private": true,
+  "description": "The Chan Thread Watch browser extension (Chrome and Firefox): adds threads through the local API on 127.0.0.1",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "test": "node --test",
+    "package": "node scripts/package.mjs"
+  }
+}

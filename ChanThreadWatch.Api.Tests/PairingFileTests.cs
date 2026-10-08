@@ -415,5 +415,17 @@ namespace JDP.Api.Tests {
                 Assert.IsFalse(ApiPairing.IsPairingOrigin(origin), origin ?? "null");
             }
         }
+
+        // The pinned id is the one Chrome derives from the extension manifest's public key
+        // (tools/browser-extension/manifest.chrome.json, copied next to the tests by the project file): the first 32 hex
+        // digits of SHA-256 of the key (DER), with 0-f written as a-p
+        [TestMethod]
+        public void ChromeExtensionIdMatchesManifestKey() {
+            JsonElement manifest = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "manifest.chrome.json"))).RootElement;
+            byte[] key = Convert.FromBase64String(manifest.GetProperty("key").GetString());
+            string hex = Convert.ToHexStringLower(SHA256.HashData(key)).Substring(0, 32);
+            string id = new string(hex.Select(digit => (char)('a' + Convert.ToInt32(digit.ToString(), 16))).ToArray());
+            Assert.AreEqual(ApiPairing.ChromeExtensionId, id);
+        }
     }
 }

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chan Thread Watch options</title>
+<script type="module" src="options.js"></script>
+</head>
+<body>
+<h1>Chan Thread Watch</h1>
+<p>
+<label for="port">Port</label>
+<input type="number" id="port" min="1024" max="65535" step="1">
+</p>
+<p>
+<label for="code">Pairing code</label>
+<input type="text" id="code" autocomplete="off" spellcheck="false" maxlength="16" placeholder="XXXX-XXXX">
+<button type="button" id="pair">Pair</button>
+</p>
+<p id="confirm" hidden>
+<span id="confirm-text"></span>
+<button type="button" id="confirm-yes">Pair</button>
+<button type="button" id="confirm-no">Cancel</button>
+</p>
+<p><button type="button" id="forget">Forget pairing</button></p>
+<p id="status"></p>
+</body>
+</html>

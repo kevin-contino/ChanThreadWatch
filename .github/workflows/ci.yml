@@ -30,6 +30,7 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
       script: ${{ steps.classify.outputs.script }}
+      extension: ${{ steps.classify.outputs.extension }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,7 +48,7 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "Event $EVENT_NAME: running every job"
-            flags="$(printf 'code=true\nscript=true\n')"
+            flags="$(printf 'code=true\nscript=true\nextension=true\n')"
           else
             changed="$RUNNER_TEMP/changed-files.txt"
             git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$changed"
@@ -330,6 +331,40 @@ jobs:
       - name: Test
         run: npm test
 
+  browser-extension:
+    name: Browser extension
+    needs: changes
+    if: needs.changes.outputs.extension == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/browser-extension
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Uses the runner's preinstalled Node; the lockfile has no packages and no install scripts run
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      # URL filter, manifests, pairing vectors and protocol, API requests, "Watch all" and the source scan, with fakes
+      # of the browser and the API; no browser is started
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: node scripts/package.mjs --out "$RUNNER_TEMP/ext"
+
+      # No artifact for a pull request from a fork
+      - name: Upload the extension folders
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-extension
+          path: ${{ runner.temp }}/ext
+
   complexity:
     name: Cyclomatic complexity
     runs-on: ubuntu-latest
@@ -344,4 +379,6 @@ jobs:
 
       # Maintainer decision: every app function stays at CCN <= 5 (Designer files and tests excluded)
       - name: Check CCN <= 5
-        run: lizard -l csharp -x "*Designer.cs" -x "./ChanThreadWatch.Tests/*" -x "./ChanThreadWatch.UITests/*" -x "./ChanThreadWatch.*.Tests/*" -C 5 -w .
+        run: |
+          lizard -l csharp -x "*Designer.cs" -x "./ChanThreadWatch.Tests/*" -x "./ChanThreadWatch.UITests/*" -x "./ChanThreadWatch.*.Tests/*" -C 5 -w .
+          lizard -l javascript -C 5 -w tools/browser-extension/src tools/browser-extension/scripts
