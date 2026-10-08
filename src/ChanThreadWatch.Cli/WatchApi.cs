@@ -52,18 +52,7 @@ namespace JDP.Cli {
 
         // The name a pairing browser extension shows before it saves its token (MP-7b design Q8)
         internal static string ServerName() {
-            string machine = MachineName();
-            return machine != null ? ApiPolicy.NormalizeServerName("ctw watch " + General.Version + " on " + machine) : ApiPolicy.DefaultServerName;
-        }
-
-        // Null when the name can't be read (Environment.MachineName throws then); the API starts with the default name
-        private static string MachineName() {
-            try {
-                return Environment.MachineName;
-            }
-            catch (InvalidOperationException) {
-                return null;
-            }
+            return ApiPolicy.HostServerName("ctw watch " + General.Version);
         }
 
         // Only "1" is on; any other value but "0" is most likely a typo, so it is named

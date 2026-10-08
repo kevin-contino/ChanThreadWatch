@@ -60,6 +60,24 @@ namespace JDP.Api {
             return cut.Length != 0 ? cut : DefaultServerName;
         }
 
+        // A host's name: "<product> on <machine name>", normalized (the product names the host and its version, as
+        // "ctw watch 1.40.0"). The default name when the machine name can't be read.
+        public static string HostServerName(string product) {
+            return HostServerName(product, () => Environment.MachineName);
+        }
+
+        // The same with the machine name from the delegate (the tests give one that throws)
+        internal static string HostServerName(string product, Func<string> machineName) {
+            string machine;
+            try {
+                machine = machineName();
+            }
+            catch (InvalidOperationException) {
+                return DefaultServerName;
+            }
+            return NormalizeServerName(product + " on " + machine);
+        }
+
         // The time for the pairing code's expiry and the paired date. The tests put a fake clock in its place.
         public Func<DateTimeOffset> UtcNow { get; set; } = () => DateTimeOffset.UtcNow;
 

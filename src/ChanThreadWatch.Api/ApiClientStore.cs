@@ -86,10 +86,32 @@ namespace JDP.Api {
         // family is not paired or the file is not trusted. Throws ApiTokenException when the file cannot be read or
         // written.
         public bool Remove(string family) {
+            return Remove(family, null);
+        }
+
+        // The same, but only while the family's line still has that token hash (the app's dialog shows a pairing, and
+        // the browser may pair again before the user confirms); false when it has another one. A null hash removes any.
+        public bool Remove(string family, byte[] expectedHash) {
             lock (_writeLock) {
                 IReadOnlyList<ApiClient> clients = ReadForWrite();
-                if (clients == null || !clients.Any(client => client.Family == family)) return false;
+                ApiClient line = clients?.FirstOrDefault(client => client.Family == family);
+                if (line == null || (expectedHash != null && !line.Hash.AsSpan().SequenceEqual(expectedHash))) return false;
                 Write(clients.Where(client => client.Family != family));
+                return true;
+            }
+        }
+
+        // Writes this file's paired browsers to the other store's file, owner-only, as Pair writes it (the app's settings
+        // folder move). Returns false, and writes nothing, when this file is missing, not trusted or lists no browser: a
+        // token that does not pass here would not pass in the other folder either. Throws ApiTokenException when this
+        // file could not be read (so a passing failure never drops the paired browsers) or the copy cannot be written
+        // with owner-only access.
+        public bool CopyTo(ApiClientStore destination) {
+            if (destination == null) throw new ArgumentNullException(nameof(destination));
+            lock (_writeLock) {
+                IReadOnlyList<ApiClient> clients = ReadForWrite();
+                if (clients == null || clients.Count == 0) return false;
+                destination.Write(clients);
                 return true;
             }
         }
@@ -98,7 +120,7 @@ namespace JDP.Api {
         private IReadOnlyList<ApiClient> ReadForWrite() {
             OwnerOnlyRead status;
             string text = ApiTokenStore.ReadOwnerOnlyText(_path, MaxFileBytes, out status);
-            if (status == OwnerOnlyRead.Failed) throw new ApiTokenException(ReadFailure + _path);
+            if (status == OwnerOnlyRead.Failed) throw new ApiTokenException(ReadFailure + _path, null, false, true);
             if (text == null) return status == OwnerOnlyRead.Missing ? Array.Empty<ApiClient>() : null;
             return Parse(text);
         }

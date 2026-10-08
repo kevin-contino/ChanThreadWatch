@@ -6,6 +6,9 @@ using JDP.Api;
 
 namespace JDP {
     public partial class frmSettings : Form {
+        // The local API's files in the settings folder, whose failed deletes after a move are logged
+        private static readonly string[] _apiFileNames = { ApiTokenStore.FileName, ApiClientStore.FileName, ApiPairingFile.FileName };
+
         private readonly LocalApiHost _localApi;
 
         internal frmSettings(LocalApiHost localApi) {
@@ -191,35 +194,50 @@ namespace JDP {
             if (newLock != null) newLock.Dispose();
         }
 
-        // A drive that can't keep owner-only access gets its own reason; any other failure (of the token file's copy too:
-        // access denied, a sharing violation) the general one
+        // A drive that can't keep owner-only access, and a paired browsers file that could not be read (in use, access
+        // denied), get their own reasons; any other failure (of the token files' copies too) the general one
         internal static string GetMoveFailureMessage(Exception ex) {
-            if (!(ex is ApiTokenException tokenError && tokenError.OwnerOnlyNotSupported)) return "Unable to move the settings files.";
-            return "The settings files were not moved: on that drive (for example a FAT or exFAT drive), the local API's token file " +
-                ApiTokenStore.FileName + " can't be protected so that only your user can read it. Nothing was copied or deleted. " +
+            ApiTokenException tokenError = ex as ApiTokenException;
+            if (tokenError != null && tokenError.ClientsUnreadable) {
+                return ApiClientStore.FileName + " (the paired browsers) could not be read just now, so the settings files were not moved. Try again.";
+            }
+            if (tokenError == null || !tokenError.OwnerOnlyNotSupported) return "Unable to move the settings files.";
+            return "The settings files were not moved: on that drive (for example a FAT or exFAT drive), the local API's token files " +
+                ApiTokenStore.FileName + " and " + ApiClientStore.FileName + " can't be protected so that only your user can read them. Nothing was copied or deleted. " +
                 "Choose a folder on an NTFS drive.";
         }
 
         // Every file is copied before any old one is deleted, so a copy that fails leaves the old folder whole (the
         // program keeps using it). The marks of the threads added through the local API move with the thread list, and
-        // the local API's token file moves first, so a failure to write it owner-only copies nothing. The new folder
-        // never keeps a token file that is not the old folder's: one already there goes when the old folder has none
-        // (or none that is trusted), and the copy goes again when a later copy fails.
+        // the local API's token files (the scripts' token, then the paired browsers) move first, so a failure to write
+        // them owner-only copies nothing. The new folder never keeps a token file that is not the old folder's: one
+        // already there goes when the old folder has none (or none that is trusted), and the copy goes again when a
+        // later copy fails. A pending pairing code (api-pairing.txt) is never moved: it ends with the move.
         internal static void MoveSettingsFiles(string oldSettingsFolder, string newSettingsFolder) {
             List<string> copied = new List<string>();
-            string newTokenPath = Path.Combine(newSettingsFolder, ApiTokenStore.FileName);
-            if (CopyApiTokenFile(oldSettingsFolder, newSettingsFolder)) copied.Add(Path.Combine(oldSettingsFolder, ApiTokenStore.FileName));
-            else File.Delete(newTokenPath);
+            KeepOrDropCopy(CopyApiTokenFile(oldSettingsFolder, newSettingsFolder), ApiTokenStore.FileName, oldSettingsFolder, newSettingsFolder, copied);
             try {
+                KeepOrDropCopy(CopyApiClientsFile(oldSettingsFolder, newSettingsFolder), ApiClientStore.FileName, oldSettingsFolder, newSettingsFolder, copied);
                 CopySettingsFiles(oldSettingsFolder, newSettingsFolder, copied);
             }
             catch {
-                TryDeleteLogged(newTokenPath);
+                TryDeleteLogged(Path.Combine(newSettingsFolder, ApiTokenStore.FileName));
+                TryDeleteLogged(Path.Combine(newSettingsFolder, ApiClientStore.FileName));
                 throw;
             }
             foreach (string oldPath in copied) {
                 TryDeleteLogged(oldPath);
             }
+            // Only the old folder's code is deleted. An api-pairing.txt already in the new folder is left alone on
+            // purpose: it is that folder's own pending code (ctw api-pair run there), not one this move made.
+            TryDeleteLogged(Path.Combine(oldSettingsFolder, ApiPairingFile.FileName));
+        }
+
+        // A token file that was copied is deleted in the old folder later; one that was not leaves no file of that name
+        // in the new folder
+        private static void KeepOrDropCopy(bool wasCopied, string fileName, string oldSettingsFolder, string newSettingsFolder, List<string> copied) {
+            if (wasCopied) copied.Add(Path.Combine(oldSettingsFolder, fileName));
+            else File.Delete(Path.Combine(newSettingsFolder, fileName));
         }
 
         private static void CopySettingsFiles(string oldSettingsFolder, string newSettingsFolder, List<string> copied) {
@@ -231,13 +249,14 @@ namespace JDP {
             }
         }
 
-        // A file that can't be deleted is left; only a token file's is logged, since its token would still pass there
+        // A file that can't be deleted is left; only the local API's files are logged, since a token or a pairing code
+        // would still pass there
         private static void TryDeleteLogged(string path) {
             try {
                 File.Delete(path);
             }
             catch (Exception ex) {
-                if (Path.GetFileName(path) == ApiTokenStore.FileName) Logger.Log("Local API: " + path + " could not be deleted after the settings folder move: " + ex.GetType().FullName);
+                if (Array.IndexOf(_apiFileNames, Path.GetFileName(path)) >= 0) Logger.Log("Local API: " + path + " could not be deleted after the settings folder move: " + ex.GetType().FullName);
             }
         }
 
@@ -247,6 +266,13 @@ namespace JDP {
         // when the new folder can't keep owner-only access.
         private static bool CopyApiTokenFile(string oldSettingsFolder, string newSettingsFolder) {
             return new ApiTokenStore(oldSettingsFolder).CopyTo(new ApiTokenStore(newSettingsFolder));
+        }
+
+        // api-clients.txt (the paired browsers) is written again the same way. Returns false, and leaves the old file,
+        // when it is missing, not trusted or lists no browser. Throws ApiTokenException, leaving no copy, when it could
+        // not be read or the new folder can't keep owner-only access.
+        private static bool CopyApiClientsFile(string oldSettingsFolder, string newSettingsFolder) {
+            return new ApiClientStore(oldSettingsFolder).CopyTo(new ApiClientStore(newSettingsFolder));
         }
 
         private void btnLocalApi_Click(object sender, EventArgs e) {

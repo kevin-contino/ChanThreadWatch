@@ -273,6 +273,111 @@ namespace JDP.Api.Tests {
             Assert.IsNull(ApiClientStore.Parse(Version + ClientLine("firefox", ChromeOrigin, "ctwe_a")));
         }
 
+        // The app's settings folder move: the copy holds the same lines, is owner-only, and the browsers' tokens pass
+        // with it
+        [TestMethod]
+        public void ClientsFile_CopyToAnotherFolderIsOwnerOnlyAndKeepsTheBrowsers() {
+            Pair(ChromeOrigin);
+            Pair(FirefoxOrigin);
+            ApiClientStore other = new ApiClientStore(Directory.CreateDirectory(Path.Combine(Folder, "other")).FullName);
+
+            Assert.IsTrue(Clients.CopyTo(other));
+
+            Assert.AreEqual(File.ReadAllText(Clients.Path), File.ReadAllText(other.Path));
+            CollectionAssert.AreEqual(new[] { "chrome", "firefox" }, other.Read().Select(client => client.Family).ToArray());
+            PairingTests.AssertOwnerOnly(other.Path);
+        }
+
+        // A file that is missing, not trusted or lists no browser is not copied: nothing is written in the other folder
+        [TestMethod]
+        public void ClientsFile_CopyOfAMissingUntrustedOrEmptyFileWritesNothing() {
+            ApiClientStore other = new ApiClientStore(Directory.CreateDirectory(Path.Combine(Folder, "other")).FullName);
+            Assert.IsFalse(Clients.CopyTo(other));
+            ApiTokenStore.WriteOwnerOnlyText(Clients.Path, Version, "test: ");
+            Assert.IsFalse(Clients.CopyTo(other));
+            ApiTokenStore.WriteOwnerOnlyText(Clients.Path, Version + "garbage\n", "test: ");
+            Assert.IsFalse(Clients.CopyTo(other));
+            Assert.AreEqual(0, Directory.GetFiles(Path.GetDirectoryName(other.Path)).Length);
+        }
+
+        // A copy that can't be made owner-only, or a file that can't be read just now, fails, and leaves no file in the
+        // other folder
+        [TestMethod]
+        public void ClientsFile_CopyThatCannotBeOwnerOnlyOrReadIsAnError() {
+            Pair(ChromeOrigin);
+            ApiClientStore other = new ApiClientStore(Directory.CreateDirectory(Path.Combine(Folder, "other")).FullName);
+            ApiTokenException notOwnerOnly;
+            OwnerOnlyFile.NewFileCheckForTesting = stream => false;
+            try {
+                notOwnerOnly = Assert.ThrowsExactly<ApiTokenException>(() => Clients.CopyTo(other));
+            }
+            finally {
+                OwnerOnlyFile.NewFileCheckForTesting = null;
+            }
+            Assert.IsTrue(notOwnerOnly.OwnerOnlyNotSupported);
+            Assert.IsFalse(notOwnerOnly.ClientsUnreadable);
+            ApiTokenException unreadable;
+            FailClientsReads(new IOException("test: access denied", unchecked((int)0x80070005)));
+            try {
+                unreadable = Assert.ThrowsExactly<ApiTokenException>(() => Clients.CopyTo(other));
+            }
+            finally {
+                ApiTokenStore.OpeningForTesting = null;
+            }
+            Assert.IsFalse(unreadable.OwnerOnlyNotSupported);
+            Assert.IsTrue(unreadable.ClientsUnreadable, "The settings folder move tells this failure apart.");
+            Assert.AreEqual(0, Directory.GetFiles(Path.GetDirectoryName(other.Path)).Length);
+        }
+
+        private void FailClientsReads(Exception failure) {
+            string clientsPath = Clients.Path;
+            ApiTokenStore.OpeningForTesting = path => {
+                if (path == clientsPath) throw failure;
+            };
+        }
+
+        // An unpair with the hash the dialog showed removes only that pairing: a browser that paired again meanwhile
+        // keeps its new line
+        [TestMethod]
+        public void ClientsFile_RemoveWithAHashRemovesOnlyThatPairing() {
+            Pair(ChromeOrigin);
+            string firefox = Pair(FirefoxOrigin);
+            byte[] shown = Clients.Read().Single(client => client.Family == "chrome").Hash;
+            string chromeAgain = Pair(ChromeOrigin);
+
+            Assert.IsFalse(Clients.Remove("chrome", shown), "A newer pairing was removed.");
+            Assert.AreEqual(HttpStatusCode.Created, AddWithToken(chromeAgain, ChromeOrigin).StatusCode);
+
+            byte[] current = Clients.Read().Single(client => client.Family == "chrome").Hash;
+            Assert.IsTrue(Clients.Remove("chrome", current));
+            AssertProblem(AddWithToken(chromeAgain, ChromeOrigin), HttpStatusCode.Unauthorized, "unauthorized");
+            Assert.IsFalse(Clients.Remove("chrome", current), "not paired");
+            CollectionAssert.AreEqual(TokenHash(firefox), Clients.Read().Single().Hash, "the other family stays");
+            Assert.IsTrue(Clients.Remove("firefox", null), "a null hash removes any");
+            Assert.AreEqual(0, Clients.Read().Count);
+        }
+
+        // A current user without a security identifier (InvalidOperationException from the access check) fails the
+        // read like an I/O failure: no paired browser passes, and a writer does not replace the file
+        [TestMethod]
+        public void ClientsFile_InvalidOperationOnReadFailsClosed() {
+            string chrome = Pair(ChromeOrigin);
+            string text = File.ReadAllText(Clients.Path);
+            FailClientsReads(new InvalidOperationException("test: no security identifier"));
+            try {
+                OwnerOnlyRead status;
+                Assert.IsNull(ApiTokenStore.ReadOwnerOnlyText(Clients.Path, 1024, out status));
+                Assert.AreEqual(OwnerOnlyRead.Failed, status);
+                Assert.IsNull(Clients.Read());
+                AssertProblem(AddWithToken(chrome, ChromeOrigin), HttpStatusCode.Unauthorized, "unauthorized");
+                Assert.IsTrue(Assert.ThrowsExactly<ApiTokenException>(() => Clients.Pair(FirefoxOrigin, Now)).ClientsUnreadable);
+            }
+            finally {
+                ApiTokenStore.OpeningForTesting = null;
+            }
+            Assert.AreEqual(text, File.ReadAllText(Clients.Path), "The file was replaced.");
+        }
+
         // The start rule is unchanged: a paired browser without the scripts' token does not start the API
         [TestMethod]
         public void Start_StillNeedsTheScriptToken() {

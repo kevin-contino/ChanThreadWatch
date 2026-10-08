@@ -29,15 +29,7 @@ namespace JDP.Cli {
         private const string AgainAdvice = " Run 'ctw api-pair' again for a new code.";
         private const string ApiEnabledName = "ApiEnabled";
 
-        private static readonly Dictionary<PairingEnd, string> _endMessages = new Dictionary<PairingEnd, string> {
-            { PairingEnd.Expired, "The code expired before a browser extension paired with it." + AgainAdvice },
-            { PairingEnd.Ended, "The code no longer works, and no browser extension paired with it: wrong codes used up its tries, or " +
-                ApiPairingFile.FileName + " was deleted." + AgainAdvice },
-            { PairingEnd.Replaced, "A newer code from another program that makes codes, such as the app or another 'ctw api-pair', replaced this one. " +
-                "Use the newer code." },
-            { PairingEnd.Changed, ApiPairingFile.FileName + " was changed by another program, so the code no longer works." + AgainAdvice },
-            { PairingEnd.Cancelled, "Cancelled. The code no longer works." }
-        };
+        private const string OtherCreators = "the app or another 'ctw api-pair'";
 
         public static int Run(CliContext context) {
             // The API does not run as root (ApiServer), and as root the files' mode would prove nothing
@@ -85,8 +77,8 @@ namespace JDP.Cli {
             }
         }
 
-        internal static string DisplayName(string family) {
-            return family == ApiPairing.ChromeFamily ? "Chrome" : "Firefox";
+        private static string DisplayName(string family) {
+            return ApiPairingFollow.DisplayName(family);
         }
 
         // The stop (Ctrl+C and the other signals, or the tests' token) is in place before the code is made, and until
@@ -99,7 +91,7 @@ namespace JDP.Cli {
             WatchStatusOutput notes = new WatchStatusOutput(context.Error);
             WarnAboutTheApi(notes, folder.Path);
             PairingWait wait = new PairingWait(folder.Path);
-            PairingEnd end;
+            ApiPairingEnd end;
             using (PairingStop stop = PairingStop.Create(context.StopToken, wait)) {
                 try {
                     end = MakeCodeAndWait(context, wait, stop.Token, notes);
@@ -112,10 +104,10 @@ namespace JDP.Cli {
         }
 
         // A stop while the code is made (PBKDF2, a moment of work) ends it before it is shown
-        private static PairingEnd MakeCodeAndWait(CliContext context, PairingWait wait, CancellationToken stop, WatchStatusOutput notes) {
-            if (stop.IsCancellationRequested) return PairingEnd.Cancelled;
+        private static ApiPairingEnd MakeCodeAndWait(CliContext context, PairingWait wait, CancellationToken stop, WatchStatusOutput notes) {
+            if (stop.IsCancellationRequested) return ApiPairingEnd.Cancelled;
             wait.MakeCode();
-            if (stop.IsCancellationRequested) return PairingEnd.Cancelled;
+            if (stop.IsCancellationRequested) return ApiPairingEnd.Cancelled;
             WriteCode(context, wait.Code.Code);
             notes.WriteLine("ctw: note: Enter this code in the extension's options within " + ApiPolicy.PairingCodeLifetime.TotalMinutes.ToString(CultureInfo.InvariantCulture) +
                 " minutes. Press Ctrl+C to cancel.");
@@ -174,26 +166,12 @@ namespace JDP.Cli {
                 wait.Code.Expires.UtcDateTime.ToString(DateFormat, CultureInfo.InvariantCulture) + ".");
         }
 
-        private static int Report(CliContext context, PairingEnd end, string family) {
-            if (end != PairingEnd.Paired) throw new CliException(_endMessages[end]);
-            context.Output.WriteLine("Paired with the " + DisplayName(family) + " extension");
+        private static int Report(CliContext context, ApiPairingEnd end, string family) {
+            string text = ApiPairingFollow.DescribeEnd(end, family, AgainAdvice, OtherCreators);
+            if (end != ApiPairingEnd.Paired) throw new CliException(text);
+            context.Output.WriteLine(text);
             return CliApp.ExitSuccess;
         }
-    }
-
-    // How a wait for a pairing ended
-    internal enum PairingEnd {
-        Paired,
-        // The code's 5 minutes passed
-        Expired,
-        // The file is gone before the code's expiry (the API burned the code, or it was deleted), and no browser paired
-        // since the code was made
-        Ended,
-        // The file holds another code
-        Replaced,
-        // The file is there but not trusted (a link, access for others, content that does not parse)
-        Changed,
-        Cancelled
     }
 
     // Ctrl+C (SIGINT), Ctrl+Break or Ctrl+\ (SIGQUIT), SIGTERM and SIGHUP stop ctw api-pair: the first one stops the
@@ -252,45 +230,37 @@ namespace JDP.Cli {
         }
     }
 
-    // One code and the wait for its result. Each look reads api-pairing.txt and compares its id with the code's, as
-    // ApiPairingFile asks of a creator. A file that is gone (or still unreadable at the code's expiry) may still follow
-    // a pairing: the API can save the browser's token and then find the file gone (the design accepts that window), so
-    // the paired browsers are compared with the ones taken just after the code was made, before it was shown. A file
-    // that holds another code is reported as replaced, although a pairing with this code may have been saved just
-    // before (also accepted by the design).
+    // One code and the wait for its result: the look at the file is ApiPairingFollow's, which the app's Local API
+    // dialog uses too; this adds the polling, the stop, and the command's errors
     internal sealed class PairingWait {
-        private readonly ApiPairingFile _file;
-        private readonly ApiClientStore _clients;
-        private HashSet<string> _hashesBefore;
-        // Set once the code is made; read by a signal handler on another thread
-        private volatile ApiPairingCode _code;
+        private readonly ApiPairingFollow _follow;
 
         public PairingWait(string settingsFolder) {
-            _file = new ApiPairingFile(settingsFolder);
-            _clients = new ApiClientStore(settingsFolder);
+            _follow = new ApiPairingFollow(settingsFolder, () => ApiPairCommand.UtcNow());
         }
 
         // Null until MakeCode returns
         public ApiPairingCode Code {
-            get { return _code; }
+            get { return _follow.Code; }
         }
 
         // The browser that paired, once the wait ended with Paired
-        public string PairedFamily { get; private set; }
+        public string PairedFamily {
+            get { return _follow.PairedFamily; }
+        }
 
         // Makes the code (PBKDF2, a moment of work), then takes the paired browsers: no browser can know the code yet
         public void MakeCode() {
             try {
-                _code = _file.Create(ApiPairCommand.UtcNow());
+                _follow.MakeCode();
             }
             catch (ApiTokenException ex) {
                 throw new CliException(ex.Message);
             }
-            _hashesBefore = PairedHashes();
         }
 
-        public PairingEnd Wait(CancellationToken stop) {
-            PairingEnd? end = null;
+        public ApiPairingEnd Wait(CancellationToken stop) {
+            ApiPairingEnd? end = null;
             while (!end.HasValue) {
                 ApiPairCommand.PollingForTesting?.Invoke();
                 end = Step(stop);
@@ -298,69 +268,21 @@ namespace JDP.Cli {
             return end.Value;
         }
 
-        private PairingEnd? Step(CancellationToken stop) {
-            PairingEnd? end = WithStop(Look(), stop);
+        private ApiPairingEnd? Step(CancellationToken stop) {
+            ApiPairingEnd? end = WithStop(_follow.Look(), stop);
             if (end.HasValue || !stop.WaitHandle.WaitOne(ApiPairCommand.PollInterval)) return end;
-            return PairingEnd.Cancelled;
+            return ApiPairingEnd.Cancelled;
         }
 
         // A stop wins over anything but a pairing: the stop deletes the file, which a look must not report as ended
-        private static PairingEnd? WithStop(PairingEnd? end, CancellationToken stop) {
-            return stop.IsCancellationRequested && end != PairingEnd.Paired ? PairingEnd.Cancelled : end;
-        }
-
-        // Null while the code is pending in the file (or the file can't be read just now)
-        private PairingEnd? Look() {
-            bool refused, unreadable;
-            ApiPendingPairing pending = _file.Read(out refused, out unreadable);
-            if (pending == null) return LookWithoutCode(refused, unreadable);
-            if (pending.Id != Code.Id) return PairingEnd.Replaced;
-            if (pending.PairedFamily != null) return Paired(pending.PairedFamily);
-            return IsExpired() ? PairingEnd.Expired : null;
-        }
-
-        private bool IsExpired() {
-            return ApiPairCommand.UtcNow() >= Code.Expires;
-        }
-
-        // A file that can't be read is waited for until the code's expiry, which then looks for a pairing as for a
-        // file that is gone
-        private PairingEnd? LookWithoutCode(bool refused, bool unreadable) {
-            if (unreadable) return IsExpired() ? LookForNewClient() : null;
-            return refused ? PairingEnd.Changed : LookForNewClient();
-        }
-
-        // A browser that paired since the code was made is a pairing, else the code ended. Without the paired browsers
-        // from then (that file could not be used) no browser counts as new.
-        private PairingEnd? LookForNewClient() {
-            IReadOnlyList<ApiClient> clients = _clients.Read();
-            if (clients == null) return LookWithoutClients();
-            ApiClient added = clients.FirstOrDefault(client => _hashesBefore != null && !_hashesBefore.Contains(Convert.ToHexString(client.Hash)));
-            if (added != null) return Paired(added.Family);
-            return IsExpired() ? PairingEnd.Expired : PairingEnd.Ended;
-        }
-
-        // api-clients.txt can't be used just now: the wait goes on until the code's expiry
-        private PairingEnd? LookWithoutClients() {
-            return IsExpired() ? PairingEnd.Expired : null;
-        }
-
-        private PairingEnd Paired(string family) {
-            PairedFamily = family;
-            return PairingEnd.Paired;
-        }
-
-        // Null when api-clients.txt can't be used
-        private HashSet<string> PairedHashes() {
-            IReadOnlyList<ApiClient> clients = _clients.Read();
-            return clients != null ? new HashSet<string>(clients.Select(client => Convert.ToHexString(client.Hash)), StringComparer.Ordinal) : null;
+        private static ApiPairingEnd? WithStop(ApiPairingEnd? end, CancellationToken stop) {
+            return stop.IsCancellationRequested && end != ApiPairingEnd.Paired ? ApiPairingEnd.Cancelled : end;
         }
 
         // Deletes the file only while it holds this code; true when there is no code yet or the file is gone or holds
         // another code, false when it could not be deleted
         public bool End() {
-            ApiPairingCode code = _code;
-            return code == null || _file.Delete(code.Id);
+            return _follow.End();
         }
     }
 }

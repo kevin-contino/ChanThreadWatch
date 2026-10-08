@@ -35,9 +35,21 @@
             this.lblTokenNote = new System.Windows.Forms.Label();
             this.chkAllowUnknownHosts = new System.Windows.Forms.CheckBox();
             this.lblAllowUnknownHostsNote = new System.Windows.Forms.Label();
+            this.grpExtension = new System.Windows.Forms.GroupBox();
+            this.lblChromeCaption = new System.Windows.Forms.Label();
+            this.lblChrome = new System.Windows.Forms.Label();
+            this.btnUnpairChrome = new System.Windows.Forms.Button();
+            this.lblFirefoxCaption = new System.Windows.Forms.Label();
+            this.lblFirefox = new System.Windows.Forms.Label();
+            this.btnUnpairFirefox = new System.Windows.Forms.Button();
+            this.lblClientsNote = new System.Windows.Forms.Label();
+            this.btnPair = new System.Windows.Forms.Button();
+            this.lblPairCode = new System.Windows.Forms.Label();
+            this.lblPairStatus = new System.Windows.Forms.Label();
             this.btnOK = new System.Windows.Forms.Button();
             this.btnCancel = new System.Windows.Forms.Button();
             this.tmrStatus = new System.Windows.Forms.Timer(this.components);
+            this.grpExtension.SuspendLayout();
             this.SuspendLayout();
             // 
             // chkEnabled
@@ -144,13 +156,123 @@
             this.lblAllowUnknownHostsNote.Text = "Lets scripts add threads of sites that this program has no support for. Such threads never connect to " +
     "local or private addresses, but anyone with the token can then make this program download from any public site.";
             // 
+            // grpExtension
+            // 
+            this.grpExtension.Controls.Add(this.lblPairStatus);
+            this.grpExtension.Controls.Add(this.lblPairCode);
+            this.grpExtension.Controls.Add(this.btnPair);
+            this.grpExtension.Controls.Add(this.lblClientsNote);
+            this.grpExtension.Controls.Add(this.btnUnpairFirefox);
+            this.grpExtension.Controls.Add(this.lblFirefox);
+            this.grpExtension.Controls.Add(this.lblFirefoxCaption);
+            this.grpExtension.Controls.Add(this.btnUnpairChrome);
+            this.grpExtension.Controls.Add(this.lblChrome);
+            this.grpExtension.Controls.Add(this.lblChromeCaption);
+            this.grpExtension.Location = new System.Drawing.Point(12, 295);
+            this.grpExtension.Name = "grpExtension";
+            this.grpExtension.Size = new System.Drawing.Size(374, 208);
+            this.grpExtension.TabIndex = 12;
+            this.grpExtension.TabStop = false;
+            this.grpExtension.Text = "Browser extension";
+            // 
+            // lblChromeCaption
+            // 
+            this.lblChromeCaption.AutoSize = true;
+            this.lblChromeCaption.Location = new System.Drawing.Point(9, 22);
+            this.lblChromeCaption.Name = "lblChromeCaption";
+            this.lblChromeCaption.Size = new System.Drawing.Size(47, 13);
+            this.lblChromeCaption.TabIndex = 0;
+            this.lblChromeCaption.Text = "Chrome:";
+            // 
+            // lblChrome
+            // 
+            this.lblChrome.Location = new System.Drawing.Point(70, 22);
+            this.lblChrome.Name = "lblChrome";
+            this.lblChrome.Size = new System.Drawing.Size(226, 13);
+            this.lblChrome.TabIndex = 1;
+            // 
+            // btnUnpairChrome
+            // 
+            this.btnUnpairChrome.AccessibleName = "Unpair the Chrome extension";
+            this.btnUnpairChrome.Location = new System.Drawing.Point(304, 17);
+            this.btnUnpairChrome.Name = "btnUnpairChrome";
+            this.btnUnpairChrome.Size = new System.Drawing.Size(60, 23);
+            this.btnUnpairChrome.TabIndex = 2;
+            this.btnUnpairChrome.Text = "Unpair";
+            this.btnUnpairChrome.UseVisualStyleBackColor = true;
+            this.btnUnpairChrome.Click += new System.EventHandler(this.btnUnpairChrome_Click);
+            // 
+            // lblFirefoxCaption
+            // 
+            this.lblFirefoxCaption.AutoSize = true;
+            this.lblFirefoxCaption.Location = new System.Drawing.Point(9, 51);
+            this.lblFirefoxCaption.Name = "lblFirefoxCaption";
+            this.lblFirefoxCaption.Size = new System.Drawing.Size(45, 13);
+            this.lblFirefoxCaption.TabIndex = 3;
+            this.lblFirefoxCaption.Text = "Firefox:";
+            // 
+            // lblFirefox
+            // 
+            this.lblFirefox.Location = new System.Drawing.Point(70, 51);
+            this.lblFirefox.Name = "lblFirefox";
+            this.lblFirefox.Size = new System.Drawing.Size(226, 13);
+            this.lblFirefox.TabIndex = 4;
+            // 
+            // btnUnpairFirefox
+            // 
+            this.btnUnpairFirefox.AccessibleName = "Unpair the Firefox extension";
+            this.btnUnpairFirefox.Location = new System.Drawing.Point(304, 46);
+            this.btnUnpairFirefox.Name = "btnUnpairFirefox";
+            this.btnUnpairFirefox.Size = new System.Drawing.Size(60, 23);
+            this.btnUnpairFirefox.TabIndex = 5;
+            this.btnUnpairFirefox.Text = "Unpair";
+            this.btnUnpairFirefox.UseVisualStyleBackColor = true;
+            this.btnUnpairFirefox.Click += new System.EventHandler(this.btnUnpairFirefox_Click);
+            // 
+            // lblClientsNote
+            // 
+            this.lblClientsNote.Location = new System.Drawing.Point(9, 75);
+            this.lblClientsNote.Name = "lblClientsNote";
+            this.lblClientsNote.Size = new System.Drawing.Size(355, 39);
+            this.lblClientsNote.TabIndex = 6;
+            this.lblClientsNote.Text = "api-clients.txt could not be read, or it is damaged, a link, or others can read it, so no browser extension can connect.";
+            this.lblClientsNote.Visible = false;
+            // 
+            // btnPair
+            // 
+            this.btnPair.Enabled = false;
+            this.btnPair.Location = new System.Drawing.Point(9, 118);
+            this.btnPair.Name = "btnPair";
+            this.btnPair.Size = new System.Drawing.Size(110, 23);
+            this.btnPair.TabIndex = 7;
+            this.btnPair.Text = "Pair extension...";
+            this.btnPair.UseVisualStyleBackColor = true;
+            this.btnPair.Click += new System.EventHandler(this.btnPair_Click);
+            // 
+            // lblPairCode
+            // 
+            this.lblPairCode.AccessibleName = "Pairing code";
+            this.lblPairCode.Font = new System.Drawing.Font("Consolas", 20F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.lblPairCode.Location = new System.Drawing.Point(130, 113);
+            this.lblPairCode.Name = "lblPairCode";
+            this.lblPairCode.Size = new System.Drawing.Size(234, 32);
+            this.lblPairCode.TabIndex = 8;
+            this.lblPairCode.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            // 
+            // lblPairStatus
+            // 
+            this.lblPairStatus.Location = new System.Drawing.Point(9, 148);
+            this.lblPairStatus.Name = "lblPairStatus";
+            this.lblPairStatus.Size = new System.Drawing.Size(355, 52);
+            this.lblPairStatus.TabIndex = 9;
+            // 
             // btnOK
             // 
             this.btnOK.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnOK.Location = new System.Drawing.Point(250, 297);
+            this.btnOK.Location = new System.Drawing.Point(250, 513);
             this.btnOK.Name = "btnOK";
             this.btnOK.Size = new System.Drawing.Size(60, 23);
-            this.btnOK.TabIndex = 12;
+            this.btnOK.TabIndex = 13;
             this.btnOK.Text = "OK";
             this.btnOK.UseVisualStyleBackColor = true;
             this.btnOK.Click += new System.EventHandler(this.btnOK_Click);
@@ -159,10 +281,10 @@
             // 
             this.btnCancel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(318, 297);
+            this.btnCancel.Location = new System.Drawing.Point(318, 513);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(68, 23);
-            this.btnCancel.TabIndex = 13;
+            this.btnCancel.TabIndex = 14;
             this.btnCancel.Text = "Cancel";
             this.btnCancel.UseVisualStyleBackColor = true;
             // 
@@ -177,9 +299,10 @@
             this.AcceptButton = this.btnOK;
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.None;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(398, 332);
+            this.ClientSize = new System.Drawing.Size(398, 548);
             this.Controls.Add(this.btnCancel);
             this.Controls.Add(this.btnOK);
+            this.Controls.Add(this.grpExtension);
             this.Controls.Add(this.lblAllowUnknownHostsNote);
             this.Controls.Add(this.chkAllowUnknownHosts);
             this.Controls.Add(this.lblTokenNote);
@@ -200,6 +323,8 @@
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
             this.Text = "Local API";
             this.FormClosed += new System.Windows.Forms.FormClosedEventHandler(this.frmLocalApi_FormClosed);
+            this.grpExtension.ResumeLayout(false);
+            this.grpExtension.PerformLayout();
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -218,6 +343,17 @@
         private System.Windows.Forms.Label lblTokenNote;
         private System.Windows.Forms.CheckBox chkAllowUnknownHosts;
         private System.Windows.Forms.Label lblAllowUnknownHostsNote;
+        private System.Windows.Forms.GroupBox grpExtension;
+        private System.Windows.Forms.Label lblChromeCaption;
+        private System.Windows.Forms.Label lblChrome;
+        private System.Windows.Forms.Button btnUnpairChrome;
+        private System.Windows.Forms.Label lblFirefoxCaption;
+        private System.Windows.Forms.Label lblFirefox;
+        private System.Windows.Forms.Button btnUnpairFirefox;
+        private System.Windows.Forms.Label lblClientsNote;
+        private System.Windows.Forms.Button btnPair;
+        private System.Windows.Forms.Label lblPairCode;
+        private System.Windows.Forms.Label lblPairStatus;
         private System.Windows.Forms.Button btnOK;
         private System.Windows.Forms.Button btnCancel;
         private System.Windows.Forms.Timer tmrStatus;
