@@ -88,6 +88,7 @@
   <ItemGroup>
     <Compile Include="Classes\GUI.cs" />
     <Compile Include="Classes\LocalApiHost.cs" />
+    <Compile Include="Classes\LocalApiPairing.cs" />
     <Compile Include="Classes\LocalApiSettings.cs" />
     <Compile Include="Classes\NewThreadChoices.cs" />
     <Compile Include="Classes\Shell.cs" />

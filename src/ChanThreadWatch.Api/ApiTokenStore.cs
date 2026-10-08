@@ -18,10 +18,15 @@ namespace JDP.Api {
 
     // The token file could not be written with owner-only access, or could not be written at all
     internal sealed class ApiTokenException : Exception {
-        public ApiTokenException(string message, Exception innerException = null, bool ownerOnlyNotSupported = false)
+        public ApiTokenException(string message, Exception innerException = null, bool ownerOnlyNotSupported = false, bool clientsUnreadable = false)
             : base(message, innerException) {
             OwnerOnlyNotSupported = ownerOnlyNotSupported;
+            ClientsUnreadable = clientsUnreadable;
         }
+
+        // api-clients.txt (the paired browsers) is there but could not be read (in use past the retries, access
+        // denied), so it was neither replaced nor copied
+        public bool ClientsUnreadable { get; }
 
         // The folder's file system does not keep owner-only access (FAT or exFAT on Windows, a mount without file
         // modes elsewhere), so no token file can be written there; not set for any other failure (access denied, a
@@ -143,9 +148,10 @@ namespace JDP.Api {
         }
 
         // Also a file system without ACLs (NotSupportedException) or an ACL that cannot be read
-        // (PrivilegeNotHeldException, an UnauthorizedAccessException): the file is not trusted
+        // (PrivilegeNotHeldException, an UnauthorizedAccessException): the file is not trusted. A current user without
+        // a security identifier (InvalidOperationException from the access check) fails the read like an I/O failure.
         private static bool IsRefusedReadFailure(Exception ex) {
-            return IsFileFailure(ex) || ex is NotSupportedException;
+            return IsFileFailure(ex) || ex is NotSupportedException || ex is InvalidOperationException;
         }
 
         // Test only: runs between the link check and the open, with the file's path

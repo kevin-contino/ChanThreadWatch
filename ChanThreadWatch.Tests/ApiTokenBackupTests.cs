@@ -8,7 +8,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace JDP.Tests {
     // The local API's api-token.txt is never copied by a backup: the thread list backup (threads.txt.bak and
     // api-threads.txt.bak), the copies kept aside of a thread list or api-threads.txt that does not load, and the
-    // settings save that rewrites the copies of settings.txt. Only the file itself holds the token's hash.
+    // settings save that rewrites the copies of settings.txt. Only the file itself holds the token's hash. The same
+    // holds for the paired browsers' hashes (api-clients.txt) and a pending code's key (api-pairing.txt).
     [TestClass]
     public class ApiTokenBackupTests {
         private string _folder;
@@ -58,6 +59,31 @@ namespace JDP.Tests {
             Assert.AreEqual(1, Directory.GetFiles(_folder, TextFile.GetCopySearchPattern(FilePath(Settings.ApiThreadsFileName))).Length, String.Join(", ", files));
             CollectionAssert.AreEqual(new[] { ApiTokenStore.FileName }, files.Where(name => name.StartsWith("api-token", StringComparison.OrdinalIgnoreCase)).ToArray());
             CollectionAssert.AreEqual(new[] { ApiTokenStore.FileName }, files.Where(name => File.ReadAllText(FilePath(name)).Contains(hash, StringComparison.Ordinal)).ToArray());
+        }
+
+        // The same for the paired browsers (api-clients.txt) and a pending pairing code (api-pairing.txt): a backup
+        // and a settings save copy neither
+        [TestMethod]
+        public void NoBackupHoldsThePairingFiles() {
+            new ApiTokenStore(_folder).Generate();
+            new ApiClientStore(_folder).Pair(ApiPairing.ChromeScheme + ApiPairing.ChromeExtensionId, DateTimeOffset.UtcNow);
+            new ApiPairingFile(_folder).Create(DateTimeOffset.UtcNow);
+            string clientHash = File.ReadAllText(FilePath(ApiClientStore.FileName)).Split(' ')[2].Substring("sha256:".Length);
+            string pairingKey = File.ReadAllLines(FilePath(ApiPairingFile.FileName)).Single(line => line.StartsWith("key:", StringComparison.Ordinal)).Substring("key:".Length);
+            File.WriteAllLines(FilePath(Settings.SettingsFileName), new[] { "CheckForUpdates=0" });
+            File.WriteAllLines(FilePath(Settings.ThreadsFileName), new[] { ThreadListFile.CurrentVersion.ToString(CultureInfo.InvariantCulture) });
+            File.WriteAllLines(FilePath(Settings.ApiThreadsFileName), new[] { "1" });
+            Settings.Load();
+
+            General.BackupThreadList();
+            Settings.Save();
+
+            string[] files = Directory.GetFiles(_folder).Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+            Assert.IsTrue(files.Contains(Settings.ThreadsFileName + ".bak"), String.Join(", ", files));
+            CollectionAssert.AreEqual(new[] { ApiClientStore.FileName }, files.Where(name => name.StartsWith("api-clients", StringComparison.OrdinalIgnoreCase)).ToArray());
+            CollectionAssert.AreEqual(new[] { ApiPairingFile.FileName }, files.Where(name => name.StartsWith("api-pairing", StringComparison.OrdinalIgnoreCase)).ToArray());
+            CollectionAssert.AreEqual(new[] { ApiClientStore.FileName }, files.Where(name => File.ReadAllText(FilePath(name)).Contains(clientHash, StringComparison.Ordinal)).ToArray());
+            CollectionAssert.AreEqual(new[] { ApiPairingFile.FileName }, files.Where(name => File.ReadAllText(FilePath(name)).Contains(pairingKey, StringComparison.Ordinal)).ToArray());
         }
     }
 }

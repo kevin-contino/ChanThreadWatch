@@ -190,7 +190,7 @@ namespace JDP {
         }
 
         private void StartServer(ListenTarget target) {
-            ApiPolicy policy = new ApiPolicy { IsExiting = () => _exiting };
+            ApiPolicy policy = new ApiPolicy { IsExiting = () => _exiting, ServerName = ServerName() };
             ApiThreadService threads = new ApiThreadService(_session, new OwnerThreadDispatcher(_post), _newThread, policy);
             ApiServer server = new ApiServer(threads, new ApiTokenStore(target.SettingsFolder));
             lock (_sync) {
@@ -201,6 +201,11 @@ namespace JDP {
             Task stopped = _stopped;
             // On the thread pool from the first step: the token file's check is file access
             _lastStart = Task.Run(() => StartAfterStopsAsync(server, target.Port, stopped));
+        }
+
+        // The name a pairing browser extension shows before it saves its token
+        internal static string ServerName() {
+            return ApiPolicy.HostServerName("Chan Thread Watch " + General.Version);
         }
 
         // On the thread pool. A server that was stopped or replaced meanwhile does not change the status. Any failure,

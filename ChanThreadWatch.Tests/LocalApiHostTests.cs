@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -36,6 +37,7 @@ namespace JDP.Tests {
         private WatchSession _session;
         private LocalApiHost _host;
         private string _token;
+        private Version _savedHostVersion;
         private Action<Action> _post;
         // The test's DNS lookup for the test hosts; it can hold a request
         private Func<string, IPAddress[]> _lookup;
@@ -47,6 +49,9 @@ namespace JDP.Tests {
 
         [TestInitialize]
         public void SetUp() {
+            // As the app at startup: the server name a pairing browser sees holds the app's version
+            _savedHostVersion = General.HostVersion;
+            Program.SetHostVersion();
             _folder = Path.Combine(Path.GetTempPath(), "ctw-app-api-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(_folder, "downloads"));
             Settings.SettingsDirectoryOverride = _folder;
@@ -85,6 +90,7 @@ namespace JDP.Tests {
                 LocalApiHost.StopWait = LocalApiHost.DefaultStopWait;
                 Settings.Load(Path.Combine(_folder, "missing-settings.txt"));
                 Settings.SettingsDirectoryOverride = null;
+                General.HostVersion = _savedHostVersion;
                 DeleteFolder(_folder);
             }
         }
@@ -318,6 +324,63 @@ namespace JDP.Tests {
             }
         }
 
+        // A browser pairs with a code made as the dialog makes it (LocalApiPairing), sees the app's server name before
+        // it saves its token, and the follow of the code reports the pairing; the token then adds a thread with its
+        // Origin
+        [TestMethod]
+        public void ABrowserPairsWithTheDialogsCodeAndSeesTheAppsName() {
+            int port = FindFreePort();
+            EnableApi(port);
+            LoadThreadList();
+            LocalApiPairing pairing = new LocalApiPairing(_folder, () => DateTimeOffset.UtcNow);
+            pairing.MakeCode();
+            Assert.IsNull(pairing.Look());
+
+            string origin = ApiPairing.ChromeScheme + ApiPairing.ChromeExtensionId;
+            string clientNonce = ApiPairing.NewNonce();
+            JsonElement hello = PostPairing(port, origin, new { step = "hello", clientNonce });
+            string pairingId = hello.GetProperty("pairingId").GetString();
+            string serverNonce = hello.GetProperty("serverNonce").GetString();
+            string serverName = hello.GetProperty("serverName").GetString();
+            byte[] key = ApiPairing.DeriveKey(pairing.Code.Code.Replace("-", ""), ApiPairing.FromBase64Url(hello.GetProperty("salt").GetString(), ApiPairing.SaltBytes));
+            Assert.IsTrue(ProofMatches(ApiPairing.ServerHelloProof(key, port, origin, pairingId, clientNonce, serverNonce, serverName), hello), "P1 did not match the code.");
+            string proof = ApiPairing.Base64Url(ApiPairing.ClientFinishProof(key, port, origin, pairingId, clientNonce, serverNonce));
+            JsonElement finish = PostPairing(port, origin, new { step = "finish", pairingId, clientNonce, serverNonce, proof });
+            string token = finish.GetProperty("token").GetString();
+
+            Assert.AreEqual(LocalApiHost.ServerName(), serverName);
+            StringAssert.StartsWith(serverName, "Chan Thread Watch " + General.Version + " on ");
+            Assert.AreEqual(ApiPairingEnd.Paired, pairing.Look());
+            Assert.AreEqual("chrome", pairing.PairedFamily);
+            pairing.End();
+            Assert.IsFalse(File.Exists(Path.Combine(_folder, ApiPairingFile.FileName)));
+            Assert.AreEqual(HttpStatusCode.Created, Request(port, HttpMethod.Post, token, JsonSerializer.Serialize(new { url = AddedURL }), origin).Status);
+        }
+
+        private static bool ProofMatches(byte[] expected, JsonElement answer) {
+            byte[] proof = ApiPairing.FromBase64Url(answer.GetProperty("proof").GetString(), ApiPairing.ProofBytes) ?? new byte[0];
+            return CryptographicOperations.FixedTimeEquals(expected, proof);
+        }
+
+        // The answer's JSON; anything but 200 fails the test
+        private static JsonElement PostPairing(int port, string origin, object body) {
+            using (HttpClient client = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false, UseCookies = false }) { Timeout = Timeout })
+            using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture) + PairingEndpoints.PairingPath)) {
+                request.Headers.TryAddWithoutValidation("Origin", origin);
+                request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+                using (HttpResponseMessage response = client.SendAsync(request).GetAwaiter().GetResult()) {
+                    string text = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, text);
+                    return JsonDocument.Parse(text).RootElement.Clone();
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TheServerNameIsTheAppVersionAndComputer() {
+            Assert.AreEqual(ApiPolicy.NormalizeServerName("Chan Thread Watch " + General.Version + " on " + Environment.MachineName), LocalApiHost.ServerName());
+        }
+
         [TestMethod]
         public void StartFailuresAreDescribedInPlainWords() {
             Assert.AreEqual("it could not listen on port 5000. The port may be reserved by Windows; choose another port.",
@@ -518,10 +581,11 @@ namespace JDP.Tests {
             }
         }
 
-        private static ApiReply Request(int port, HttpMethod method, string token, string json = null) {
+        private static ApiReply Request(int port, HttpMethod method, string token, string json = null, string origin = null) {
             using (HttpClient client = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false, UseCookies = false }) { Timeout = Timeout })
             using (HttpRequestMessage request = new HttpRequestMessage(method, "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture) + ThreadsEndpoints.ThreadsPath)) {
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                if (origin != null) request.Headers.TryAddWithoutValidation("Origin", origin);
                 if (json != null) request.Content = new StringContent(json, Encoding.UTF8, "application/json");
                 using (HttpResponseMessage response = client.SendAsync(request).GetAwaiter().GetResult()) {
                     return new ApiReply { Status = response.StatusCode, Body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult() };

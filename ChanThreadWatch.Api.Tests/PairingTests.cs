@@ -271,6 +271,16 @@ namespace JDP.Api.Tests {
             Assert.AreEqual(new string('a', 79), ApiPolicy.NormalizeServerName(new string('a', 79) + " b"), "no trailing space after the cut");
         }
 
+        // A host's name is its product and the machine, normalized; a machine name that can't be read gives the
+        // default name, not a failed start
+        [TestMethod]
+        public void ServerName_HostNameIsTheProductOnTheMachine() {
+            Assert.AreEqual("ctw watch 1.0.0 on TEST-PC", ApiPolicy.HostServerName("ctw watch 1.0.0", () => "TEST-PC"));
+            Assert.AreEqual("Chan Thread Watch 1.0.0 on TEST-PC", ApiPolicy.HostServerName("Chan Thread Watch 1.0.0", () => "TEST-PC\n"));
+            Assert.AreEqual("Chan Thread Watch", ApiPolicy.HostServerName("ctw watch 1.0.0", () => throw new InvalidOperationException("test: no machine name")));
+            Assert.AreEqual(ApiPolicy.NormalizeServerName("ctw watch 1.0.0 on " + Environment.MachineName), ApiPolicy.HostServerName("ctw watch 1.0.0"));
+        }
+
         // The name is a line of P1, so a line break or another unprintable character could change the message
         [TestMethod]
         public void ServerName_OnlyPrintableNamesOfAtMost80Characters() {
