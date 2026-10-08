@@ -35,7 +35,7 @@ namespace JDP.Cli {
             WatchStatusOutput error) {
             if (!IsEnabled(error)) return null;
             int port = GetPort(error);
-            ApiPolicy policy = new ApiPolicy { IsExiting = isExiting };
+            ApiPolicy policy = new ApiPolicy { IsExiting = isExiting, ServerName = ServerName() };
             ApiThreadService threads = new ApiThreadService(session, new OwnerThreadDispatcher(post), url => NewThread.Create(url, null, null), policy);
             ApiServer server = new ApiServer(threads, new ApiTokenStore(settingsFolder));
             try {
@@ -46,6 +46,22 @@ namespace JDP.Cli {
             catch (Exception ex) when (ApiStartFailure.IsExpected(ex)) {
                 error.WriteLine("ctw: warning: " + DescribeStartFailure(ex));
                 LogStartFailure(ex);
+                return null;
+            }
+        }
+
+        // The name a pairing browser extension shows before it saves its token (MP-7b design Q8)
+        internal static string ServerName() {
+            string machine = MachineName();
+            return machine != null ? ApiPolicy.NormalizeServerName("ctw watch " + General.Version + " on " + machine) : ApiPolicy.DefaultServerName;
+        }
+
+        // Null when the name can't be read (Environment.MachineName throws then); the API starts with the default name
+        private static string MachineName() {
+            try {
+                return Environment.MachineName;
+            }
+            catch (InvalidOperationException) {
                 return null;
             }
         }

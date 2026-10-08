@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -42,6 +43,7 @@ namespace JDP.Cli.Tests {
             OwnerOnlyFile.IsRootOnUnix = () => !OperatingSystem.IsWindows() && Environment.IsPrivilegedProcess;
             WatchApi.ListenPortForTesting = null;
             WatchApi.StopWait = WatchApi.DefaultStopWait;
+            ApiPairCommand.PollInterval = ApiPairCommand.DefaultPollInterval;
         }
 
         // The loopback thread's address is a literal, which is never looked up. lookup stands in for the answer for
@@ -508,6 +510,129 @@ namespace JDP.Cli.Tests {
             AssertProblemCode(added, "marks_unavailable");
             Assert.AreEqual(HttpStatusCode.ServiceUnavailable, added.Status);
             Assert.IsNull(SavedThread(AddedURL));
+        }
+
+        // MP-7b L2 end to end: ctw api-pair makes the code, a C# stand-in for the extension pairs with it through the API
+        // of ctw watch (hello, the server's proof, finish, the server's proof of the token), the token adds a thread with
+        // the extension's Origin, and ctw api-pair reports the pairing. api-pair only reads settings.txt (it never loads
+        // the settings into the process), so it can run beside watch here.
+        [TestMethod]
+        public void Watch_PairsABrowserExtensionWithTheCodeFromApiPair() {
+            int port = FindFreePort();
+            WriteApiSettings(port);
+            WriteThreadList(ThreadLines(ThreadURL));
+            MakeToken();
+            UseApiThreadHost();
+            ApiPairCommand.PollInterval = TimeSpan.FromMilliseconds(50);
+            StringWriter pairOutput = new StringWriter(CultureInfo.InvariantCulture);
+            TextWriter sharedOutput = TextWriter.Synchronized(pairOutput);
+            StringWriter pairError = new StringWriter(CultureInfo.InvariantCulture);
+            using (CancellationTokenSource pairStop = new CancellationTokenSource(Timeout + Timeout)) {
+                Task<int> pair = Task.Run(() => CliApp.Run(new[] { "api-pair" }, sharedOutput, pairError, Folder, pairStop.Token));
+                try {
+                    AssertPairsThroughWatch(port, pair, sharedOutput, pairOutput, pairError);
+                }
+                finally {
+                    // A run that did not end must not reach the other tests
+                    pairStop.Cancel();
+                    ((IAsyncResult)pair).AsyncWaitHandle.WaitOne(Timeout);
+                }
+            }
+        }
+
+        private void AssertPairsThroughWatch(int port, Task<int> pair, TextWriter sharedOutput, StringWriter pairOutput, StringWriter pairError) {
+            string code = null;
+            Assert.IsTrue(WaitFor(() => (code = FirstLine(sharedOutput, pairOutput)) != null || pair.IsCompleted) && code != null, "ctw api-pair printed no code.");
+            TestPairing pairing = null;
+            ApiReply added = null;
+            HeadlessWatch.StartedForTesting = watch => {
+                pairing = TestPairing.Pair(port, code, ApiPairCommandTests.ChromeOrigin);
+                added = RequestWithOrigin(port, pairing.Token, ApiPairCommandTests.ChromeOrigin, AddBody(AddedURL));
+            };
+
+            CliResult result = RunWatchUntil(() => pairing != null && pair.IsCompleted);
+
+            Assert.AreEqual(CliApp.ExitSuccess, result.ExitCode, result.ToString());
+            Assert.AreEqual(CliApp.ExitSuccess, pair.Result, pairError.ToString());
+            Assert.IsTrue(pairing.HelloProofMatched, "P1 did not match the printed code.");
+            Assert.IsTrue(pairing.FinishProofMatched, "P3 did not match.");
+            Assert.AreEqual(WatchApi.ServerName(), pairing.ServerName);
+            StringAssert.StartsWith(pairing.ServerName, "ctw watch " + General.Version + " on ");
+            Assert.AreEqual(HttpStatusCode.Created, added.Status, added.Body);
+            string[] lines;
+            lock (sharedOutput) {
+                lines = Lines(pairOutput.ToString());
+            }
+            CollectionAssert.AreEqual(new[] { code, "Paired with the Chrome extension" }, lines);
+            Assert.IsFalse(File.Exists(Path.Combine(Folder, ApiPairingFile.FileName)), "ctw api-pair did not delete the pairing file.");
+            Assert.AreEqual("chrome", new ApiClientStore(Folder).Read().Single().Family);
+            Assert.IsFalse(result.Output.Contains(pairing.Token, StringComparison.Ordinal), "The token was printed.");
+        }
+
+        // The first line written so far, or null
+        private static string FirstLine(TextWriter shared, StringWriter output) {
+            lock (shared) {
+                string text = output.ToString();
+                int end = text.IndexOf(Environment.NewLine, StringComparison.Ordinal);
+                return end > 0 ? text.Substring(0, end) : null;
+            }
+        }
+
+        // A POST of the threads route with a browser's token and Origin
+        private static ApiReply RequestWithOrigin(int port, string token, string origin, string json) {
+            using (HttpClient client = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false, UseCookies = false }) { Timeout = Timeout })
+            using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture) + ThreadsEndpoints.ThreadsPath)) {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                request.Headers.TryAddWithoutValidation("Origin", origin);
+                request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                using (HttpResponseMessage response = client.SendAsync(request).GetAwaiter().GetResult()) {
+                    return new ApiReply { Status = response.StatusCode, Body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult() };
+                }
+            }
+        }
+
+        // A minimal C# stand-in for the extension's pairing (MP-7b design 3.4), with the proofs from ApiPairing: the
+        // key is stretched from the typed code and the salt the hello answered, and each server proof is checked
+        private sealed class TestPairing {
+            public bool HelloProofMatched { get; private set; }
+            public bool FinishProofMatched { get; private set; }
+            public string ServerName { get; private set; }
+            public string Token { get; private set; }
+
+            public static TestPairing Pair(int port, string code, string origin) {
+                TestPairing pairing = new TestPairing();
+                string clientNonce = ApiPairing.NewNonce();
+                JsonElement hello = Post(port, origin, new { step = "hello", clientNonce });
+                string pairingId = hello.GetProperty("pairingId").GetString();
+                string serverNonce = hello.GetProperty("serverNonce").GetString();
+                pairing.ServerName = hello.GetProperty("serverName").GetString();
+                byte[] key = ApiPairing.DeriveKey(code.Replace("-", ""), ApiPairing.FromBase64Url(hello.GetProperty("salt").GetString(), ApiPairing.SaltBytes));
+                pairing.HelloProofMatched = ProofMatches(ApiPairing.ServerHelloProof(key, port, origin, pairingId, clientNonce, serverNonce, pairing.ServerName), hello);
+                string proof = ApiPairing.Base64Url(ApiPairing.ClientFinishProof(key, port, origin, pairingId, clientNonce, serverNonce));
+                JsonElement finish = Post(port, origin, new { step = "finish", pairingId, clientNonce, serverNonce, proof });
+                pairing.Token = finish.GetProperty("token").GetString();
+                pairing.FinishProofMatched = ProofMatches(ApiPairing.ServerFinishProof(key, port, origin, pairingId, clientNonce, serverNonce, pairing.Token), finish);
+                return pairing;
+            }
+
+            private static bool ProofMatches(byte[] expected, JsonElement answer) {
+                byte[] proof = ApiPairing.FromBase64Url(answer.GetProperty("proof").GetString(), ApiPairing.ProofBytes) ?? new byte[0];
+                return CryptographicOperations.FixedTimeEquals(expected, proof);
+            }
+
+            // The answer's JSON; anything but 200 fails the test
+            private static JsonElement Post(int port, string origin, object body) {
+                using (HttpClient client = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false, UseCookies = false }) { Timeout = Timeout })
+                using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture) + PairingEndpoints.PairingPath)) {
+                    request.Headers.TryAddWithoutValidation("Origin", origin);
+                    request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+                    using (HttpResponseMessage response = client.SendAsync(request).GetAwaiter().GetResult()) {
+                        string text = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, text);
+                        return JsonDocument.Parse(text).RootElement.Clone();
+                    }
+                }
+            }
         }
 
         // Holds the owner thread until release is set
