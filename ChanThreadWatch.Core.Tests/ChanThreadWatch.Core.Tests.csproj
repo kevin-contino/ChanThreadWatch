@@ -32,4 +32,11 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The browser extension's copy of the known domains, checked against the site helpers -->
+    <None Include="..\tools\browser-extension\known-hosts.json" Link="known-hosts.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

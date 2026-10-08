@@ -102,6 +102,33 @@ To pair with `ctw watch`, run `ctw api-pair` while `ctw watch` runs the API (or 
 
 The API adds threads that never connect to a local or private address (loopback, your LAN, link-local addresses such as cloud metadata, and the like), on any redirect either, and that refuse to connect through a system proxy; threads they auto-follow get the same limit. The app and `ctw watch` keep the list of these threads in `api-threads.txt` next to `threads.txt`, and `ctw add` and `ctw remove` keep it up to date. Keep the two files together when you copy or restore the settings folder: a thread list backup (`threads.txt.bak`) comes with `api-threads.txt.bak`, so restore both. If `api-threads.txt` can't be used at start, the threads loaded from the thread list, and the threads they auto-follow, are limited this way until the app or `ctw watch` stops (the log says so, and `ctw watch` warns at start); a file that is not valid is kept aside. Once `api-threads.txt` has been written, `settings.txt` says so (`ApiThreadsFileWritten=1`), and a missing `api-threads.txt` is then treated the same way, so keep both files when you restore a backup or copy the settings folder. That setting lives in `settings.txt`, so replacing `settings.txt`, or a save by a copy of the app on another computer started with "start anyway", can drop it. Chan Thread Watch 1.39.0 and earlier ignore `api-threads.txt` and do not limit these threads, so while you run such a version they can connect anywhere; the limit applies again when you start 1.40.0 or later.
 
+## Browser extension
+
+The browser extension in `tools/browser-extension` adds threads to Chan Thread Watch from Chrome or Firefox through the local API. Right-click a thread link or a thread page and choose "Watch this thread", or open its toolbar button and choose "Watch this tab" or "Watch all chan tabs". The toolbar button shows `+` (added), `=` (already watched) or `!` (an error) for 4 seconds, and its popup shows the last result and whether the extension is paired. "Watch all chan tabs" first asks for permission to read the tabs of the supported sites, then adds every thread tab after one check, and says how many threads it added, how many were already watched, skipped (not a thread) or failed. The API adds at most 30 threads a minute, so it stops at that limit and says how long to wait for the rest. It also stops when the app is busy or closing, when it can no longer be reached, or when the pairing no longer works, and says how many threads it did not send. An add that times out counts as failed and the rest are still sent, as the app may have added that thread.
+
+It is not in a browser store. Build it with Node.js 20 or later (its tests need 20.11 or later), from `tools/browser-extension`:
+
+```
+node scripts/package.mjs
+```
+
+This writes `dist/chrome` and `dist/firefox` (`--out <folder>` writes them elsewhere). Each is a copy of `src` with the manifest for that browser and the app's version; nothing is bundled or changed.
+
+- Chrome: open `chrome://extensions`, turn on "Developer mode", choose "Load unpacked" and select `dist/chrome`. Its id is always `eifjifphdncjkkolefjepjhdlmcdbndh`, the only Chrome extension the API pairs with.
+- Firefox: open `about:debugging#/runtime/this-firefox`, choose "Load Temporary Add-on..." and select `dist/firefox/manifest.json`. Firefox removes a temporary add-on when it closes, so load it again (and pair again if it says "Not paired") after each restart.
+
+To pair, turn on the local API (see [Local API in the app](#local-api-in-the-app) or [Local API](#local-api)), then:
+
+1. In the app, open Settings, "Local API...", and choose "Pair extension..." while the status is "Listening". With `ctw watch`, run `ctw api-pair` instead. Either shows an 8-symbol code (`XXXX-XXXX`) for 5 minutes.
+2. In the extension's options (the popup's "Options" button), check the port (47710 by default), type the code and choose "Pair".
+3. The options page asks "Pair with <name> at 127.0.0.1:<port>?". The name is the one the app or `ctw watch` shows; choose "Pair" to save the pairing, or "Cancel".
+
+A wrong code says so and sends nothing more; each code allows three tries. While the extension is paired, changing the port in the options checks that the paired Chan Thread Watch answers there before it is saved; a port it refuses is set back to the saved one. While it is not paired, the port is saved without a check. "Forget pairing" deletes the extension's own copy of its token; to unpair a browser in Chan Thread Watch, use "Unpair" in the dialog or `ctw api-pair --remove <chrome|firefox>`.
+
+Privacy: the extension talks only to `127.0.0.1` on the port you set, never to another server, and asks for no other access unless you use "Watch all chan tabs". It has no content scripts and does not read pages. Once per click (once for all the threads of "Watch all chan tabs"), it checks that the program on the port is the Chan Thread Watch it paired with, and sends its token only then. The token is kept in the browser's local extension storage (never synced) and is never shown.
+
+In some browsers the permission prompt of "Watch all chan tabs" closes the popup. If nothing happens after you allow it, choose "Watch all chan tabs" again.
+
 ## Building and testing
 
 Requires the .NET 10 SDK. The app and its tests build only on Windows; see below for Linux and macOS. The app targets `net10.0-windows`; `ChanThreadWatch.Core` targets `net10.0`.
@@ -120,6 +147,8 @@ dotnet test ChanThreadWatch.Core.Tests -c Release --filter "TestCategory!=Pendin
 dotnet test ChanThreadWatch.Cli.Tests -c Release --filter "TestCategory!=PendingUnix&TestCategory!=UI"
 dotnet test ChanThreadWatch.Api.Tests -c Release --filter "TestCategory!=PendingUnix&TestCategory!=UI"
 ```
+
+The browser extension's tests need only Node.js 20.11 or later and no packages: `npm ci --ignore-scripts` and `npm test` in `tools/browser-extension` (see its `README.md`).
 
 CI runs the Core, command line and API tests on Windows, Ubuntu and macOS (the "Core tests" check), and the full Windows build and tests in "Windows build and test". The required checks "Build and test" and "Core tests" pass when those jobs pass, or when a pull request changes only documentation and the jobs are skipped.
 

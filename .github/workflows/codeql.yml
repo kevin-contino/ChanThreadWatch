@@ -32,6 +32,11 @@ jobs:
             language: actions
             build-mode: none
             os: ubuntu-latest
+          # The browser extension, the offline page script and its test tool
+          - name: JavaScript
+            language: javascript-typescript
+            build-mode: none
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

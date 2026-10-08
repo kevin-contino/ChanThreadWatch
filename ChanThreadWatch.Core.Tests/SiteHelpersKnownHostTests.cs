@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace JDP.Tests {
@@ -126,6 +129,20 @@ namespace JDP.Tests {
             finally {
                 SiteHelpers.UnregisterHostForTesting(host);
             }
+        }
+
+        // The browser extension's copy of the domains (tools/browser-extension/known-hosts.json, copied next to the
+        // tests by the project file) lists exactly the registered ones; its manifests and menus are made from it
+        [TestMethod]
+        public void ExtensionKnownHostsMatchSiteHelpers() {
+            string[] extension = JsonSerializer.Deserialize<string[]>(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "known-hosts.json")));
+            Assert.IsNotNull(extension);
+            string[] builtIn = BuiltInDomains().ToArray();
+            string[] missing = builtIn.Except(extension, StringComparer.Ordinal).ToArray();
+            string[] extra = extension.Except(builtIn, StringComparer.Ordinal).ToArray();
+            Assert.IsEmpty(missing, "Missing from known-hosts.json: " + String.Join(", ", missing));
+            Assert.IsEmpty(extra, "Not a site helper domain: " + String.Join(", ", extra));
+            Assert.HasCount(extension.Length, extension.Distinct(StringComparer.Ordinal), "known-hosts.json lists a domain twice");
         }
     }
 }
