@@ -458,6 +458,7 @@ namespace JDP.Cli.Tests {
             CliResult result = Run(args);
 
             AssertFailed(result, CliApp.ExitFailure, "ctw api-pair does not run as root");
+            OwnerOnlyFile.IsRootOnUnix = () => false;
             Assert.IsFalse(File.Exists(PairingFile.Path));
             Assert.HasCount(1, Clients.Read());
         }
